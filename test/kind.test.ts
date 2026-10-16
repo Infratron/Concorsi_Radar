@@ -1,17 +1,23 @@
 import { describe, expect, it } from "vitest";
 import { classifyKind } from "../src/enrich/kind.ts";
-import type { SourceKind } from "../src/types.ts";
+import type { Category, SourceKind } from "../src/types.ts";
 
 /**
- * Concorso o articolo.
+ * Concorso, coupon o articolo.
  * I casi "concorso" sono i venti item veri dell'archivio del 16/10/2026: la
  * classificazione non deve spostarne nessuno. I casi "articolo" sono i
  * contenitori che l'utente ha segnalato (la tassonomia di PremieConcorsi, la
- * notizia di Google News) e le forme tipiche di una pagina-elenco.
+ * notizia di Google News) e le forme tipiche di una pagina-elenco. I casi
+ * "coupon" sono i titoli veri letti il 16/10/2026 dai tre feed di buoni sconto.
  */
 
-function kind(url: string, title: string, sourceKind: SourceKind = "rss") {
-  return classifyKind({ url, title, sourceKind });
+function kind(
+  url: string,
+  title: string,
+  sourceKind: SourceKind = "rss",
+  sourceCategory: Category = "altro",
+) {
+  return classifyKind({ url, title, sourceKind, sourceCategory });
 }
 
 describe("concorso o articolo", () => {
@@ -121,5 +127,68 @@ describe("concorso o articolo", () => {
     expect(kind("https://www.brand.it/vinci-un-viaggio", "Vinci un viaggio a Parigi")).toBe("contest");
     // Un URL illeggibile non è una prova: non si sposta niente.
     expect(kind("non-un-url", "Concorso Lievital")).toBe("contest");
+  });
+});
+
+describe("coupon e rimborsi", () => {
+  it("una fonte di coupon porta coupon, anche quando le parole non lo dicono", () => {
+    // Il caso reale: le sezioni "spendi e riprendi" dei tre siti. Qui è la FONTE
+    // a dire che cosa pubblica, categoria `coupon` in src/config/sources.ts.
+    expect(
+      kind(
+        "https://www.scontrinofelice.it/spendi-e-riprendi/cashback-ymea/",
+        "Cashback Ymea “Mese della menopausa”: richiedi 25 euro di rimborso",
+        "rss",
+        "coupon",
+      ),
+    ).toBe("coupon");
+    expect(
+      kind(
+        "https://www.scontrinofelice.it/buoni-sconto/buono-sconto-crema-novi/",
+        "Buono sconto Crema Novi Fondente da scaricare subito",
+        "rss",
+        "coupon",
+      ),
+    ).toBe("coupon");
+  });
+
+  it("un premio annunciato vince sullo sconto: quella metà resta un concorso", () => {
+    // Caso reale del 16/10/2026: un rimborso E un'estrazione nella stessa riga.
+    // Nascondere il concorso costerebbe più di un coupon di troppo.
+    expect(
+      kind(
+        "https://www.scontrinofelice.it/spendi-e-riprendi/cashback-fabuloso/",
+        "Cashback Fabuloso, Ajax, Soflan: ricevi un rimborso di 5 euro e vinci lavatrice Samsung",
+        "rss",
+        "coupon",
+      ),
+    ).toBe("contest");
+    expect(kind("https://www.brand.it/prova-e-vinci", "Provami gratis e vinci una bici", "rss", "coupon")).toBe(
+      "contest",
+    );
+  });
+
+  it("un buono sconto resta un buono sconto anche da un aggregatore di concorsi", () => {
+    // Le parole bastano, e non serve la categoria della fonte: è il caso dei
+    // buoni sconto che arrivano dal feed generale di un aggregatore.
+    expect(kind("https://www.scontrinofelice.it/buoni-sconto/riscatta-codice-lidl/", "Riscatta Codice Lidl")).toBe(
+      "coupon",
+    );
+    expect(kind("https://www.dimmicosacerchi.it/buoni-sconto-regina-carta.html", "Buoni sconto Regina da stampare")).toBe(
+      "coupon",
+    );
+    expect(kind("https://www.x.it/promo/sconto-da-stampare-lavazza", "Sconto da stampare Lavazza")).toBe("coupon");
+  });
+
+  it("la cartella dei buoni sconto è un contenitore, non un'offerta", () => {
+    expect(kind("https://www.scontrinofelice.it/buoni-sconto/", "Buoni Sconto")).toBe("news");
+    expect(kind("https://www.scontomaggio.com/coupon/", "Coupon da stampare")).toBe("news");
+  });
+
+  it("NON legge uno sconto dove c'è un premio", () => {
+    // "buono spesa da 500 euro" è il premio di un concorso (vedi BONUS_PATTERN in
+    // src/enrich/score.ts): il segnale deve dire lo SCONTO, non il buono.
+    expect(kind("https://www.brand.it/concorso-spesa", "Concorso: vinci un buono spesa da 500 euro")).toBe("contest");
+    expect(kind("https://www.brand.it/vinci-voucher", "Vinci un voucher da 100 euro")).toBe("contest");
   });
 });

@@ -1,11 +1,12 @@
-import type { AiBinding, FetchLike, SourceRow, SourceRunResult } from "./types.ts";
+import type { AiBinding, FetchLike, IngestContext, RawItem, SourceAttempt, SourceRow, SourceRunResult } from "./types.ts";
 import type { Store } from "./db/store.ts";
-import { CPU_BUDGET_MS, MAX_SOURCES_PER_RUN, SOURCES, USER_AGENT } from "./config/sources.ts";
-import { ingestSource } from "./ingest/index.ts";
+import { CPU_BUDGET_MS, MAX_RULES_LOOKUPS_PER_RUN, MAX_SOURCES_PER_RUN, SOURCES, USER_AGENT } from "./config/sources.ts";
+import { ingestSource, robotsAllows } from "./ingest/index.ts";
+import { regulationUrlFromPage, regulationUrlFromText } from "./enrich/regulation.ts";
 import { enrichWithRules, looksLikeContest } from "./enrich/rules.ts";
-import { indexPageUrls, staleReason } from "./enrich/freshness.ts";
+import { COUPON_TTL_DAYS, indexPageUrls, staleReason } from "./enrich/freshness.ts";
 import { MAX_AI_CALLS_PER_RUN, enrichWithAi, mergeInsight, needsAi } from "./enrich/ai.ts";
-import { applyWeights, baseScore } from "./enrich/score.ts";
+import { applyBrandBonus, applyWeights, baseScore } from "./enrich/score.ts";
 import {
   type PreparedItem,
   isFullyEnriched,
@@ -19,6 +20,7 @@ import {
 } from "./dedupe.ts";
 import { sightingFor } from "./enrich/lead.ts";
 import { fnv1a32, sourceNameTokens } from "./lib/text.ts";
+import { ROBOTS_DENIED_REASON } from "./lib/robots.ts";
 
 /**
  * Orchestrazione dell'ingestione: sceglie quali fonti toccare in questa
@@ -56,6 +58,14 @@ export interface IngestOptions {
    * fonti invisibili per sempre.
    */
   allSources?: boolean;
+  /**
+   * Millisecondi di tempo di PARETE che la ricerca dei regolamenti può spendere
+   * in questo giro (default RULES_LOOKUP_BUDGET_MS). È un tetto diverso dal
+   * budget di CPU: l'attesa di rete non è CPU, ma nel Worker il tick del cron ha
+   * un tempo massimo di esecuzione — una pagina che non risponde non deve poter
+   * mangiare il giro. La raccolta su Actions lo alza: lì quel muro non c'è.
+   */
+  rulesLookupMs?: number;
 }
 
 export interface IngestSummary {
@@ -82,10 +92,24 @@ export interface IngestSummary {
   ms: number;
   notes: string[];
   deadSources: string[];
+  /**
+   * L'esito di ogni fonte toccata in QUESTO giro, nell'ordine in cui è stata
+   * provata: è il dato del report delle prime raccolte. Le fonti rimandate per
+   * budget non entrano qui (non sono state provate) e si contano con `deferred`.
+   */
+  attempts: SourceAttempt[];
 }
 
 /** Un tick di rotazione dura 15 minuti, come il cron principale. */
 const SLOT_MS = 15 * 60 * 1000;
+/**
+ * Quanto tempo di parete, al massimo, la ricerca dei regolamenti può spendere in
+ * un giro. Otto secondi sono tarati sul tick del Worker (che ha un tempo massimo
+ * di esecuzione) e sul caso peggiore: una pagina che accetta la connessione e non
+ * risponde mai costa il timeout di 8 s, quindi con questo tetto la ricerca non
+ * può far morire il giro. La raccolta su Actions passa un valore più alto.
+ */
+export const RULES_LOOKUP_BUDGET_MS = 8_000;
 /** Dopo 3 fallimenti consecutivi avvisiamo una volta sola e la fonte resta lì. */
 export const DEAD_SOURCE_ALERT_AFTER = 3;
 
@@ -130,7 +154,17 @@ export function resolveSource(row: SourceRow): SourceRow {
 function synthesizedRow(configId: string): SourceRow | null {
   const config = SOURCES.find((candidate) => candidate.id === configId);
   if (!config) return null;
-  return { ...config, etag: null, lastModified: null, lastRunAt: null, lastOkAt: null, failStreak: 0 };
+  return {
+    ...config,
+    etag: null,
+    lastModified: null,
+    lastRunAt: null,
+    lastOkAt: null,
+    failStreak: 0,
+    lastStatus: null,
+    lastError: null,
+    lastItems: 0,
+  };
 }
 
 /** Pesi appresi sommati su tutte le chat attive (bot personale: di norma una sola). */
@@ -144,6 +178,26 @@ export async function mergedWeights(store: Store): Promise<Record<string, number
     }
   }
   return weights;
+}
+
+/**
+ * Le marche seguite da tutte le chat attive, unite: è l'insieme che decide il
+ * bonus di punteggio (src/enrich/score.ts). Sta qui accanto ai pesi appresi
+ * perché è la stessa domanda — "cosa vuole questa installazione" — e perché
+ * l'ingestione le legge insieme, una volta per giro.
+ *
+ * L'unione invece della media è voluta: due persone che seguono Ferrero non
+ * devono contare il doppio, e una marca seguita da una sola vale per tutte le
+ * righe dell'archivio (una riga non è di nessuno in particolare).
+ */
+export async function mergedBrands(store: Store): Promise<Set<string>> {
+  const brands = new Set<string>();
+  for (const chatId of await store.listChats()) {
+    const prefs = await store.getPrefs(chatId);
+    if (!prefs) continue;
+    for (const brand of prefs.filters.favoriteBrands) brands.add(brand);
+  }
+  return brands;
 }
 
 function errorMessage(error: unknown): string {
@@ -166,6 +220,7 @@ export async function runIngest(
   const started = Date.now();
   const notes: string[] = [];
   const deadSources: string[] = [];
+  const attempts: SourceAttempt[] = [];
   const userAgent = deps.userAgent ?? USER_AGENT;
 
   // Il freno conta SOLO il lavoro CPU delle nostre funzioni (parsing,
@@ -198,6 +253,7 @@ export async function runIngest(
         .slice(0, Math.max(1, options.maxSources ?? pool.length))
     : dueSources(pool, now, options.maxSources ?? MAX_SOURCES_PER_RUN);
   const weights = await mergedWeights(deps.store);
+  const brands = await mergedBrands(deps.store);
 
   let sourcesOk = 0;
   let sourcesFail = 0;
@@ -214,6 +270,10 @@ export async function runIngest(
   // non deve poter costare un concorso: se la tabella non c'è ancora la riga manca
   // e il motivo resta nella nota del giro, invece di far scartare l'item.
   let visteNonRegistrate = false;
+  // Le viste restano dei CONCORSI: /vantaggio misura di quanto arriviamo prima
+  // degli aggregatori su quello su cui si partecipa, e un coupon visto da due
+  // fonti non dice niente su quell'anticipo. Le fonti coupon si giudicano con
+  // quello che portano in archivio (SourceStat), non con le viste.
   const registraVista = async (
     source: SourceRow,
     prepared: PreparedItem,
@@ -230,6 +290,57 @@ export async function runIngest(
       visteNonRegistrate = true;
       notes.push(`viste non registrate (${errorMessage(error)})`);
     }
+  };
+
+  /**
+   * Il regolamento del concorso (il bando), da salvare sull'item: prima dal testo
+   * che la fonte ci ha dato (gratis), poi — se lì non c'è — dalla pagina del
+   * concorso, che è una richiesta in più.
+   *
+   * Perché vale una richiesta: il bottone 📄 Regolamento in chat compariva solo
+   * quando il bando era scritto nel riassunto del feed, e un riassunto di due
+   * righe non lo nomina quasi mai. Il bando però è quasi sempre un link dentro la
+   * pagina del concorso, ed è l'unica cosa che l'utente cerca davvero quando il
+   * concorso lo convince: senza, l'unica strada è leggersi la pagina a mano.
+   *
+   * Tetti e paletti, tutti dichiarati: si cerca solo per i CONCORSI (un coupon
+   * non ha un bando), solo per gli item nuovi (i duplicati non costano una
+   * richiesta), al massimo MAX_RULES_LOOKUPS_PER_RUN pagine per giro, mai se il
+   * budget di CPU è finito, e solo dove robots.txt lo permette. Chi resta fuori
+   * lo prende `npm run rules -- --apply`.
+   */
+  let ricercheRegolamento = 0;
+  let regolamentiTrovati = 0;
+  let tempoRegolamenti = 0;
+  const budgetRegolamenti = options.rulesLookupMs ?? RULES_LOOKUP_BUDGET_MS;
+  const regolamentoPer = async (raw: RawItem, prepared: PreparedItem): Promise<string | null> => {
+    if (prepared.kind !== "contest") return null;
+
+    const dalTesto = regulationUrlFromText(raw.summary, prepared.url);
+    if (dalTesto !== null) return dalTesto;
+
+    if (ricercheRegolamento >= MAX_RULES_LOOKUPS_PER_RUN || tempoRegolamenti >= budgetRegolamenti || overBudget()) {
+      return null;
+    }
+    ricercheRegolamento++;
+
+    const ctx: IngestContext = { fetcher: deps.fetcher, userAgent, now };
+    // Solo la scansione è CPU (la rete no): è l'unica parte da contare nel budget,
+    // come per ogni altro parsing di questa pipeline. La richiesta si conta
+    // prima, perché il tetto per giro guarda quante pagine si sono lette.
+    const scanStart = cpuStart();
+    const link = await regulationUrlFromPage(prepared.url, {
+      fetcher: deps.fetcher,
+      userAgent,
+      allows: (url) => robotsAllows(url, { store: deps.store, fetcher: deps.fetcher, userAgent }, ctx, now),
+      now,
+    });
+    // Il tempo speso si conta comunque, anche quando il bando non c'è: è il muro
+    // che impedisce a una pagina lenta di mangiare il giro.
+    tempoRegolamenti += performance.now() - scanStart;
+    cpuProxyMs += performance.now() - scanStart;
+    if (link !== null) regolamentiTrovati++;
+    return link;
   };
 
   for (const source of due) {
@@ -260,8 +371,21 @@ export async function runIngest(
       httpStatus: result.httpStatus,
       etag: result.etag,
       lastModified: result.lastModified,
-      error: result.error,
+      error: result.error ?? (result.robotsDenied ? ROBOTS_DENIED_REASON : null),
+      // Quanti item GREZZI ha portato la fonte, prima di ogni filtro: è il numero
+      // che distingue "ha risposto ed è vuota" da "non ha risposto".
+      items: result.items.length,
       now: now.toISOString(),
+    });
+    attempts.push({
+      sourceId: source.id,
+      name: source.name,
+      at: now.toISOString(),
+      httpStatus: result.httpStatus,
+      items: result.items.length,
+      notModified: result.notModified,
+      robotsDenied: result.robotsDenied,
+      error: result.error,
     });
 
     if (ok) sourcesOk++;
@@ -270,7 +394,7 @@ export async function runIngest(
       notes.push(`${source.id}: ${result.error}`);
       if (source.failStreak + 1 === DEAD_SOURCE_ALERT_AFTER) deadSources.push(source.id);
     }
-    if (result.robotsDenied) notes.push(`${source.id}: robots.txt vieta la raccolta, saltata`);
+    if (result.robotsDenied) notes.push(`${source.id}: ${ROBOTS_DENIED_REASON}, saltata`);
 
     const nomeFonte = sourceNameTokens(source.name);
     // Fonti di elenco (sitemap e pagine HTML): il titolo è ricavato dall'URL e non
@@ -316,7 +440,7 @@ export async function runIngest(
         // Nel conteggio entra solo la parte sincrona: la query dei candidati è
         // I/O (su D1 filtra SQL), la decisione sui candidati invece è CPU nostra.
         const prepareStart = cpuStart();
-        const prepared = await prepareItem(raw, nomeFonte, source.kind);
+        const prepared = await prepareItem(raw, nomeFonte, source.kind, source.category);
         cpuProxyMs += performance.now() - prepareStart;
         const candidates = await loadDuplicateCandidates(deps.store, prepared, now);
         const dedupeStart = cpuStart();
@@ -331,6 +455,14 @@ export async function runIngest(
           // Un duplicato non crea una seconda riga, ma può portare un nome
           // migliore: la copia con il titolo più completo lo sostituisce.
           await upgradeTitle(deps.store, existing, prepared);
+          // Il bando scritto nel testo si salva anche su una riga che è già in
+          // archivio: non costa una richiesta, e una riga che ce l'ha non si
+          // tocca (l'archivio ha il valore più vecchio e più completo — il
+          // riassunto di oggi è già stato troncato).
+          if (existing.rulesUrl === null) {
+            const dalTesto = regulationUrlFromText(raw.summary, prepared.url);
+            if (dalTesto !== null) await deps.store.updateItem(existing.id, { rulesUrl: dalTesto });
+          }
           // Percorso caldo del regime: se è già completo si evita del tutto
           // l'arricchimento (è la voce più costosa per item).
           if (isFullyEnriched(existing)) {
@@ -339,9 +471,16 @@ export async function runIngest(
           }
           const enrichStart = cpuStart();
           const insight = enrichWithRules(raw, source, now);
-          const score = applyWeights(baseScore(insight, raw, now), insight.tags, weights);
+          // Il bonus si calcola sulla marca che la riga avrà DOPO l'unione: se
+          // quella in archivio c'è già è la sua, altrimenti è quella appena
+          // riconosciuta.
+          const score = applyBrandBonus(
+            applyWeights(baseScore(insight, raw, now), insight.tags, weights),
+            existing.brand ?? prepared.brand,
+            brands,
+          );
           cpuProxyMs += performance.now() - enrichStart;
-          await mergeDuplicate(deps.store, existing, insight, score, now);
+          await mergeDuplicate(deps.store, existing, insight, score, now, prepared.brand);
           continue;
         }
 
@@ -357,6 +496,7 @@ export async function runIngest(
             publishedAt: raw.publishedAt,
             deadline: insight.deadline,
             fromListing: elenco,
+            kind: prepared.kind,
           },
           now,
         );
@@ -377,9 +517,17 @@ export async function runIngest(
           if (patch) insight = mergeInsight(insight, patch);
         }
 
-        const score = applyWeights(baseScore(insight, raw, now), insight.tags, weights);
+        const score = applyBrandBonus(
+          applyWeights(baseScore(insight, raw, now), insight.tags, weights),
+          prepared.brand,
+          brands,
+        );
         cpuProxyMs += performance.now() - enrichStart;
-        const inserted = await deps.store.insertItem(toNewItem(raw, prepared, insight, score, now));
+        // Il regolamento si cerca dopo il punteggio e prima dell'inserimento: è
+        // l'ultimo dato che vale una richiesta, e chi non lo trova resta senza
+        // bottone (mai un link inventato).
+        const rulesUrl = await regolamentoPer(raw, prepared);
+        const inserted = await deps.store.insertItem(toNewItem(raw, prepared, insight, score, now, rulesUrl));
         if (inserted.created) itemsNew++;
         await registraVista(source, prepared, inserted.item.id, true);
       } catch (error) {
@@ -400,17 +548,37 @@ export async function runIngest(
     }
   }
 
+  if (ricercheRegolamento > 0) {
+    // Il numero sta nella nota perché è l'unico modo per accorgersi che il tetto
+    // per giro è basso (o che le pagine non rispondono più).
+    notes.push(`regolamenti: ${regolamentiTrovati} trovati su ${ricercheRegolamento} pagine lette`);
+  }
+
   return {
     sourcesDue: due.length, sourcesOk, sourcesFail, itemsSeen, itemsNew, duplicates,
     filtered, stale, deferred, archiveWasEmpty, cpuMs: Math.round(cpuProxyMs * 100) / 100,
-    ms: Date.now() - started, notes, deadSources,
+    ms: Date.now() - started, notes, deadSources, attempts,
   };
 }
 
-/** Marca come 'expired' i concorsi scaduti da più di 3 giorni: pulizia periodica. */
+/**
+ * Pulizia periodica: marca 'expired' i concorsi scaduti da più di 3 giorni e i
+ * coupon che non sono più spendibili (COUPON_TTL_DAYS, src/enrich/freshness.ts —
+ * la stessa regola che li tiene fuori all'ingresso).
+ */
 export async function expireOldItems(store: Store, now: Date): Promise<number> {
   const cutoff = new Date(now.getTime() - 3 * 86_400_000).toISOString().slice(0, 10);
   const stale = await store.queryItems({ deadlineBefore: cutoff, statuses: ["new", "sent"], limit: 100 });
   for (const item of stale) await store.setStatus(item.id, "expired");
-  return stale.length;
+  // I coupon si contano dall'ingresso in archivio (`until`), non da una scadenza
+  // che non hanno: la stessa query che li mostra in 💶 Coupon li fa invecchiare.
+  const couponCutoff = new Date(now.getTime() - COUPON_TTL_DAYS * 86_400_000).toISOString();
+  const coupons = await store.queryItems({
+    kinds: ["coupon"],
+    until: couponCutoff,
+    statuses: ["new", "sent"],
+    limit: 100,
+  });
+  for (const item of coupons) await store.setStatus(item.id, "expired");
+  return stale.length + coupons.length;
 }

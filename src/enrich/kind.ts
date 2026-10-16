@@ -1,7 +1,7 @@
-import type { ItemKind, SourceKind } from "../types.ts";
+import type { Category, ItemKind, SourceKind } from "../types.ts";
 
 /**
- * Concorso o articolo?
+ * Concorso, offerta o articolo?
  *
  * Perché serve: metà delle fonti non sono concorsi. Un feed di Google News porta
  * la notizia *sul* concorso, una sitemap porta la cartella che raccoglie i
@@ -26,6 +26,12 @@ export interface KindInput {
   title: string;
   /** Tipo della fonte: le fonti `news` sono articoli per costruzione. */
   sourceKind: SourceKind;
+  /**
+   * Categoria della fonte. Le fonti `coupon` (buoni sconto, rimborsi, cashback)
+   * pubblicano offerte invece di concorsi, e lo dichiarano in
+   * src/config/sources.ts: è da lì che si sa, senza indovinare da un titolo.
+   */
+  sourceCategory: Category;
 }
 
 /**
@@ -43,6 +49,10 @@ const LISTING_SEGMENTS = new Set([
   "promozioni", "promo", "promozioni-attive", "offerte", "offerings", "iniziative",
   "news", "blog", "articoli", "articolo", "magazine", "rassegna", "rubriche",
   "categoria", "category", "tag", "archivio", "elenco", "eventi",
+  // Cartelle di coupon: /buoni-sconto/ e /coupon/ sono la categoria, non un
+  // buono sconto. La pagina di un coupon ha un figlio (".../buono-sconto-novi/")
+  // e resta un'offerta: è la stessa distinzione che vale per i concorsi.
+  "buoni-sconto", "buono-sconto", "coupon", "codici-sconto", "codice-sconto",
 ]);
 
 /**
@@ -134,8 +144,34 @@ function lastSegment(segments: string[]): string {
 }
 
 /**
+ * Un buono sconto, un codice sconto, un coupon. Sono formule che dicono "paghi
+ * meno": in qualunque posto compaiano, quella pagina non è un concorso.
+ *
+ * Sono volutamente poche e strette. La parola "buono" da sola non basta ("buono
+ * spesa da 500 €" è il premio di un concorso: vedi BONUS_PATTERN in
+ * src/enrich/score.ts), e nemmeno "voucher". Il segnale deve dire lo SCONTO.
+ *
+ * Lo spazio può essere un trattino, perché lo stesso testo in un URL diventa uno
+ * slug: "buoni-sconto" è la cartella di Scontrino Felice e "buoni sconto" è il
+ * titolo della pagina.
+ */
+const COUPON_SIGNAL =
+  /\b(buon[oi][\s-]sconto|codici?[\s-]sconto|coupon|sconto[\s-]da[\s-]stampare)\b/i;
+
+/**
+ * Una promozione che annuncia un premio è un concorso, anche se il coupon è il
+ * modo per partecipare. Il caso reale del 16/10/2026: "Cashback Fabuloso, Ajax,
+ * Soflan: ricevi un rimborso di 5 euro e vinci lavatrice Samsung" — è un rimborso
+ * E un'estrazione, e la metà da concorso non si può nascondere dalla sezione
+ * concorsi (è la stessa direzione d'errore dichiarata in testa a questo file).
+ */
+const PRIZE_SIGNAL = /\b(vinci|vincere|vincita|in palio|concors[oi]|estrazion[ei]|gratta e vinci)\b/i;
+
+/**
  * Il tipo di un item, dai soli dati che la pipeline ha in mano prima di leggere
- * la pagina. Mai un errore in eccesso verso "news": nel dubbio, concorso.
+ * la pagina. Mai un errore in eccesso verso "news": nel dubbio, concorso; e un
+ * premio annunciato vince sempre sullo sconto, perché un concorso nascosto costa
+ * più di un coupon di troppo.
  */
 export function classifyKind(input: KindInput): ItemKind {
   // 1. Le fonti news sono articoli per costruzione: il feed di Google News porta
@@ -144,6 +180,9 @@ export function classifyKind(input: KindInput): ItemKind {
 
   const segments = segmentsOf(input.url);
   const last = lastSegment(segments);
+  const offerta =
+    !PRIZE_SIGNAL.test(`${input.title} ${input.url}`) &&
+    (input.sourceCategory === "coupon" || COUPON_SIGNAL.test(`${input.title} ${input.url}`));
 
   // 2. L'URL È la pagina-elenco (la categoria, il listino, la sezione).
   if (last.length > 0 && LISTING_SEGMENTS.has(last)) return "news";
@@ -163,6 +202,15 @@ export function classifyKind(input: KindInput): ItemKind {
   if (LIST_TITLE_START.test(input.title) || LIST_TITLE.test(input.title) || LIST_TITLE_COUNT.test(input.title)) {
     return "news";
   }
+
+  // 6. Le offerte: un buono sconto o un rimborso non è un concorso. Lo dicono la
+  //    fonte (le fonti coupon lo dichiarano) o le parole della pagina — perché un
+  //    buono sconto resta un buono sconto anche quando arriva da un aggregatore
+  //    di concorsi, ed è lì che l'utente va a cercarlo.
+  //
+  //    Il controllo viene DOPO le regole degli elenchi di proposito: la pagina
+  //    che raccoglie i buoni sconto è un contenitore, non un'offerta.
+  if (offerta) return "coupon";
 
   return "contest";
 }

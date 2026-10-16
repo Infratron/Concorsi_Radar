@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { createMemoryStore, type MemoryStore } from "../src/db/memory.ts";
 import type { ItemRow } from "../src/types.ts";
 import { findStale, selectStale } from "../scripts/prune-stale.ts";
+import { staleItemReason } from "../src/enrich/freshness.ts";
 
 /**
  * Pulizia dell'archivio: la selezione è una funzione pura, quindi si prova senza
@@ -19,7 +20,9 @@ function item(overrides: Partial<ItemRow> = {}): ItemRow {
   return {
     id: unique,
     sourceId: "premieconcorsi",
+    brand: null,
     kind: "contest",
+    rulesUrl: null,
     url: `https://esempio.it/concorso/${unique}`,
     urlKey: `key-${unique}`,
     simhash: "0123456789abcdef",
@@ -87,6 +90,25 @@ const feedSenzaParoleChiave = item({
   summary: "Iniziativa del supermercato riservata a chi ha la carta.",
 });
 
+/** Un buono sconto vero, ma pubblicato tre mesi fa: offerta finita, non un falso positivo. */
+const couponVecchio = item({
+  sourceId: "scontrinofelice-coupon",
+  kind: "coupon",
+  title: "Buono sconto Crema Novi Fondente da 1,50 euro",
+  url: "https://www.scontrinofelice.it/buoni-sconto/buono-sconto-crema-novi/",
+  summary: "Stampa il coupon e portalo al supermercato: 1,50 euro di sconto.",
+  publishedAt: "2026-08-22T08:00:00.000Z",
+});
+
+/** La cartella dei coupon, non un coupon: quella resta da togliere. */
+const paginaElencoCoupon = listing({
+  sourceId: "sitemap-scontrinofelice",
+  kind: "news",
+  title: "Buoni Sconto",
+  url: "https://www.scontrinofelice.it/buoni-sconto/",
+  publishedAt: "2026-11-10T00:00:00.000Z",
+});
+
 describe("pulizia · cosa è un concorso ancora attivo", () => {
   it("non segnala niente quando è tutto a posto", () => {
     expect(selectStale([attivo, concorsoEni, feedSenzaParoleChiave], NOW)).toEqual([]);
@@ -110,6 +132,17 @@ describe("pulizia · cosa è un concorso ancora attivo", () => {
 
   it("una scadenza futura mette al riparo anche una pagina di catalogo", () => {
     expect(selectStale([{ ...paginaCatalogo, deadline: "2026-12-01" }], NOW)).toEqual([]);
+  });
+
+  it("un'offerta invecchiata non si cancella: la chiude il cron", () => {
+    // Il cancello la vede ("offerta vecchia") perché è lo stesso di cui si serve
+    // la pulizia, ma la riga NON è un falso positivo da buttare: è un coupon vero
+    // il cui tempo è passato. La chiude `expireOldItems` (stato 'expired'), e
+    // resta nello storico. Cancellarla sarebbe perdere l'archivio per niente.
+    expect(staleItemReason(couponVecchio, NOW)).toBe("offerta vecchia (90 giorni)");
+    expect(selectStale([couponVecchio], NOW)).toEqual([]);
+    // La cartella dei coupon invece è un contenitore, non un'offerta: via.
+    expect(selectStale([paginaElencoCoupon], NOW)[0]?.reason).toBe("nessun segnale di concorso");
   });
 
   it("le parole della sezione non salvano una pagina di catalogo", () => {

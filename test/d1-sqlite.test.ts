@@ -99,10 +99,25 @@ describe("store D1 · SQL vero su SQLite", () => {
     expect(concorso.item.kind).toBe("contest");
     expect(articolo.item.kind).toBe("news");
 
+    // I tre tipi viaggiano interi: un coupon non si legge come un concorso.
+    const coupon = await store.insertItem(
+      item({
+        url: "https://esempio.it/buono-sconto-novi",
+        urlKey: "key-coupon",
+        title: "Buono sconto Crema Novi",
+        kind: "coupon",
+        sourceId: "scontrinofelice-coupon",
+      }),
+    );
+    expect(coupon.item.kind).toBe("coupon");
+    expect((await store.getItem(coupon.item.id))?.kind).toBe("coupon");
+
     expect((await store.queryItems({ kinds: ["news"] })).map((row) => row.id)).toEqual([articolo.item.id]);
     expect((await store.queryItems({ kinds: ["contest"] })).map((row) => row.id)).toEqual([concorso.item.id]);
+    expect((await store.queryItems({ kinds: ["coupon"] })).map((row) => row.id)).toEqual([coupon.item.id]);
     expect(await store.countItems({ kinds: ["news"] })).toBe(1);
-    expect((await store.queryItems({ kinds: [] }))).toHaveLength(2);
+    expect(await store.countItems({ kinds: ["coupon"] })).toBe(1);
+    expect((await store.queryItems({ kinds: [] }))).toHaveLength(3);
   });
 
   it("una patch può riclassificare una riga già in archivio", async () => {
@@ -335,20 +350,55 @@ describe("store D1 · SQL vero su SQLite", () => {
     ).run("fonte-a", "Aggregatore A", "rss", "https://a.example/feed", "online", "[]", 15, 1);
 
     await s.recordSourceRun("fonte-a", {
-      ok: true, httpStatus: 200, etag: "etag-1", lastModified: null, error: null, now: "2026-10-16T08:00:00.000Z",
+      ok: true, httpStatus: 200, etag: "etag-1", lastModified: null, error: null, items: 4,
+      now: "2026-10-16T08:00:00.000Z",
     });
     let row = (await s.getSources())[0];
     expect(row.etag).toBe("etag-1");
     expect(row.failStreak).toBe(0);
     expect(row.lastOkAt).toBe("2026-10-16T08:00:00.000Z");
+    // L'ultimo tentativo, che è quello che si legge dalla chat.
+    expect(row.lastStatus).toBe(200);
+    expect(row.lastError).toBeNull();
+    expect(row.lastItems).toBe(4);
 
     await s.recordSourceRun("fonte-a", {
-      ok: false, httpStatus: 503, etag: null, lastModified: null, error: "HTTP 503", now: "2026-10-16T08:15:00.000Z",
+      ok: false, httpStatus: 503, etag: null, lastModified: null, error: "HTTP 503", items: 0,
+      now: "2026-10-16T08:15:00.000Z",
     });
     row = (await s.getSources())[0];
     expect(row.etag).toBe("etag-1");
     expect(row.failStreak).toBe(1);
     expect(row.lastRunAt).toBe("2026-10-16T08:15:00.000Z");
+    // L'ultimo tentativo si aggiorna anche quando fallisce (in SQL, non solo in memoria).
+    expect(row.lastStatus).toBe(503);
+    expect(row.lastError).toBe("HTTP 503");
+    expect(row.lastItems).toBe(0);
+    // ...e il successo di prima resta scritto: sono due colonne diverse.
+    expect(row.lastOkAt).toBe("2026-10-16T08:00:00.000Z");
+  });
+
+  it("su un database non ancora migrato le colonne nuove si leggono come \"non lo so\"", async () => {
+    const db = new Sqlite(":memory:");
+    // Tabella senza last_status/last_error/last_items: è lo stato in cui si trova
+    // il database di produzione finché non si lanciano le ALTER TABLE.
+    db.exec(
+      `CREATE TABLE sources (
+         id TEXT PRIMARY KEY, name TEXT NOT NULL, kind TEXT NOT NULL, url TEXT NOT NULL,
+         category TEXT NOT NULL, tags TEXT NOT NULL DEFAULT '[]', cadence_min INTEGER NOT NULL DEFAULT 15,
+         enabled INTEGER NOT NULL DEFAULT 1, etag TEXT, last_modified TEXT, last_run_at TEXT,
+         last_ok_at TEXT, fail_streak INTEGER NOT NULL DEFAULT 0
+       )`,
+    );
+    db.prepare(
+      `INSERT INTO sources (id, name, kind, url, category, tags, cadence_min, enabled, last_run_at, last_ok_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run("fonte-a", "Aggregatore A", "rss", "https://a.example/feed", "online", "[]", 15, 1, "2026-10-16T08:00:00.000Z", "2026-10-16T08:00:00.000Z");
+
+    const riga = (await createD1Store(sqliteBinding(db)).getSources())[0];
+    expect(riga.lastStatus).toBeNull();
+    expect(riga.lastError).toBeNull();
+    expect(riga.lastItems).toBe(0);
   });
 
   it("conserva i filtri della chat senza toccare le altre preferenze", async () => {
@@ -396,5 +446,100 @@ describe("store D1 · SQL vero su SQLite", () => {
     // restano il giftcard gratuito di Vincimi e il concorso "moda_bambini".
     const filtri = { ...defaultFilters(), mutedSources: ["sitemap-conad"], mutedTags: ["moda"], freeOnly: true };
     expect(await store.countItems(filtersFor(filtri, {}))).toBe(2);
+  });
+
+  it("il contributo di ogni fonte si legge in SQL: concorsi, ultimo, viste e scartate", async () => {
+    await store.insertItem(
+      item({ urlKey: "key-1", url: "https://a.example/1", sourceId: "vincimi", firstSeenAt: "2026-10-10T08:00:00.000Z" }),
+    );
+    await store.insertItem(
+      item({ urlKey: "key-2", url: "https://b.example/2", sourceId: "vincimi", firstSeenAt: "2026-10-16T08:00:00.000Z" }),
+    );
+    // Un articolo non è un concorso: resta fuori dal contributo della fonte.
+    await store.insertItem(
+      item({ urlKey: "key-3", url: "https://c.example/3", sourceId: "news-brand", kind: "news" }),
+    );
+    await store.recordSighting({
+      urlKey: "key-1", sourceId: "sitemap-conad", itemId: 1, kind: "contest", channel: "brand",
+      seenAt: "2026-10-16T09:00:00.000Z", kept: true,
+    });
+    await store.recordSighting({
+      urlKey: "key-9", sourceId: "sitemap-conad", itemId: null, kind: "contest", channel: "brand",
+      seenAt: "2026-10-16T09:00:00.000Z", kept: false,
+    });
+
+    // Un coupon è un contributo come un concorso: la diagnostica non deve dire
+    // "non porta niente" di una fonte che porta buoni sconto.
+    await store.insertItem(
+      item({
+        urlKey: "key-4",
+        url: "https://d.example/4",
+        sourceId: "scontrinofelice-coupon",
+        kind: "coupon",
+        firstSeenAt: "2026-10-16T09:30:00.000Z",
+      }),
+    );
+
+    const stats = await store.sourceStats();
+    expect(stats.vincimi).toEqual({
+      offers: 2, lastOfferAt: "2026-10-16T08:00:00.000Z", sightings: 0, discarded: 0,
+    });
+    expect(stats["scontrinofelice-coupon"]).toEqual({
+      offers: 1, lastOfferAt: "2026-10-16T09:30:00.000Z", sightings: 0, discarded: 0,
+    });
+    expect(stats["sitemap-conad"]).toEqual({
+      offers: 0, lastOfferAt: null, sightings: 2, discarded: 1,
+    });
+    // L'unica riga di questa fonte è un articolo: la fonte non compare, e chi
+    // legge usa SourceStat vuoto.
+    expect(stats["news-brand"]).toBeUndefined();
+  });
+
+  it("la colonna brand si scrive, si aggiorna, si filtra e si conta in SQL", async () => {
+    await store.insertItem(item({ urlKey: "key-1", url: "https://a.example/1", brand: "ferrero" }));
+    await store.insertItem(item({ urlKey: "key-2", url: "https://b.example/2", brand: "conad" }));
+    await store.insertItem(item({ urlKey: "key-3", url: "https://c.example/3", brand: "ferrero", kind: "news" }));
+    await store.insertItem(item({ urlKey: "key-4", url: "https://d.example/4", brand: null }));
+
+    expect((await store.getItem(1))?.brand).toBe("ferrero");
+    // Una riga senza marca: la colonna accetta NULL e la riga resta leggibile.
+    expect((await store.getItem(4))?.brand).toBeNull();
+    expect(await store.countItems({ brands: ["ferrero"] })).toBe(2);
+    expect((await store.queryItems({ brands: ["conad"], limit: 10 })).map((row) => row.id)).toEqual([2]);
+    expect(await store.countItems({ brands: [] })).toBe(4);
+    // brandCounts conta i concorsi, non gli articoli che parlano della marca.
+    expect(await store.brandCounts()).toEqual({ ferrero: 1, conad: 1 });
+
+    await store.updateItem(2, { brand: "esselunga", score: 55 });
+    const aggiornata = await store.getItem(2);
+    expect(aggiornata?.brand).toBe("esselunga");
+    expect(aggiornata?.score).toBe(55);
+    // Un duplicato senza marca riconosciuta non cancella quella in archivio.
+    await store.updateItem(2, { brand: null, score: 56 });
+    expect((await store.getItem(2))?.brand).toBe("esselunga");
+  });
+
+  it("la colonna rules_url si scrive, si aggiorna e si filtra in SQL", async () => {
+    const bando = "https://a.example/bando-barilla.pdf";
+    await store.insertItem(item({ urlKey: "key-1", url: "https://a.example/1", rulesUrl: bando }));
+    await store.insertItem(item({ urlKey: "key-2", url: "https://b.example/2", rulesUrl: null }));
+    // Un coupon non ha un bando: la colonna resta vuota senza rompere niente.
+    await store.insertItem(
+      item({ urlKey: "key-3", url: "https://c.example/3", kind: "coupon", sourceId: "scontrinofelice-coupon" }),
+    );
+
+    expect((await store.getItem(1))?.rulesUrl).toBe(bando);
+    expect((await store.getItem(2))?.rulesUrl).toBeNull();
+
+    // È la query del riempimento: solo le righe che il bando non ce l'hanno.
+    expect((await store.queryItems({ withoutRules: true, limit: 10 })).map((row) => row.id).sort()).toEqual([2, 3]);
+
+    await store.updateItem(2, { rulesUrl: "https://b.example/regolamento" });
+    expect((await store.getItem(2))?.rulesUrl).toBe("https://b.example/regolamento");
+    // Un duplicato senza bando non cancella quello già trovato (stessa regola
+    // della marca): la ricerca non deve poter peggiorare una riga.
+    await store.updateItem(2, { rulesUrl: null, score: 51 });
+    expect((await store.getItem(2))?.rulesUrl).toBe("https://b.example/regolamento");
+    expect((await store.queryItems({ withoutRules: true, limit: 10 })).map((row) => row.id)).toEqual([3]);
   });
 });

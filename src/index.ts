@@ -197,8 +197,18 @@ export default {
         ok: true,
         allowedChatIds: access.allowed,
         runs,
+        // Fonte per fonte: oltre alla storia (lastOkAt, failStreak) c'è l'esito
+        // dell'ULTIMO tentativo — ora, codice HTTP, item letti — che è la stessa
+        // cosa che si legge in 📡 Fonti, senza aprire i log di GitHub.
         sources: sources.map((source) => ({
-          id: source.id, enabled: source.enabled, lastOkAt: source.lastOkAt, failStreak: source.failStreak,
+          id: source.id,
+          enabled: source.enabled,
+          lastOkAt: source.lastOkAt,
+          lastRunAt: source.lastRunAt,
+          lastStatus: source.lastStatus,
+          lastError: source.lastError,
+          lastItems: source.lastItems,
+          failStreak: source.failStreak,
         })),
       });
     }

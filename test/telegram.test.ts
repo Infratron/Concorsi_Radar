@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { createMemoryStore, type MemoryStore } from "../src/db/memory.ts";
-import type { FetchLike, ItemRow, NewItem, Prefs, RunRow } from "../src/types.ts";
-import { TelegramClient, MAX_MESSAGE_CHARS, type TelegramUpdate } from "../src/telegram/api.ts";
+import type { FetchLike, ItemRow, NewItem, Prefs, RunRow, SourceRow } from "../src/types.ts";
+import { TelegramClient, MAX_MESSAGE_CHARS, type InlineKeyboardMarkup, type TelegramUpdate } from "../src/telegram/api.ts";
 import {
   daysLeft,
   escapeHtml,
@@ -13,6 +13,7 @@ import {
   localHour,
 } from "../src/telegram/format.ts";
 import {
+  BRANDS_PAGE_SIZE,
   cardKeyboard,
   filtriFontiKeyboard,
   filtriKeyboard,
@@ -22,6 +23,7 @@ import {
   settingsKeyboard,
   sourceToggleLabel,
 } from "../src/telegram/keyboard.ts";
+import { SCORE_WEIGHTS } from "../src/enrich/score.ts";
 import { activeFilterCount, defaultFilters, filterableSources, parseFilters, withFilterChange } from "../src/filters.ts";
 import { applyIntent, parseCallback } from "../src/telegram/screens.ts";
 import { channelOf } from "../src/enrich/lead.ts";
@@ -188,6 +190,30 @@ const methods = (calls: Call[]): string[] => calls.map((call) => call.method);
 const lastWith = (calls: Call[], method: string): Call | undefined =>
   [...calls].reverse().find((call) => call.method === method);
 
+/** L'ultima tastiera disegnata: così i test toccano il bottone che l'utente vede. */
+function lastKeyboard(calls: Call[]): InlineKeyboardMarkup | null {
+  const call = lastWith(calls, "editMessageText") ?? lastWith(calls, "sendMessage");
+  return (call?.payload.reply_markup as InlineKeyboardMarkup | undefined) ?? null;
+}
+
+/**
+ * Il callback_data del bottone con quell'etichetta, preso dalla tastiera viva.
+ * `nth` serve dove l'etichetta si ripete: "➕ 1h" sta sia sul cursore dell'inizio
+ * sia su quello della fine, ed è la riga (in alto ➖ 🌙 dalle, in basso alle) a
+ * dire quale stai spostando.
+ */
+function buttonData(calls: Call[], label: string, nth = 0): string {
+  const bottoni = lastKeyboard(calls)?.inline_keyboard.flat().filter((bottono) => bottono.text === label) ?? [];
+  const trovato = bottoni[nth];
+  if (!trovato?.callback_data) throw new Error(`bottone "${label}" non trovato (posizione ${nth + 1})`);
+  return trovato.callback_data;
+}
+
+/** La riga che contiene un certo callback: le impostazioni crescono, gli indici no. */
+function rigaCon(keyboard: InlineKeyboardMarkup, data: string) {
+  return keyboard.inline_keyboard.find((riga) => riga.some((bottono) => bottono.callback_data === data));
+}
+
 describe("format", () => {
   it("esegue l'escape di &, < e >", () => {
     expect(escapeHtml('<b>&"</b>')).toBe("&lt;b&gt;&amp;&quot;&lt;/b&gt;");
@@ -236,15 +262,28 @@ describe("format", () => {
 
 describe("bottoni · costruzione delle tastiere", () => {
   it("il menù porta a tutte le sezioni, con i conteggi", () => {
-    const keyboard = menuKeyboard({ nuovi: 3, oggi: 12, settimana: 40, scadenze: 2, salvati: 1, news: 7, filtri: 0 });
+    const keyboard = menuKeyboard({
+      nuovi: 3, oggi: 12, settimana: 40, scadenze: 2, salvati: 1, news: 7, coupon: 5, preferiti: 4, filtri: 0,
+    });
     const bottoni = keyboard.inline_keyboard.flat();
     expect(bottoni.map((b) => b.callback_data)).toEqual([
       "s:nuovi", "s:oggi", "s:settimana", "s:scadenze", "s:salvati", "s:news", "s:cerca", "s:storico",
-      "s:filtri", "s:fonti", "s:impostazioni", "refresh",
+      "s:coupon", "s:preferiti", "s:filtri", "s:fonti", "s:impostazioni", "refresh",
     ]);
     expect(bottoni[0]?.text).toBe("🆕 Nuovi (3)");
     expect(bottoni[4]?.text).toBe("⭐ Watchlist (1)");
     expect(bottoni[5]?.text).toBe("📰 News (7)");
+    expect(bottoni[8]?.text).toBe("💶 Coupon e rimborsi (5)");
+  });
+
+  it("un coupon si riconosce dal bottone: 💶 e senza punteggio", () => {
+    // Il punteggio risponde a "quanto vale la pena guardare questo concorso", e
+    // su un buono sconto non vuol dire niente: mostrarlo sarebbe un numero
+    // inventato.
+    const label = itemButtonLabel(row({ kind: "coupon", score: 31, title: "Buono sconto Aia Spinacine" }), NOW);
+    expect(label).toContain("💶");
+    expect(label).not.toContain("31");
+    expect(label).toContain("Buono sconto Aia Spinacine");
   });
 
   it("un articolo si riconosce dal bottone: 📰 invece di ⭐", () => {
@@ -271,6 +310,15 @@ describe("bottoni · costruzione delle tastiere", () => {
     expect(formatItemCard(row({ kind: "contest" }), NOW)).not.toContain("pagina ufficiale");
   });
 
+  it("la scheda mostra il Regolamento trovato sulla pagina del concorso", () => {
+    const item = row({ id: 7, url: "https://esempio.it/concorso", summary: "", rulesUrl: "https://esempio.it/bando.pdf" });
+    const keyboard = cardKeyboard(item, null, regolamentoUrl(item));
+    expect(keyboard.inline_keyboard[1]?.map((b) => [b.text, b.url])).toEqual([
+      ["🔗 Apri", "https://esempio.it/concorso"],
+      ["📄 Regolamento", "https://esempio.it/bando.pdf"],
+    ]);
+  });
+
   it("nella scheda il bottone della decisione già presa è inerte", () => {
     const item = row({ id: 7 });
     const keyboard = cardKeyboard(item, "saved", "https://esempio.it/regolamento");
@@ -283,11 +331,63 @@ describe("bottoni · costruzione delle tastiere", () => {
 
   it("le impostazioni marcano i valori attivi", () => {
     const keyboard = settingsKeyboard(prefs({ minScoreInstant: 90, quietHours: "22-8", digestHours: [] }));
-    const righe = keyboard.inline_keyboard;
-    expect(righe[0]?.find((b) => b.text.startsWith("•"))?.text).toBe("• 90");
-    expect(righe[1]?.find((b) => b.text.startsWith("•"))?.text).toBe("• 22–8");
-    expect(righe[2]?.find((b) => b.text.startsWith("•"))?.text).toBe("• Off");
-    expect(righe[3]?.[0]?.callback_data).toBe("cfg:notify:off");
+    expect(rigaCon(keyboard, "cfg:score:90")?.find((b) => b.text.startsWith("•"))?.text).toBe("• 90");
+    expect(rigaCon(keyboard, "cfg:quiet:22-8")?.find((b) => b.text.startsWith("•"))?.text).toBe("• 22–8");
+    expect(rigaCon(keyboard, "cfg:digest:off")?.find((b) => b.text.startsWith("•"))?.text).toBe("• Off");
+    expect(keyboard.inline_keyboard.some((riga) => riga[0]?.callback_data === "cfg:notify:off")).toBe(true);
+  });
+
+  it("i ➖ ➕ spostano la soglia di cinque punti, e ai bordi diventano inerti", () => {
+    const centro = settingsKeyboard(prefs({ minScoreInstant: 80 }));
+    expect(centro.inline_keyboard[0]?.map((b) => b.callback_data)).toEqual(["cfg:score:75", "noop", "cfg:score:85"]);
+    expect(centro.inline_keyboard[0]?.[1]?.text).toBe("🔔 80/100");
+
+    // Al minimo il ➖ resta al suo posto ma non fa niente: la riga non si sposta
+    // sotto il dito, che è il modo in cui si fanno i tocchi sbagliati.
+    const basso = settingsKeyboard(prefs({ minScoreInstant: 0 }));
+    expect(basso.inline_keyboard[0]?.[0]).toEqual({ text: "➖", callback_data: "noop" });
+    expect(basso.inline_keyboard[0]?.[2]?.callback_data).toBe("cfg:score:5");
+
+    const alto = settingsKeyboard(prefs({ minScoreInstant: 100 }));
+    expect(alto.inline_keyboard[0]?.[2]).toEqual({ text: "➕", callback_data: "noop" });
+    expect(alto.inline_keyboard[0]?.[0]?.callback_data).toBe("cfg:score:95");
+  });
+
+  it("il silenzio ha due cursori, e ognuno sposta il suo estremo", () => {
+    const keyboard = settingsKeyboard(prefs({ quietHours: "23-7" }));
+    expect(rigaCon(keyboard, "cfg:quiet:22-7")?.map((b) => b.callback_data)).toEqual([
+      "cfg:quiet:22-7", "noop", "cfg:quiet:0-7",
+    ]);
+    expect(rigaCon(keyboard, "cfg:quiet:23-6")?.map((b) => b.callback_data)).toEqual([
+      "cfg:quiet:23-6", "noop", "cfg:quiet:23-8",
+    ]);
+    expect(rigaCon(keyboard, "cfg:quiet:22-7")?.[1]?.text).toBe("🌙 dalle 23:00");
+    expect(rigaCon(keyboard, "cfg:quiet:23-6")?.[1]?.text).toBe("🌙 alle 07:00");
+  });
+
+  it("con il silenzio spento i cursori partono dalla fascia solita", () => {
+    const keyboard = settingsKeyboard(prefs({ quietHours: "" }));
+    expect(rigaCon(keyboard, "cfg:quiet:22-7")?.[2]?.callback_data).toBe("cfg:quiet:0-7");
+    expect(rigaCon(keyboard, "cfg:quiet:23-6")?.[2]?.callback_data).toBe("cfg:quiet:23-8");
+    // E "Off" resta a un tocco di distanza — marcato, perché il silenzio è spento.
+    expect(rigaCon(keyboard, "cfg:quiet:off")?.find((b) => b.text.startsWith("•"))?.text).toBe("• Off");
+  });
+
+  it("la griglia del digest offre le ventiquattr'ore, con il pallino su quelle accese", () => {
+    const keyboard = settingsKeyboard(prefs({ digestHours: [8, 19] }));
+    const griglia = keyboard.inline_keyboard.filter((riga) =>
+      riga.some((b) => b.callback_data?.startsWith("cfg:hour:")),
+    );
+    expect(griglia).toHaveLength(4); // ventiquattro ore, sei per riga
+    expect(griglia.flat().map((b) => b.callback_data)).toEqual(
+      Array.from({ length: 24 }, (_, hour) => `cfg:hour:${hour}`),
+    );
+    expect(griglia.flat().map((b) => b.text)).toEqual(
+      Array.from({ length: 24 }, (_, hour) => {
+        const due = String(hour).padStart(2, "0");
+        return hour === 8 || hour === 19 ? `• ${due}` : due;
+      }),
+    );
   });
 });
 
@@ -549,10 +649,56 @@ describe("interfaccia · un solo messaggio per chat", () => {
     await handleUpdate(tap(3, "cfg:quiet:99-99", 100), deps(store, tg));
     await handleUpdate(tap(4, "cfg:quiet:7-33", 100), deps(store, tg));
     await handleUpdate(tap(5, "cfg:digest:99", 100), deps(store, tg));
+    // La griglia delle ore è nuova, e il valore che arriva è solo un numero:
+    // "99" non è un'ora, e "9x" nemmeno (parseInt ne farebbe 9).
+    await handleUpdate(tap(6, "cfg:hour:99", 100), deps(store, tg));
+    await handleUpdate(tap(7, "cfg:hour:9x", 100), deps(store, tg));
+    await handleUpdate(tap(8, "cfg:hour:", 100), deps(store, tg));
     const salvate = await store.getPrefs(CHAT);
     expect(salvate?.minScoreInstant).toBe(80);
     expect(salvate?.quietHours).toBe("23-7");
     expect(salvate?.digestHours).toEqual([8, 19]);
+  });
+
+  /**
+   * Il giro completo delle impostazioni fini, fatto dai bottoni VERI: il tocco
+   * si prende dalla tastiera che il bot ha appena disegnato, quindi se un bottone
+   * portasse un valore che il router rifiuta (o un altro valore), questo test lo
+   * vedrebbe. La preferenza in D1 è la prova finale, non il testo del messaggio.
+   */
+  it("i cursori e la griglia cambiano preferenze reali, lette dai bottoni disegnati", async () => {
+    const { tg, calls } = makeTg();
+    await handleUpdate(command(1, "/start"), deps(store, tg));
+    await handleUpdate(tap(2, "s:impostazioni", 100), deps(store, tg));
+
+    await handleUpdate(tap(3, buttonData(calls, "➕ 5"), 100), deps(store, tg));
+    expect((await store.getPrefs(CHAT))?.minScoreInstant).toBe(85);
+    expect(lastWith(calls, "answerCallbackQuery")?.payload.text).toBe("🔔 Avvisi sopra 85/100");
+
+    // Il primo "➖ 1h" è il cursore dell'inizio: il silenzio comincia prima.
+    await handleUpdate(tap(4, buttonData(calls, "➖ 1h"), 100), deps(store, tg));
+    expect((await store.getPrefs(CHAT))?.quietHours).toBe("22-7");
+    expect(lastWith(calls, "answerCallbackQuery")?.payload.text).toBe("🌙 Silenzio 22–7");
+
+    // Il secondo "➕ 1h" è il cursore della fine: la fascia si allunga dall'altra
+    // parte, e resta 22-8 (non 23-8, che sarebbe uno spostamento, non un allungo).
+    await handleUpdate(tap(5, buttonData(calls, "➕ 1h", 1), 100), deps(store, tg));
+    expect((await store.getPrefs(CHAT))?.quietHours).toBe("22-8");
+
+    // Un'ora del digest si accende e si spegne dallo stesso bottone.
+    await handleUpdate(tap(6, buttonData(calls, "09"), 100), deps(store, tg));
+    expect((await store.getPrefs(CHAT))?.digestHours).toEqual([8, 9, 19]);
+    expect(lastWith(calls, "answerCallbackQuery")?.payload.text).toBe("📬 Accesa 09:00");
+
+    await handleUpdate(tap(7, buttonData(calls, "• 09"), 100), deps(store, tg));
+    expect((await store.getPrefs(CHAT))?.digestHours).toEqual([8, 19]);
+    expect(lastWith(calls, "answerCallbackQuery")?.payload.text).toBe("📬 Spenta 09:00");
+
+    // La schermata dice i valori nuovi — compreso il silenzio allungato a 22–8.
+    const testo = lastWith(calls, "editMessageText")?.payload.text ?? "";
+    expect(testo).toContain("solo sopra <b>85</b>/100");
+    expect(testo).toContain("🌙 Silenzio: <b>22:00–08:00</b>");
+    expect(testo).toContain("📬 Digest: <b>08:00, 19:00</b>");
   });
 
   it("la ricerca parte dal pulsante e usa il messaggio successivo come parola", async () => {
@@ -814,7 +960,16 @@ describe("interfaccia · un solo messaggio per chat", () => {
       {
         id: "vincimi", name: "Vincimi", kind: "rss", url: "https://v.example/feed", category: "online",
         tags: ["aggregatore"], cadenceMin: 45, enabled: true, etag: null, lastModified: null,
-        lastRunAt: null, lastOkAt: "2026-11-20T09:00:00.000Z", failStreak: 0,
+        lastRunAt: "2026-11-20T09:00:00.000Z", lastOkAt: "2026-11-20T09:00:00.000Z", failStreak: 0,
+        lastStatus: 200, lastError: null, lastItems: 12,
+      },
+      {
+        // Una fonte che ha risposto con un 403: è la riga che prima si trovava
+        // solo nel log del runner di GitHub.
+        id: "scontrinofelice", name: "Scontrino Felice", kind: "rss", url: "https://s.example/feed",
+        category: "scontrino", tags: ["scontrino"], cadenceMin: 30, enabled: true, etag: null,
+        lastModified: null, lastRunAt: "2026-11-20T09:05:00.000Z", lastOkAt: "2026-11-19T08:00:00.000Z",
+        failStreak: 2, lastStatus: 403, lastError: "HTTP 403", lastItems: 0,
       },
     ]);
     await store.recordRun({
@@ -824,8 +979,10 @@ describe("interfaccia · un solo messaggio per chat", () => {
     await handleUpdate(tap(2, "s:fonti", 100), deps(store, tg));
 
     const testo = lastWith(calls, "editMessageText")?.payload.text ?? "";
-    expect(testo).toContain("1 configurate, 1 attive");
-    expect(testo).toContain("Vincimi · ok 20/11 10:00");
+    expect(testo).toContain("2 configurate, 2 attive");
+    // Ora, codice HTTP e quanti item: la fonte si controlla da qui.
+    expect(testo).toContain("🟢 Vincimi · 20/11 10:00 · HTTP 200 · 12 item");
+    expect(testo).toContain("🔴 Scontrino Felice · 20/11 10:05 · HTTP 403 · ⚠️ 2 di fila");
     expect(testo).toContain("GitHub 20/11 10:30 · 12 ok / 0 errori · 22 nuovi");
   });
 
@@ -1027,6 +1184,101 @@ describe("filtri personali · due chat, due feed", () => {
     expect(cambiato?.text.startsWith("🚫")).toBe(true);
   });
 
+  it("🏷 Preferiti per marca: la marca seguita vale di più e ha la sua sezione", async () => {
+    const store = createMemoryStore();
+    await dueChat(store);
+    await seed(store, [
+      { title: "Concorso Nutella", brand: "ferrero" },
+      { title: "Concorso Conad bollini", brand: "conad" },
+      { title: "Concorso senza marca", brand: null },
+    ]);
+    const { tg, calls } = makeTg();
+    const voci = (): { text: string; callback_data?: string }[] => bottoni(calls, CHAT).flat();
+    const conMarca = async (): Promise<number> =>
+      (await store.queryItems({ limit: 10 })).find((item) => item.brand === "ferrero")?.score ?? -1;
+
+    await handleUpdate(cmd(CHAT, 1, "/start"), entrambe(store, tg));
+    // Il menù ha la voce, e prima di seguire qualcosa conta zero.
+    expect(voci().find((b) => b.callback_data === "s:preferiti")?.text).toBe("🏷 Preferiti per marca (0)");
+
+    await handleUpdate(tapIn(CHAT, 2, "s:preferiti", 100), entrambe(store, tg));
+    expect(schermata(calls, CHAT)).toContain("Preferiti per marca");
+    expect(schermata(calls, CHAT)).toContain("vale");
+    // Le marche con concorsi in archivio stanno in cima, con il conteggio.
+    const marche = bottoni(calls, CHAT).flat().filter((b) => b.callback_data?.startsWith("cfg:brand:"));
+    expect(marche).toHaveLength(BRANDS_PAGE_SIZE);
+    // Le marche con concorsi in archivio stanno in cima (a pari conteggio in
+    // ordine alfabetico), le altre seguono.
+    expect(marche.slice(0, 2).map((b) => b.text)).toEqual(["⬜️ Conad (1)", "⬜️ Ferrero (1)"]);
+    expect(schermata(calls, CHAT)).toContain("Pagina 1/");
+
+    // Accendere la marca ricalcola i punteggi già in archivio: è la differenza
+    // fra una promessa e un numero che si vede subito.
+    await handleUpdate(tapIn(CHAT, 3, "cfg:brand:ferrero", 100), entrambe(store, tg));
+    expect((await store.getPrefs(CHAT))?.filters.favoriteBrands).toEqual(["ferrero"]);
+    expect(String(calls.filter((c) => c.method === "answerCallbackQuery").pop()?.payload.text)).toContain("Ferrero");
+    const conBonus = await conMarca();
+    await handleUpdate(tapIn(CHAT, 4, "cfg:brand:ferrero", 100), entrambe(store, tg));
+    const senzaBonus = await conMarca();
+    expect(conBonus - senzaBonus).toBe(SCORE_WEIGHTS.favoriteBrand);
+    await handleUpdate(tapIn(CHAT, 5, "cfg:brand:ferrero", 100), entrambe(store, tg));
+    expect(bottoni(calls, CHAT).flat().find((b) => b.callback_data === "cfg:brand:ferrero")?.text).toBe("✅ Ferrero (1)");
+
+    // La sezione mostra solo i concorsi di quella marca.
+    await handleUpdate(tapIn(CHAT, 6, "s:preferiti-lista", 100), entrambe(store, tg));
+    const elenco = bottoni(calls, CHAT).flat().filter((b) => b.callback_data?.startsWith("open:")).map((b) => b.text);
+    expect(elenco.join("\n")).toContain("Nutella");
+    expect(elenco.join("\n")).not.toContain("Conad");
+    expect(schermata(calls, CHAT)).toContain("1 concorso");
+
+    await handleUpdate(tapIn(CHAT, 7, "home", 100), entrambe(store, tg));
+    expect(voci().find((b) => b.callback_data === "s:preferiti")?.text).toBe("🏷 Preferiti per marca (1)");
+
+    // Il filtro vero: "solo le marche che seguo" toglie il resto dagli elenchi.
+    await handleUpdate(tapIn(CHAT, 8, "s:preferiti", 100), entrambe(store, tg));
+    await handleUpdate(tapIn(CHAT, 9, "cfg:brands:on", 100), entrambe(store, tg));
+    expect((await store.getPrefs(CHAT))?.filters.brandsOnly).toBe(true);
+    expect(schermata(calls, CHAT)).toContain("Filtro acceso");
+    await handleUpdate(tapIn(CHAT, 10, "s:oggi", 100), entrambe(store, tg));
+    expect(schermata(calls, CHAT)).toContain("1 concorso");
+    const solo = bottoni(calls, CHAT).flat().filter((b) => b.callback_data?.startsWith("open:")).map((b) => b.text);
+    expect(solo.join("\n")).toContain("Nutella");
+    expect(solo.join("\n")).not.toContain("senza marca");
+    // Nel menù il filtro si conta, e dice "vedi 1 di 3".
+    await handleUpdate(tapIn(CHAT, 11, "home", 100), entrambe(store, tg));
+    expect(schermata(calls, CHAT)).toContain("1 di 3 concorsi");
+
+    // L'altra chat non ha toccato niente.
+    expect((await store.getPrefs(AMICA))?.filters).toEqual(defaultFilters());
+  });
+
+  it("i preferiti vuoti mandano dove si accende una marca", async () => {
+    const store = createMemoryStore();
+    await dueChat(store);
+    await seed(store, [{ title: "Concorso senza marca", brand: null }]);
+    const { tg, calls } = makeTg();
+
+    await handleUpdate(cmd(CHAT, 1, "/start"), entrambe(store, tg));
+    await handleUpdate(tapIn(CHAT, 2, "s:preferiti-lista", 100), entrambe(store, tg));
+    expect(schermata(calls, CHAT)).toContain("Non segui ancora nessuna marca");
+    expect(bottoni(calls, CHAT).flat().some((b) => b.callback_data === "s:preferiti")).toBe(true);
+
+    // Il filtro senza marche da seguire non nasconde niente: il bottone è inerte
+    // e non si scrive che c'è un filtro attivo.
+    await handleUpdate(tapIn(CHAT, 3, "s:preferiti", 100), entrambe(store, tg));
+    const inerte = bottoni(calls, CHAT).flat().find((b) => b.text.includes("Solo le marche seguite"));
+    expect(inerte?.callback_data).toBe("noop");
+    expect(schermata(calls, CHAT)).not.toContain("Filtro acceso");
+
+    // Svuotare l'elenco spegne anche il filtro, e i punteggi tornano com'erano.
+    await handleUpdate(tapIn(CHAT, 4, "cfg:brand:conad", 100), entrambe(store, tg));
+    await handleUpdate(tapIn(CHAT, 5, "cfg:brands:on", 100), entrambe(store, tg));
+    expect((await store.getPrefs(CHAT))?.filters.brandsOnly).toBe(true);
+    await handleUpdate(tapIn(CHAT, 6, "cfg:brands:reset", 100), entrambe(store, tg));
+    expect((await store.getPrefs(CHAT))?.filters.favoriteBrands).toEqual([]);
+    expect((await store.getPrefs(CHAT))?.filters.brandsOnly).toBe(false);
+  });
+
   it("la riga delle stelle sta in elenco e filtra dove serve", async () => {
     const store = createMemoryStore();
     await dueChat(store);
@@ -1153,6 +1405,20 @@ describe("digest e avvisi", () => {
       "https://esempio.it/regolamento.pdf",
     );
     expect(regolamentoUrl(row({ url: "https://esempio.it/regolamento", summary: "" }))).toBeNull();
+  });
+
+  it("il bando salvato dalla raccolta vale più del testo dell'item", () => {
+    // È il caso per cui la colonna esiste: il riassunto del feed non nominava
+    // nessun regolamento, ma la pagina del concorso sì.
+    expect(
+      regolamentoUrl(
+        row({ url: "https://esempio.it/concorso", summary: "Partecipa con lo scontrino.", rulesUrl: "https://esempio.it/bando.pdf" }),
+      ),
+    ).toBe("https://esempio.it/bando.pdf");
+    // Un "bando" che punta alla pagina stessa non è un bottone in più.
+    expect(
+      regolamentoUrl(row({ url: "https://esempio.it/concorso", rulesUrl: "https://esempio.it/concorso" })),
+    ).toBeNull();
   });
 
   it("non manda digests a chi li ha spenti dalle impostazioni", async () => {
@@ -1497,5 +1763,247 @@ describe("vantaggio di tempistica · comando /vantaggio", () => {
 
     const testo = String(lastWith(calls, "editMessageText")?.payload.text ?? "");
     expect(testo).toContain("Gli aggregatori l'hanno visto <b>7 ore</b> prima");
+  });
+});
+
+describe("coupon e rimborsi · la sezione", () => {
+  it("💶 Coupon e rimborsi mostra le offerte e non i concorsi", async () => {
+    const store = createMemoryStore();
+    await store.upsertPrefs(prefs());
+    await seed(store, [
+      { title: "Concorso Barilla: vinci una cucina", kind: "contest" },
+      { title: "Buono sconto Aia Spinacine da stampare", kind: "coupon", sourceId: "scontrinofelice-coupon" },
+      { title: "Cashback Ymea: richiedi 25 euro di rimborso", kind: "coupon", sourceId: "scontrinofelice-cashback" },
+    ]);
+    const { tg, calls } = makeTg();
+
+    await handleUpdate(command(1, "/coupon"), deps(store, tg));
+
+    const testo = String(lastWith(calls, "sendMessage")?.payload.text ?? "");
+    expect(testo).toContain("Coupon e rimborsi");
+    expect(testo).toContain("2 coupon");
+    expect(testo).toContain("si spende meno, non si vince");
+    const bottoni = lastKeyboard(calls)?.inline_keyboard.flat() ?? [];
+    const offerta = bottoni.find((bottone) => bottone.text.includes("Buono sconto Aia"));
+    expect(offerta?.text).toContain("💶");
+    expect(bottoni.some((bottone) => bottone.text.includes("Concorso Barilla"))).toBe(false);
+    expect((await store.getUiState(CHAT))?.section).toBe("coupon");
+  });
+
+  it("il coupon si conta nel menù e nell'archivio, ma non fra i concorsi", async () => {
+    const store = createMemoryStore();
+    await store.upsertPrefs(prefs());
+    await seed(store, [
+      { title: "Concorso Findus", kind: "contest" },
+      { title: "Buono sconto Novi", kind: "coupon" },
+      { title: "Buono sconto Aia", kind: "coupon" },
+    ]);
+    const { tg, calls } = makeTg();
+
+    await handleUpdate(command(1, "/start"), deps(store, tg));
+
+    const bottoni = lastKeyboard(calls)?.inline_keyboard.flat() ?? [];
+    expect(bottoni.some((bottone) => bottone.text === "💶 Coupon e rimborsi (2)")).toBe(true);
+    const testo = String(lastWith(calls, "sendMessage")?.payload.text ?? "");
+    expect(testo).toContain("1</b> concorsi");
+    expect(testo).toContain("2</b> coupon");
+    // E nelle sezioni dei concorsi non entrano: 📋 Oggi conta un concorso solo.
+    await handleUpdate(tap(2, "s:oggi", 100), deps(store, tg));
+    const elenco = String(lastWith(calls, "editMessageText")?.payload.text ?? "");
+    expect(elenco).toContain("1 concorso");
+  });
+
+  it("la scheda di un coupon dice che non si vince niente", async () => {
+    const store = createMemoryStore();
+    await store.upsertPrefs(prefs());
+    const ids = await seed(store, [{ title: "Buono sconto Président", kind: "coupon", score: 24 }]);
+    const { tg, calls } = makeTg();
+
+    await handleUpdate(command(1, "/start"), deps(store, tg));
+    await handleUpdate(tap(2, `open:${ids[0]}`, 100), deps(store, tg));
+
+    const testo = String(lastWith(calls, "editMessageText")?.payload.text ?? "");
+    expect(testo).toContain("💶");
+    expect(testo).toContain("qui non si vince niente, si spende meno");
+    // Il punteggio non compare: su un buono sconto sarebbe un numero inventato.
+    expect(testo).not.toContain("/100");
+  });
+
+  /** Un archivio con un coupon e un concorso, entrambi appetibili. */
+  async function archivioMisto(): Promise<MemoryStore> {
+    const store = createMemoryStore();
+    await store.upsertPrefs(prefs({ minScoreInstant: 80 }));
+    await seed(store, [
+      { title: "Buono sconto Novi Fondente", kind: "coupon", score: 99 },
+      { title: "Concorso gratis con premio certo", kind: "contest", score: 99 },
+    ]);
+    return store;
+  }
+
+  it("un coupon non fa scattare gli avvisi: partono solo per i concorsi", async () => {
+    // Le notifiche sono per le pagine su cui si partecipa: un buono sconto non
+    // merita una sveglia alle 7 del mattino, e il punteggio alto non cambia
+    // niente (qui è 99 per costruzione).
+    const { tg, calls } = makeTg();
+
+    const avvisi = await sendInstantAlerts(deps(await archivioMisto(), tg));
+
+    expect(avvisi.sent).toBe(1);
+    const testi = calls.filter((call) => call.method === "sendMessage").map((call) => String(call.payload.text));
+    expect(testi.join("\n")).toContain("Concorso gratis con premio certo");
+    expect(testi.join("\n")).not.toContain("Buono sconto Novi");
+  });
+
+  it("un coupon non entra nel digest", async () => {
+    const { tg, calls } = makeTg();
+
+    const digest = await sendDigests(deps(await archivioMisto(), tg));
+
+    expect(digest.messages).toBe(1);
+    const testi = calls.filter((call) => call.method === "sendMessage").map((call) => String(call.payload.text));
+    expect(testi.join("\n")).toContain("Concorso gratis con premio certo");
+    expect(testi.join("\n")).not.toContain("Buono sconto Novi");
+  });
+});
+
+describe("diagnostica delle fonti · quali valgono e quali no", () => {
+  /** Riga di fonte completa: i test ne toccano solo i campi che contano. */
+  const fonte = (overrides: Partial<SourceRow> & Pick<SourceRow, "id" | "name">): SourceRow => ({
+    kind: "rss",
+    url: `https://${overrides.id}.example/feed`,
+    category: "online",
+    tags: ["aggregatore"],
+    cadenceMin: 30,
+    enabled: true,
+    etag: null,
+    lastModified: null,
+    lastRunAt: "2026-11-20T09:00:00.000Z",
+    lastOkAt: "2026-11-20T09:00:00.000Z",
+    failStreak: 0,
+    lastStatus: 200,
+    lastError: null,
+    lastItems: 25,
+    ...overrides,
+  });
+
+  /** Una fonte rotta, una che porta solo catalogo scartato, una che lavora. */
+  const treFonti = (store: MemoryStore): void => {
+    store.seedSources([
+      fonte({ id: "premieconcorsi", name: "Premi e Concorsi" }),
+      fonte({
+        id: "dimmicosacerchi",
+        name: "DimmiCosaCerchi · concorsi a premi",
+        failStreak: 3,
+        lastStatus: 403,
+        lastError: "HTTP 403",
+        lastOkAt: "2026-11-18T09:00:00.000Z",
+      }),
+      fonte({ id: "sitemap-conad", name: "Conad · carte e premi", lastItems: 20 }),
+    ]);
+  };
+
+  const guarda = async (store: MemoryStore): Promise<string> => {
+    const { tg, calls } = makeTg();
+    await handleUpdate(command(1, "/diagnostica"), deps(store, tg));
+    return String(lastWith(calls, "sendMessage")?.payload.text ?? "");
+  };
+
+  it("dice chi fallisce, chi non porta concorsi e chi lavora", async () => {
+    const store = createMemoryStore();
+    await store.upsertPrefs(prefs());
+    treFonti(store);
+    await seed(store, [{ sourceId: "premieconcorsi", title: "Concorso Esselunga" }]);
+    // Conad ha guardato una pagina e l'ha scartata: nessun concorso per prima.
+    await store.recordSighting({
+      urlKey: "key-scartata",
+      sourceId: "sitemap-conad",
+      itemId: null,
+      kind: "contest",
+      channel: "brand",
+      seenAt: "2026-11-20T09:00:00.000Z",
+      kept: false,
+    });
+
+    const testo = await guarda(store);
+    expect(testo).toContain("Diagnostica delle fonti");
+    expect(testo).toContain("<b>2</b> fonti da guardare su <b>3</b> accese");
+    expect(testo).toContain("<b>Falliscono</b> (1)");
+    expect(testo).toContain("<code>dimmicosacerchi</code>");
+    expect(testo).toContain("3 giri di fila a vuoto");
+    expect(testo).toContain("<b>Rispondono ma non portano concorsi</b> (1)");
+    expect(testo).toContain("<code>sitemap-conad</code>");
+    // Una sola pagina scartata: è un catalogo, non un elenco di concorsi.
+    expect(testo).toContain("una pagina scartata e nessun concorso");
+    // Le fonti che lavorano si contano, non si elencano una per una.
+    expect(testo).toContain("Le altre <b>1</b> fonti portano concorsi nuovi");
+    // E in fondo c'è come toglierle davvero, e come nasconderle solo a sé.
+    expect(testo).toContain("sources.ts");
+    expect(testo).toContain("Scegli le fonti");
+    expect((await store.getUiState(CHAT))?.section).toBe("diagnostica");
+  });
+
+  it("ci si arriva da 📡 Fonti, e da lì si può spegnere una fonte solo per sé", async () => {
+    const store = createMemoryStore();
+    await store.upsertPrefs(prefs());
+    treFonti(store);
+    const { tg, calls } = makeTg();
+
+    await handleUpdate(command(1, "/start"), deps(store, tg));
+    await handleUpdate(tap(2, "s:fonti", 100), deps(store, tg));
+    // La schermata delle fonti porta alla domanda successiva.
+    expect(lastKeyboard(calls)?.inline_keyboard.flat().map((b) => b.callback_data)).toContain("s:diagnostica");
+
+    await handleUpdate(tap(3, "s:diagnostica", 100), deps(store, tg));
+    expect(lastWith(calls, "editMessageText")?.payload.text).toContain("Diagnostica delle fonti");
+    const porte = lastKeyboard(calls)?.inline_keyboard.flat().map((b) => b.callback_data) ?? [];
+    expect(porte).toContain("s:filtri-fonti");
+    expect(porte).toContain("s:fonti");
+
+    // Da qui si spegne una fonte per sé: è la cosa che si può fare senza toccare
+    // il codice, ed è quella che il bottone promette.
+    await handleUpdate(tap(4, "s:filtri-fonti", 100), deps(store, tg));
+    await handleUpdate(tap(5, "cfg:src:dimmicosacerchi", 100), deps(store, tg));
+    expect((await store.getPrefs(CHAT))?.filters.mutedSources).toEqual(["dimmicosacerchi"]);
+  });
+
+  it("con tutte le fonti sane lo dice in una riga, senza elenchi", async () => {
+    const store = createMemoryStore();
+    await store.upsertPrefs(prefs());
+    store.seedSources([fonte({ id: "premieconcorsi", name: "Premi e Concorsi" })]);
+    await seed(store, [{ sourceId: "premieconcorsi", title: "Concorso Esselunga" }]);
+
+    const testo = await guarda(store);
+    expect(testo).toContain("Nessuna delle <b>1</b> fonti accese ha qualcosa che non va");
+    expect(testo).not.toContain("Falliscono");
+  });
+
+  it("con più fonti da guardare di quante ne stiano, elenca comunque tutti gli id", async () => {
+    const store = createMemoryStore();
+    await store.upsertPrefs(prefs());
+    // Ventidue fonti rotte: più di quelle che si raccontano per esteso in un
+    // messaggio. Quello che non ci sta per esteso deve comunque comparire, perché
+    // l'id è la parte su cui si agisce.
+    store.seedSources(
+      Array.from({ length: 22 }, (_, index) =>
+        fonte({
+          id: `rotta-${index + 1}`,
+          name: `Fonte rotta numero ${index + 1} con un nome lungo`,
+          failStreak: 3,
+          lastStatus: 403,
+          lastError: "HTTP 403",
+        }),
+      ),
+    );
+
+    const testo = await guarda(store);
+    expect(testo).toContain("<b>Falliscono</b> (22)");
+    expect(testo).toContain("… e altre 10:");
+    // Tutte e ventidue, raccontate o no: è il punto della riga finale.
+    for (let numero = 1; numero <= 22; numero++) {
+      expect(testo).toContain(`<code>rotta-${numero}</code>`);
+    }
+    // E la schermata resta dentro il limite di Telegram: è un messaggio solo, che
+    // si modifica sul posto, quindi non si può spezzare in due.
+    expect(testo.length).toBeLessThanOrEqual(MAX_MESSAGE_CHARS);
   });
 });

@@ -1,10 +1,22 @@
 /** Tipi condivisi da tutti i moduli di concorsi-radar. */
 
 export type SourceKind = "rss" | "news" | "sitemap" | "html";
-export type Category = "online" | "punto_vendita" | "scontrino" | "giftcard" | "altro";
+/**
+ * Dove si usa quello che la fonte pubblica. `coupon` è l'unica che dice anche
+ * COSA pubblica la fonte (buoni sconto e rimborsi invece di concorsi) ed è per
+ * questo che la classificazione la legge: vedi src/enrich/kind.ts.
+ */
+export type Category = "online" | "punto_vendita" | "scontrino" | "giftcard" | "coupon" | "altro";
 export type ItemStatus = "new" | "sent" | "saved" | "ignored" | "won" | "expired";
-/** Un concorso a premi oppure un articolo/contenitore che ne parla. */
-export type ItemKind = "contest" | "news";
+/**
+ * Un concorso a premi, un'offerta da spendere (buono sconto, rimborso, cashback)
+ * o un articolo/contenitore che parla di concorsi.
+ *
+ * Tre tipi e non due perché il coupon non sta bene né di qua né di là: non è un
+ * concorso (non c'è niente da vincere, c'è da pagare meno) e non è nemmeno un
+ * articolo che ne parla. Le tre sezioni della chat sono queste tre cose.
+ */
+export type ItemKind = "contest" | "news" | "coupon";
 
 /** Fonte dichiarativa, come scritta in src/config/sources.ts. */
 export interface SourceConfig {
@@ -33,6 +45,33 @@ export interface SourceRow extends SourceConfig {
   lastRunAt: string | null;
   lastOkAt: string | null;
   failStreak: number;
+  /**
+   * Come è andato l'ULTIMO tentativo, comunque sia finito: codice HTTP della
+   * risposta (null se non c'è stata risposta), motivo del fallimento, item
+   * grezzi letti. È la diagnostica delle fonti leggibile dalla chat e da
+   * /health: prima questi dati esistevano solo nei log di GitHub.
+   */
+  lastStatus: number | null;
+  lastError: string | null;
+  lastItems: number;
+}
+
+/**
+ * L'esito di UNA fonte in UN giro di raccolta: è la riga del report delle prime
+ * raccolte su GitHub ("chi ha risposto, con che codice, a che ora"). Vive in
+ * memoria per la durata del giro — quello che resta in archivio è lo stato
+ * dell'ultimo tentativo, in `SourceRow`.
+ */
+export interface SourceAttempt {
+  sourceId: string;
+  name: string;
+  /** Quando è stato fatto il tentativo (ISO 8601): è l'ora che compare nel report. */
+  at: string;
+  httpStatus: number | null;
+  items: number;
+  notModified: boolean;
+  robotsDenied: boolean;
+  error: string | null;
 }
 
 /**
@@ -126,6 +165,12 @@ export interface Insight {
 export interface ItemRow {
   id: number;
   sourceId: string;
+  /**
+   * La marca del concorso (Ferrero, Conad…), riconosciuta all'ingestione dalla
+   * fonte o dal testo: vedi src/config/brands.ts. null = non riconosciuta, e in
+   * chat è una riga in meno, non una sezione sbagliata.
+   */
+  brand: string | null;
   /** Concorso vero o contenitore: decide in quale sezione della chat finisce. */
   kind: ItemKind;
   url: string;
@@ -139,6 +184,13 @@ export interface ItemRow {
   deadline: string | null;
   prize: string | null;
   participation: string | null;
+  /**
+   * Il regolamento (bando) del concorso, quando non è nel testo dell'item: la
+   * pipeline lo cerca nella pagina del concorso e lo salva qui
+   * (src/enrich/regulation.ts). null = non trovato, e in chat è un bottone in
+   * meno, mai un link inventato.
+   */
+  rulesUrl: string | null;
   prizeValue: number;
   effort: number;
   requiresPurchase: boolean;
@@ -152,6 +204,11 @@ export interface ItemRow {
 /** Item pronto per l'inserimento (senza i campi generati dal database). */
 export interface NewItem {
   sourceId: string;
+  /**
+   * Opzionale di proposito: chi lo omette non dichiara una marca, e chi non si
+   * occupa del riconoscimento (test, strumenti) resta valido.
+   */
+  brand?: string | null;
   /**
    * Opzionale di proposito: chi lo omette ottiene un concorso, quindi i chiamanti
    * che non si occupano di classificazione (test, strumenti) restano validi.
@@ -168,6 +225,11 @@ export interface NewItem {
   deadline: string | null;
   prize: string | null;
   participation: string | null;
+  /**
+   * Opzionale di proposito, come brand e kind: chi lo omette non dichiara un
+   * regolamento e la riga nasce senza (la chat lo cerca nel testo dell'item).
+   */
+  rulesUrl?: string | null;
   prizeValue: number;
   effort: number;
   requiresPurchase: boolean;
@@ -181,6 +243,14 @@ export interface NewItem {
 /** Patch parziale applicata a un item esistente (deduplica, arricchimento, stato). */
 export interface ItemPatch {
   lastSeenAt?: string;
+  /** La marca si scrive quando si riconosce, e non si cancella mai con null. */
+  brand?: string | null;
+  /**
+   * Il regolamento si scrive quando si trova, e non si cancella mai con null:
+   * una copia dello stesso concorso arrivata senza non deve togliere il bando
+   * che la prima aveva già trovato.
+   */
+  rulesUrl?: string | null;
   /**
    * Titolo e simhash si aggiornano INSIEME, e solo per migliorare: lo stesso
    * concorso arriva da più fonti, e capita che una di queste lo nomini meglio
@@ -224,6 +294,12 @@ export interface ItemQuery {
    * guarda solo questa fetta invece di tutto l'archivio.
    */
   withoutDeadline?: boolean;
+  /**
+   * Solo item SENZA regolamento salvato: è la query del riempimento
+   * (scripts/backfill-rules.ts), che cerca il bando dei concorsi entrati in
+   * archivio prima che la colonna esistesse.
+   */
+  withoutRules?: boolean;
   /** Esclude gli item i cui id compaiono qui. */
   excludeIds?: number[];
   /** Tiene fuori gli item che vengono da queste fonti (filtri della chat). */
@@ -232,6 +308,11 @@ export interface ItemQuery {
   excludeTags?: string[];
   /** Solo item senza obbligo di acquisto (filtro "solo gratis" della chat). */
   withoutPurchase?: boolean;
+  /**
+   * Solo gli item di queste marche ("Preferiti per marca"). Elenco vuoto =
+   * nessun filtro, come tutti gli altri campi di questa query.
+   */
+  brands?: string[];
   limit?: number;
   /**
    * Salta le prime N righe. È quello che rende VERE le pagine della chat: senza,
@@ -265,8 +346,23 @@ export interface Prefs {
  * Sono tutti elenchi di ESCLUSIONI, non di inclusioni: una fonte nuova (o un
  * tag nuovo) è visibile a tutti finché qualcuno non lo spegne. Con l'elenco
  * inverso, una fonte aggiunta oggi resterebbe invisibile a chi non la conosce.
+ * L'unica eccezione sono le marche seguite: aggiungono (un punteggio più alto,
+ * e la sezione dei preferiti), e nascondono solo se accendi `brandsOnly`.
  */
 export interface ChatFilters {
+  /**
+   * Le marche che questa chat segue (id di src/config/brands.ts). È l'unico
+   * elenco di INCLUSIONE qui dentro, e ha una regola sua: da solo non nasconde
+   * niente — i concorsi delle marche seguite si vedono come tutti gli altri e
+   * valgono di più (vedi brandsOnly).
+   */
+  favoriteBrands: string[];
+  /**
+   * true = negli elenchi resta SOLO quello che è di una marca seguita. È il
+   * filtro vero, quello che nasconde: si accende a parte, perché "seguo
+   * Ferrero" non vuol dire "non voglio vedere altro".
+   */
+  brandsOnly: boolean;
   /** Id delle fonti che questa chat non vuole vedere. */
   mutedSources: string[];
   /** Categorie di fonte spente (le categorie stanno in src/config/sources.ts). */
@@ -289,7 +385,7 @@ export interface UiState {
   chatId: number;
   /** Id del messaggio da modificare; null la prima volta. */
   messageId: number | null;
-  /** Sezione mostrata: "menu" | "nuovi" | "oggi" | "settimana" | "scadenze" | "salvati" | "fonti" | "impostazioni" | "cerca" | "cerca:<query>". */
+  /** Sezione mostrata: "menu" | "nuovi" | "oggi" | "settimana" | "scadenze" | "salvati" | "fonti" | "diagnostica" | "preferiti" | "preferiti-lista" | "impostazioni" | "cerca" | "cerca:<query>". */
   section: string;
   /** Pagina dell'elenco (0-based). */
   page: number;

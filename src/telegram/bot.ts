@@ -11,12 +11,17 @@ import {
   withFilterChange,
   type FilterChange,
 } from "../filters.ts";
+import { brandChoices, isBrandId } from "../config/brands.ts";
+import { diagnosiFonti, riepilogoDiagnosi } from "../sources-health.ts";
+import { rescoreRow } from "../enrich/score.ts";
+import { mergedBrands, mergedWeights } from "../pipeline.ts";
 import type { TelegramUpdate } from "./api.ts";
 import type { NotifyDeps } from "./digest.ts";
 import { regolamentoUrl } from "./digest.ts";
 import { localDateString, sourceLabel } from "./format.ts";
 import { leadHours, summarizeLead } from "../enrich/lead.ts";
-import { PAGE_SIZE } from "./keyboard.ts";
+import { BRANDS_PAGE_SIZE, PAGE_SIZE } from "./keyboard.ts";
+import { SCORE_MAX, SCORE_MIN, hourLabel, parseQuietRange, toggleDigestHour } from "./prefs-config.ts";
 import {
   applyIntent,
   parseCallback,
@@ -52,6 +57,8 @@ export interface BotDeps extends NotifyDeps {
 }
 
 const WEEK_MS = 7 * 86_400_000;
+/** Righe rilette per pagina nel ricalcolo dei punteggi di una marca. */
+const RESCORE_PAGE = 200;
 /**
  * Finestra della misura del vantaggio: 30 giorni. Abbastanza da avere casi, corta
  * abbastanza da non raccontare una velocità che nel frattempo è cambiata (le fonti
@@ -111,6 +118,9 @@ function intentForCommand(command: string, args: string): Intent | null {
       return { kind: "section", section: "salvati" };
     case "/storico":
       return { kind: "section", section: "storico" };
+    case "/coupon":
+    case "/rimborsi":
+      return { kind: "section", section: "coupon" };
     case "/vinti":
       return { kind: "section", section: "vinti" };
     case "/scaduti":
@@ -128,6 +138,9 @@ function intentForCommand(command: string, args: string): Intent | null {
     case "/vantaggio":
     case "/anticipo":
       return { kind: "section", section: "vantaggio" };
+    case "/diagnostica":
+    case "/utili":
+      return { kind: "section", section: "diagnostica" };
     case "/impostazioni":
       return { kind: "section", section: "impostazioni" };
     case "/stop":
@@ -167,30 +180,49 @@ function filterChangeFor(key: ConfigKey, value: string): FilterChange | null {
     const soglia = Number.parseInt(value, 10);
     return Number.isFinite(soglia) ? { kind: "star", value: soglia } : null;
   }
+  if (key === "brand") {
+    return isBrandId(value) ? { kind: "brand", value } : null;
+  }
+  if (key === "brands") {
+    if (value === "reset") return { kind: "brandsReset" };
+    if (value === "on" || value === "off") return { kind: "brandsOnly", value: value === "on" };
+    return null;
+  }
   if (key === "reset") return { kind: "reset" };
   return null;
 }
 
 /** Applica una preferenza scelta dalle impostazioni. Valori fuori elenco: ignorati. */
 function withConfig(prefs: Prefs, key: ConfigKey, value: string): Prefs {
-  if (key === "cat" || key === "tag" || key === "src" || key === "free" || key === "star" || key === "reset") {
+  if (
+    key === "cat" || key === "tag" || key === "src" || key === "free" || key === "star" ||
+    key === "brand" || key === "brands" || key === "reset"
+  ) {
     const change = filterChangeFor(key, value);
     return change === null ? prefs : { ...prefs, filters: withFilterChange(prefs.filters, change) };
   }
   switch (key) {
     case "score": {
       const score = Number.parseInt(value, 10);
-      return Number.isFinite(score) && score >= 0 && score <= 100 ? { ...prefs, minScoreInstant: score } : prefs;
+      return Number.isFinite(score) && score >= SCORE_MIN && score <= SCORE_MAX
+        ? { ...prefs, minScoreInstant: score }
+        : prefs;
+    }
+    // Un tocco sulla griglia del digest accende o spegne QUELLA ora: il valore
+    // dice quale, non l'elenco che ne risulta (in un callback_data da 64 byte
+    // ventiquattro ore non ci starebbero).
+    case "hour": {
+      if (!/^\d{1,2}$/.test(value)) return prefs;
+      const hour = Number(value);
+      return hour >= 0 && hour <= 23 ? { ...prefs, digestHours: toggleDigestHour(prefs.digestHours, hour) } : prefs;
     }
     case "quiet": {
       if (value === "off") return { ...prefs, quietHours: "" };
-      const fascia = /^(\d{1,2})-(\d{1,2})$/.exec(value);
-      if (!fascia) return prefs;
-      const start = Number(fascia[1]);
-      const end = Number(fascia[2]);
-      // Ore reali, non solo cifre: "99-99" non è una fascia di silenzio.
-      if (start > 23 || end > 23) return prefs;
-      return { ...prefs, quietHours: value };
+      const fascia = parseQuietRange(value);
+      // Ore reali, non solo cifre: "99-99" non è una fascia di silenzio. La
+      // fascia si riscrive dalle due ore invece di salvare il testo arrivato,
+      // così "23 - 07" e "23-7" restano la stessa preferenza.
+      return fascia === null ? prefs : { ...prefs, quietHours: `${fascia.start}-${fascia.end}` };
     }
     case "digest": {
       if (value === "off") return { ...prefs, digestHours: [] };
@@ -230,6 +262,13 @@ function toastFor(intent: Intent, prefs: Prefs): string | null {
       if (intent.key === "digest") {
         return prefs.digestHours.length > 0 ? `📬 Digest alle ${prefs.digestHours.join(" e ")}` : "📬 Digest spenti";
       }
+      if (intent.key === "hour") {
+        const hour = Number.parseInt(intent.value, 10);
+        // Spegnendo l'ultima ora il digest si ferma del tutto: va detto, perché
+        // dalla griglia non si vede che quella era l'ultima accesa.
+        if (prefs.digestHours.length === 0) return "📬 Digest spenti";
+        return prefs.digestHours.includes(hour) ? `📬 Accesa ${hourLabel(hour)}` : `📬 Spenta ${hourLabel(hour)}`;
+      }
       return prefs.active ? "▶️ Notifiche attive" : "⏸ Notifiche sospese";
     default:
       return null;
@@ -251,9 +290,25 @@ const ATTIVI: ItemQuery["statuses"] = ["new", "sent"];
  */
 const CONCORSI: ItemKind[] = ["contest"];
 const ARTICOLI: ItemKind[] = ["news"];
+/**
+ * Buoni sconto e rimborsi: la terza cosa che l'archivio contiene. Non stanno
+ * nelle sezioni dei concorsi — non c'è niente da vincere, e chi guarda i concorsi
+ * non sta cercando un coupon — né negli avvisi (vedi src/telegram/digest.ts).
+ */
+const COUPON: ItemKind[] = ["coupon"];
 
 function baseSectionQuery(section: string, now: Date, lastCheckAt: string | null): ItemQuery {
   if (section === "news") return { kinds: ARTICOLI, statuses: ATTIVI };
+  // 💶 Coupon: l'ordine è quello di arrivo (il default dello store), non il
+  // punteggio: fra buoni sconto "quale vale la pena" non vuol dire niente, mentre
+  // "quale è arrivato adesso" sì — un coupon vecchio è un coupon scaduto.
+  if (section === "coupon") return { kinds: COUPON, statuses: ATTIVI };
+  // I concorsi delle marche seguite: stessa forma delle altre sezioni di
+  // suggerimento (attivi, solo concorsi, dal punteggio più alto), il filtro sulle
+  // marche lo mette sectionQuery.
+  if (section === "preferiti-lista") {
+    return { statuses: ATTIVI, kinds: CONCORSI, orderBy: "score" };
+  }
   // Le tre sezioni dei concorsi si leggono dal punteggio più alto: la prima cosa
   // che si vede è quella che vale di più, e la riga delle stelle in fondo serve
   // proprio a tenere la testa della classifica. L'ordine per data di arrivo
@@ -312,10 +367,18 @@ function baseSectionQuery(section: string, now: Date, lastCheckAt: string | null
  * esplicite: un concorso salvato non deve sparire perché hai spento la sua
  * fonte, e una ricerca è già una domanda precisa.
  */
-const SEZIONI_FILTRATE = new Set(["nuovi", "oggi", "settimana", "scadenze", "news", "scaduti"]);
+const SEZIONI_FILTRATE = new Set([
+  "nuovi", "oggi", "settimana", "scadenze", "news", "scaduti", "preferiti-lista", "coupon",
+]);
 
 function sectionQuery(section: string, now: Date, lastCheckAt: string | null, filters: ChatFilters): ItemQuery {
   const base = baseSectionQuery(section, now, lastCheckAt);
+  // La sezione dei preferiti è filtrata sulle marche seguite per definizione,
+  // acceso o no il filtro "solo le marche seguite": quella è la sua ragione
+  // d'essere, non una preferenza da accendere ogni volta.
+  if (section === "preferiti-lista" && filters.favoriteBrands.length > 0) {
+    return filtersFor(filters, { ...base, brands: [...filters.favoriteBrands] });
+  }
   return SEZIONI_FILTRATE.has(section) ? filtersFor(filters, base) : base;
 }
 
@@ -333,6 +396,8 @@ function isListSection(section: string): boolean {
     section === "salvati" ||
     section === "vinti" ||
     section === "ignorati" ||
+    section === "preferiti-lista" ||
+    section === "coupon" ||
     section.startsWith("cerca:")
   );
 }
@@ -387,22 +452,32 @@ async function loadScreenData(
   // I conteggi sono quelli che la chat VEDE (filtri compresi): un numero nel
   // menù che non corrisponde all'elenco è peggio di nessun numero. I totali
   // senza filtri si contano solo per poter dire "vedi 12 di 40".
-  const [archiveTotal, contest, news, contestTotal, newsTotal, nuovi, oggi, settimana, scadenze, quantiScaduti] =
-    await Promise.all([
+  const [
+    archiveTotal, contest, news, coupon, contestTotal, newsTotal, couponTotal,
+    nuovi, oggi, settimana, scadenze, preferiti, quantiScaduti,
+  ] = await Promise.all([
       store.countItems({}),
       store.countItems(filtersFor(filters, { kinds: CONCORSI })),
       store.countItems(filtersFor(filters, { kinds: ARTICOLI })),
+      store.countItems(filtersFor(filters, { kinds: COUPON })),
       store.countItems({ kinds: CONCORSI }),
       store.countItems({ kinds: ARTICOLI }),
+      store.countItems({ kinds: COUPON }),
       store.countItems(sectionQuery("nuovi", now, sinceNuovi, filters)),
       store.countItems(sectionQuery("oggi", now, null, filters)),
       store.countItems(sectionQuery("settimana", now, null, filters)),
       store.countItems(scadenza),
+      // I concorsi delle marche seguite. Senza marche da seguire la sezione è
+      // vuota per costruzione, e una query non filtrata conterebbe tutto
+      // l'archivio: il numero sul bottone direbbe una cosa falsa.
+      filters.favoriteBrands.length > 0
+        ? store.countItems(sectionQuery("preferiti-lista", now, null, filters))
+        : Promise.resolve(0),
       // Il conteggio dei chiusi serve solo allo storico: fuori da lì resta a zero.
       state.section === "storico" ? store.countItems(scaduti) : Promise.resolve(0),
     ]);
   const counts: ScreenCounts = {
-    nuovi, oggi, settimana, scadenze, news, contest, contestTotal, newsTotal,
+    nuovi, oggi, settimana, scadenze, news, contest, coupon, contestTotal, newsTotal, couponTotal, preferiti,
     filtri: activeFilterCount(filters),
     salvati: salvati.length, vinti: vinti.length, ignorati: ignorati.length, scaduti: quantiScaduti,
   };
@@ -410,7 +485,11 @@ async function loadScreenData(
   const wantsList = state.openItemId === null && isListSection(state.section);
   let items: ItemRow[] = [];
   let total = 0;
-  if (wantsList) {
+  // Nessuna marca seguita = nessun concorso da leggere: è vuota per costruzione,
+  // non per filtri, e interrogare l'archivio per saperlo sarebbe una query per
+  // niente (e senza il filtro sulle marche leggerebbe tutto).
+  const senzaMarche = state.section === "preferiti-lista" && filters.favoriteBrands.length === 0;
+  if (wantsList && !senzaMarche) {
     // Le sezioni basate sulle consegne (watchlist, vinti, ignorati) sono liste
     // corte e già in memoria; le altre si pagano con LIMIT/OFFSET, quindi anche
     // un archivio grande si sfoglia tutto invece di fermarsi al primo carico.
@@ -443,15 +522,32 @@ async function loadScreenData(
     state.openItemId !== null ? leadHours(await store.listItemSightings(state.openItemId)) : null;
   // 📡 Scegli le fonti: la lista delle fonti spegnibili (dalla configurazione,
   // che è dove vivono le categorie) si pagina come gli elenchi.
+  // Le fonti si leggono in tre schermate (📡 Fonti, vantaggio, diagnostica): una
+  // lettura sola, e la diagnostica aggiunge il contributo di ognuna — due query
+  // (items e viste) che fuori da lì sarebbero sprecate.
+  const sezioneFonti =
+    state.section === "fonti" || state.section === "vantaggio" || state.section === "diagnostica";
+  const fonti = sezioneFonti ? await store.getSources() : ([] as SourceRow[]);
+  const diagnosi = state.section === "diagnostica" ? diagnosiFonti(fonti, await store.sourceStats(), now) : [];
+
   const tutteLeFonti = state.section === "filtri-fonti" ? filterableSources() : [];
   const pagineFonti = Math.max(1, Math.ceil(tutteLeFonti.length / PAGE_SIZE));
   const paginaFonti = Math.min(Math.max(state.page, 0), pagineFonti - 1);
 
+  // Le marche da seguire, ordinate da chi ha più concorsi in archivio: il
+  // registro è lungo e mostrarlo tutto in tre pagine serve solo a chi lo scorre.
+  const marche =
+    state.section === "preferiti" ? brandChoices(await store.brandCounts(), filters.favoriteBrands) : [];
+
   // La paginazione vale anche per le sezioni che non sono elenchi di item: il
   // totale su cui si contano le pagine è il loro, altrimenti lo stato della
-  // pagina verrebbe riportato a 0 a ogni tocco.
-  const totalePagine = state.section === "filtri-fonti" ? tutteLeFonti.length : total;
-  const pagine = Math.max(1, Math.ceil(totalePagine / PAGE_SIZE));
+  // pagina verrebbe riportato a 0 a ogni tocco. Il passo cambia con la
+  // schermata (le marche stanno due per riga), e il conto deve usare lo stesso
+  // passo della tastiera, altrimenti "Succ" salta mezzo schermo.
+  const passo = state.section === "preferiti" ? BRANDS_PAGE_SIZE : PAGE_SIZE;
+  const totalePagine =
+    state.section === "filtri-fonti" ? tutteLeFonti.length : state.section === "preferiti" ? marche.length : total;
+  const pagine = Math.max(1, Math.ceil(totalePagine / passo));
   const page = Math.min(Math.max(state.page, 0), pagine - 1);
 
   return {
@@ -462,18 +558,49 @@ async function loadScreenData(
     openItem,
     decision,
     regolamentoUrl: openItem ? regolamentoUrl(openItem) : null,
-    sources:
-      state.section === "fonti" || state.section === "vantaggio"
-        ? await store.getSources()
-        : ([] as SourceRow[]),
+    sources: fonti,
     runs: state.section === "fonti" ? await store.recentRuns(4) : [],
     lead,
     leadDelConcorso,
+    diagnosi,
+    diagnosiRiepilogo: diagnosi.length > 0 ? riepilogoDiagnosi(diagnosi) : null,
     prefs,
     archiveTotal,
     filterSources: tutteLeFonti.slice(paginaFonti * PAGE_SIZE, paginaFonti * PAGE_SIZE + PAGE_SIZE),
     filterSourcesTotal: tutteLeFonti.length,
+    brandChoices: marche.slice(page * BRANDS_PAGE_SIZE, page * BRANDS_PAGE_SIZE + BRANDS_PAGE_SIZE),
+    brandChoicesTotal: marche.length,
   };
+}
+
+/**
+ * Ricalcola i punteggi dei concorsi di una marca, con le preferenze di adesso.
+ *
+ * Il bonus della marca seguita si applica all'ingestione, quindi da solo
+ * varrebbe solo per i concorsi che arrivano dopo: accendere Ferrero oggi e
+ * trovarsi i concorsi Ferrero di ieri fermi a 62 punti sarebbe una promessa non
+ * mantenuta. Qui si rifà lo stesso conto su quello che c'è già in archivio (è la
+ * stessa funzione dell'ingestione, src/enrich/score.ts), una pagina per volta.
+ *
+ * Si chiama solo sui cambi delle marche: è lavoro che si fa per un tocco, non a
+ * ogni schermata.
+ */
+async function rescoreBrand(deps: BotDeps, brand: string, now: Date): Promise<number> {
+  const weights = await mergedWeights(deps.store);
+  const favorites = await mergedBrands(deps.store);
+  let cambiati = 0;
+  for (let offset = 0; ; offset += RESCORE_PAGE) {
+    const righe = await deps.store.queryItems({ brands: [brand], limit: RESCORE_PAGE, offset });
+    if (righe.length === 0) break;
+    for (const riga of righe) {
+      const score = rescoreRow(riga, weights, favorites, now);
+      if (score === riga.score) continue;
+      await deps.store.updateItem(riga.id, { score });
+      cambiati++;
+    }
+    if (righe.length < RESCORE_PAGE) break;
+  }
+  return cambiati;
 }
 
 /**
@@ -592,6 +719,10 @@ export async function handleUpdate(update: TelegramUpdate, deps: BotDeps): Promi
   if (intent.kind === "config") {
     prefs = withConfig(prefs, intent.key, intent.value);
     await store.upsertPrefs(prefs);
+    // Accendere o spegnere una marca cambia anche i punteggi già in archivio:
+    // vedi rescoreBrand. Solo per le marche, che sono l'unico cambio di filtro
+    // che tocca il punteggio di quello che c'è già.
+    if (intent.key === "brand") await rescoreBrand(deps, intent.value, now);
   }
 
   // /start è anche l'iscrizione: chi lo scrive vuole le notifiche attive.

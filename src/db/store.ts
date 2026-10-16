@@ -13,6 +13,35 @@ import type {
 } from "../types.ts";
 
 /**
+ * Quanto ha reso UNA fonte all'archivio. È il dato della diagnostica delle fonti
+ * (src/sources-health.ts): non "quanti item ha letto", ma che cosa è rimasto in
+ * archivio grazie a lei, e quanto ha visto senza che servisse.
+ *
+ * Due misure diverse di proposito:
+ *  - **offerte** = gli item arrivati per primi da lei, cioè quello di cui si può
+ *    fare qualcosa: un concorso, o un coupon/rimborso per le fonti `coupon`.
+ *    Gli articoli non contano — un pezzo che parla di concorsi non è un
+ *    contributo, e contarlo direbbe che una fonte di cronaca "porta concorsi".
+ *  - **viste** = ogni concorso visto, anche se era già entrato da un'altra, e
+ *    quante di quelle il cancello di freschezza le ha buttate. Le viste restano
+ *    dei CONCORSI: /vantaggio misura l'anticipo su quello su cui si partecipa.
+ */
+export interface SourceStat {
+  /** Concorsi e coupon arrivati per primi da questa fonte (items.source_id). */
+  offers: number;
+  /** Quando è arrivata l'ultima offerta (ISO 8601); null se nessuna. */
+  lastOfferAt: string | null;
+  /**
+   * Viste registrate: ogni concorso che questa fonte ha visto, anche se in
+   * archivio era già entrato da un'altra. Una fonte con molte viste e poche
+   * offerte ripete quello che hanno già gli altri.
+   */
+  sightings: number;
+  /** Di quelle viste, quante non sono passate il cancello di freschezza. */
+  discarded: number;
+}
+
+/**
  * Unica astrazione di persistenza usata da pipeline e layer Telegram.
  * Due implementazioni: D1 (produzione, src/db/d1.ts) e in-memory (test/dry-run,
  * src/db/memory.ts). Se aggiungi un metodo qui, aggiorna entrambe.
@@ -20,6 +49,11 @@ import type {
 export interface Store {
   // --- fonti ---
   getSources(): Promise<SourceRow[]>;
+  /**
+   * Registra l'esito di un tentativo su una fonte. `ok` muove i contatori della
+   * storia (fail_streak, last_ok_at); `httpStatus`, `error` e `items` descrivono
+   * l'ULTIMO tentativo comunque sia finito, ed è quello che si legge dalla chat.
+   */
   recordSourceRun(
     id: string,
     result: {
@@ -28,6 +62,8 @@ export interface Store {
       etag: string | null;
       lastModified: string | null;
       error: string | null;
+      /** Item grezzi letti in questo tentativo (0 se non è cambiata o è saltata). */
+      items: number;
       now: string;
     },
   ): Promise<void>;
@@ -86,6 +122,18 @@ export interface Store {
   listDeliveredItems(chatId: number, kind: string, limit?: number): Promise<ItemRow[]>;
   /** Numero di item che soddisfano la query, senza caricare le righe. */
   countItems(query: ItemQuery): Promise<number>;
+  /**
+   * Quanti concorsi ci sono per ogni marca (id del registro → conteggio). È
+   * quello che ordina la schermata ⭐ Preferiti per marca: le marche presenti in
+   * archivio stanno in cima, quelle che non hanno niente in fondo.
+   */
+  brandCounts(): Promise<Record<string, number>>;
+  /**
+   * Il contributo di ogni fonte, per id. Le fonti che non hanno mai portato
+   * niente non compaiono: chi legge usa SourceStat vuoto (vedi fonteStat in
+   * src/sources-health.ts).
+   */
+  sourceStats(): Promise<Record<string, SourceStat>>;
 
   // --- diagnostica ---
   recordRun(run: RunRow): Promise<void>;

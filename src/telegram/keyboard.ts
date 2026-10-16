@@ -1,8 +1,10 @@
 import type { ItemRow, Prefs } from "../types.ts";
+import type { BrandChoice } from "../config/brands.ts";
 import { truncate } from "../lib/text.ts";
 import { CATEGORY_LABELS, STAR_CHOICES, TAG_FILTERS, categoriesToOffer, starLabel, type FilterSource } from "../filters.ts";
 import type { InlineKeyboardButton, InlineKeyboardMarkup } from "./api.ts";
 import { daysLeft } from "./format.ts";
+import { DIGEST_HOURS, hourLabel, hourShort, quietRange, shiftQuietRange, stepScore } from "./prefs-config.ts";
 
 /**
  * Tastiere del bot. Il bot si guida con i bottoni, non con i comandi: il menù
@@ -17,6 +19,12 @@ import { daysLeft } from "./format.ts";
  */
 
 export const PAGE_SIZE = 6;
+/**
+ * Marche per pagina: due per riga, perché queste etichette sono corte ("Ferrero")
+ * e con un bottone per riga la schermata diventerebbe lunga come l'elenco fonti.
+ * Il registro è di una trentina di voci, quindi tre pagine.
+ */
+export const BRANDS_PAGE_SIZE = 12;
 
 function button(text: string, callback_data: string): InlineKeyboardButton {
   return { text, callback_data };
@@ -34,11 +42,16 @@ function done(text: string): InlineKeyboardButton {
 export function itemButtonLabel(item: ItemRow, now: Date): string {
   const left = daysLeft(item.deadline, now);
   const urgenza = left !== null && left >= 0 && left <= 7 ? ` ⏳${left}gg` : "";
-  // 📰 invece di ⭐: in un elenco (e nella ricerca, dove i due tipi convivono) si
-  // vede subito che quello è un articolo che parla del concorso, non la pagina
+  // 📰 per un articolo e 💶 per un coupon, al posto di ⭐: in un elenco (e nella
+  // ricerca, dove i tre tipi convivono) si vede subito che quello non è la pagina
   // su cui si partecipa.
-  const segno = item.kind === "news" ? "📰" : "⭐";
-  return truncate(`${segno}${item.score}${urgenza} · ${item.title}`, 52);
+  //
+  // Il coupon non porta il punteggio: il punteggio risponde a "quanto vale la
+  // pena guardare questo concorso adesso" (premio, sforzo, scadenza) e su un
+  // buono sconto non vuol dire niente — mostrarlo sarebbe un numero inventato.
+  const segno = item.kind === "news" ? "📰" : item.kind === "coupon" ? "💶" : "⭐";
+  const testa = item.kind === "coupon" ? segno : `${segno}${item.score}`;
+  return truncate(`${testa}${urgenza} · ${item.title}`, 52);
 }
 
 /** Il menù principale: tutte le sezioni, con i conteggi addosso. */
@@ -49,6 +62,10 @@ export function menuKeyboard(counts: {
   scadenze: number;
   salvati: number;
   news: number;
+  /** Coupon e rimborsi in archivio: è il numero sul bottone 💶. */
+  coupon: number;
+  /** Concorsi delle marche seguite: è il numero che sta sul bottone dei preferiti. */
+  preferiti: number;
   /** Quanti filtri sono attivi: 0 = si vede tutto. */
   filtri: number;
 }): InlineKeyboardMarkup {
@@ -58,8 +75,11 @@ export function menuKeyboard(counts: {
       [button(`📅 7 giorni (${counts.settimana})`, "s:settimana"), button(`⏳ Scadenze (${counts.scadenze})`, "s:scadenze")],
       [button(`⭐ Watchlist (${counts.salvati})`, "s:salvati"), button(`📰 News (${counts.news})`, "s:news")],
       [button("🔍 Cerca", "s:cerca"), button("🗂 Storico", "s:storico")],
-      [button(filtriButtonLabel(counts.filtri), "s:filtri"), button("📡 Fonti", "s:fonti")],
-      [button("⚙️ Impostazioni", "s:impostazioni")],
+      // Le offerte su una riga tutta loro: non sono concorsi e non stanno in
+      // mezzo ai concorsi, ma devono restare a un tocco dal menù.
+      [button(`💶 Coupon e rimborsi (${counts.coupon})`, "s:coupon")],
+      [button(`🏷 Preferiti per marca (${counts.preferiti})`, "s:preferiti"), button(filtriButtonLabel(counts.filtri), "s:filtri")],
+      [button("📡 Fonti", "s:fonti"), button("⚙️ Impostazioni", "s:impostazioni")],
       [button("🔄 Aggiorna", "refresh")],
     ],
   };
@@ -110,8 +130,52 @@ export function filtriKeyboard(prefs: Prefs, info: { sources: number; spenti: nu
       : button("🎁 Solo senza acquisto: no", "cfg:free:on"),
   ]);
   righe.push(starKeyboard(filtro.minScore));
+  righe.push([button(`🏷 Preferiti per marca (${filtro.favoriteBrands.length})`, "s:preferiti")]);
   righe.push([button(`📡 Scegli le fonti (${info.sources - info.spenti}/${info.sources})`, "s:filtri-fonti")]);
   return { inline_keyboard: [...righe, ...navRows()] };
+}
+
+/**
+ * 🏷 Preferiti per marca: l'elenco delle marche da seguire. Ogni bottone è un
+ * interruttore (✅ la segui · ⬜️ no) con il numero di concorsi che ha in
+ * archivio, così si vede subito quali marche contano davvero.
+ *
+ * I bottoni che non fanno nulla (il filtro senza marche da seguire, la lista
+ * vuota) restano scritti ma inerti: una riga che sparisce sposta tutte le altre,
+ * e in una schermata da toccare con il pollice è peggio di un bottone spento.
+ */
+export function marcheKeyboard(
+  scelte: BrandChoice[],
+  info: { seguite: number; brandsOnly: boolean; page: { index: number; total: number } },
+): InlineKeyboardMarkup {
+  const righe: InlineKeyboardButton[][] = [];
+  const bottoni = scelte.map((scelta) =>
+    button(`${scelta.followed ? "✅" : "⬜️"} ${scelta.label} (${scelta.count})`, `cfg:brand:${scelta.id}`),
+  );
+  for (let index = 0; index < bottoni.length; index += 2) righe.push(bottoni.slice(index, index + 2));
+
+  if (info.page.total > 1) {
+    righe.push([
+      info.page.index > 0 ? button("⬅️ Prec", `page:${info.page.index - 1}`) : done("⬅️"),
+      done(`${info.page.index + 1}/${info.page.total}`),
+      info.page.index < info.page.total - 1 ? button("Succ ➡️", `page:${info.page.index + 1}`) : done("➡️"),
+    ]);
+  }
+
+  // Il filtro vero: "solo le marche che seguo". Senza nessuna marca seguìta non
+  // filtrerebbe niente, quindi il bottone è inerte finché l'elenco è vuoto.
+  if (info.seguite === 0) {
+    righe.push([done("🌟 Solo le marche seguite: —")]);
+  } else {
+    righe.push([
+      info.brandsOnly
+        ? button("🌟 Solo le marche seguite: sì", "cfg:brands:off")
+        : button("🌟 Solo le marche seguite: no", "cfg:brands:on"),
+    ]);
+    righe.push([button("📋 I loro concorsi", "s:preferiti-lista"), button("🧹 Svuota", "cfg:brands:reset")]);
+  }
+  righe.push([button("🎛 Cosa vedi", "s:filtri"), button("🏠 Menù", "home")]);
+  return { inline_keyboard: righe };
 }
 
 /**
@@ -265,29 +329,118 @@ export const SCORE_CHOICES = [60, 70, 80, 90];
 export const QUIET_CHOICES = ["23-7", "22-8", "off"];
 /** Orari dei digest pronti all'uso: "off" = digest spenti. */
 export const DIGEST_CHOICES = ["8,19", "7,13,20", "off"];
+/** Ore per riga nella griglia del digest: 24 bottoni in quattro righe. */
+const ORE_PER_RIGA = 6;
 
-/** Impostazioni: ogni riga cambia una preferenza, quella attiva è marcata con •. */
+function labelQuiet(value: string): string {
+  return value === "off" ? "Off" : value.replace("-", "–");
+}
+
+function labelDigest(value: string): string {
+  return value === "off" ? "Off" : value.replace(/,/g, " + ");
+}
+
+/**
+ * Impostazioni: ogni riga cambia una preferenza, quella attiva è marcata con •.
+ *
+ * Le tre cose che si regolano hanno due modi per farlo, e la differenza è voluta:
+ * le voci in fondo a ogni gruppo sono i valori soliti (un tocco e via), i ➖ ➕
+ * servono invece a spostarsi di poco — una soglia a 85, un silenzio che comincia
+ * alle 0 invece che alle 23, un digest alle 9 invece che alle 8. Prima si poteva
+ * solo scegliere fra due o tre combinazioni decise da noi.
+ *
+ * La fascia di silenzio ha DUE cursori: allungarla (23 → 22, che è il caso
+ * normale) non è la stessa cosa che spostarla, e con un cursore solo se ne poteva
+ * fare una delle due. Gli orari del digest sono 24 interruttori, perché "il
+ * digest alle 9" non è un gruppo da scegliere ma un'ora da accendere.
+ */
 export function settingsKeyboard(prefs: Prefs): InlineKeyboardMarkup {
-  const score = SCORE_CHOICES.map((value) =>
-    button(prefs.minScoreInstant === value ? `• ${value}` : String(value), `cfg:score:${value}`),
-  );
-  const quiet = QUIET_CHOICES.map((value) =>
-    button(prefs.quietHours === value || (value === "off" && prefs.quietHours === "")
-      ? `• ${value === "off" ? "Off" : value.replace("-", "–")}`
-      : value === "off" ? "Off" : value.replace("-", "–"), `cfg:quiet:${value}`),
-  );
-  const digestValue = prefs.digestHours.length === 0 ? "off" : prefs.digestHours.join(",");
-  const digest = DIGEST_CHOICES.map((value) =>
-    button(digestValue === value ? `• ${value === "off" ? "Off" : value.replace(/,/g, " + ")}` : value === "off" ? "Off" : value.replace(/,/g, " + "), `cfg:digest:${value}`),
+  const righe: InlineKeyboardButton[][] = [];
+
+  // 🔔 Soglia degli avvisi immediati. Ai bordi (0 e 100) il cursore diventa
+  // inerte invece di sparire: la riga resta leggibile e non si sposta.
+  const sotto = stepScore(prefs.minScoreInstant, -1);
+  const sopra = stepScore(prefs.minScoreInstant, 1);
+  righe.push([
+    sotto < prefs.minScoreInstant ? button("➖ 5", `cfg:score:${sotto}`) : done("➖"),
+    done(`🔔 ${prefs.minScoreInstant}/100`),
+    sopra > prefs.minScoreInstant ? button("➕ 5", `cfg:score:${sopra}`) : done("➕"),
+  ]);
+  righe.push(
+    SCORE_CHOICES.map((value) =>
+      button(prefs.minScoreInstant === value ? `• ${value}` : String(value), `cfg:score:${value}`),
+    ),
   );
 
+  // 🌙 Fascia di silenzio. Con il silenzio spento i cursori partono dalla fascia
+  // solita e lo accendono: chi tocca ➖ ➕ vuole una fascia, e "Off" resta a un
+  // tocco di distanza per disfarlo.
+  const fascia = quietRange(prefs);
+  righe.push([
+    button("➖ 1h", `cfg:quiet:${shiftQuietRange(fascia, "start", -1)}`),
+    done(`🌙 dalle ${hourLabel(fascia.start)}`),
+    button("➕ 1h", `cfg:quiet:${shiftQuietRange(fascia, "start", 1)}`),
+  ]);
+  righe.push([
+    button("➖ 1h", `cfg:quiet:${shiftQuietRange(fascia, "end", -1)}`),
+    done(`🌙 alle ${hourLabel(fascia.end)}`),
+    button("➕ 1h", `cfg:quiet:${shiftQuietRange(fascia, "end", 1)}`),
+  ]);
+  righe.push(
+    QUIET_CHOICES.map((value) =>
+      button(
+        prefs.quietHours === value || (value === "off" && prefs.quietHours === "")
+          ? `• ${labelQuiet(value)}`
+          : labelQuiet(value),
+        `cfg:quiet:${value}`,
+      ),
+    ),
+  );
+
+  // 📬 Orari del digest: un interruttore per ora, da mezzanotte a mezzanotte.
+  const ore = DIGEST_HOURS.map((hour) =>
+    button(prefs.digestHours.includes(hour) ? `• ${hourShort(hour)}` : hourShort(hour), `cfg:hour:${hour}`),
+  );
+  for (let index = 0; index < ore.length; index += ORE_PER_RIGA) {
+    righe.push(ore.slice(index, index + ORE_PER_RIGA));
+  }
+  const digestValue = prefs.digestHours.length === 0 ? "off" : prefs.digestHours.join(",");
+  righe.push(
+    DIGEST_CHOICES.map((value) =>
+      button(digestValue === value ? `• ${labelDigest(value)}` : labelDigest(value), `cfg:digest:${value}`),
+    ),
+  );
+
+  righe.push([
+    prefs.active ? button("⏸ Sospendi notifiche", "cfg:notify:off") : button("▶️ Riattiva notifiche", "cfg:notify:on"),
+  ]);
+  righe.push([button("🎛 Cosa vedi", "s:filtri")]);
+  righe.push([button("🔄 Aggiorna", "refresh"), button("🏠 Menù", "home")]);
+  return { inline_keyboard: righe };
+}
+
+/**
+ * 📡 Fonti: si legge e si torna, con una porta sola in più — la diagnostica, cioè
+ * la domanda successiva ("e questa fonte serve a qualcosa?").
+ */
+export function fontiKeyboard(): InlineKeyboardMarkup {
   return {
     inline_keyboard: [
-      score,
-      quiet,
-      digest,
-      [prefs.active ? button("⏸ Sospendi notifiche", "cfg:notify:off") : button("▶️ Riattiva notifiche", "cfg:notify:on")],
-      [button("🎛 Cosa vedi", "s:filtri")],
+      [button("🌡 Diagnostica", "s:diagnostica")],
+      ...navRows(),
+    ],
+  };
+}
+
+/**
+ * 🌡 Diagnostica delle fonti: da qui si passa alle fonti (per vedere l'ultimo
+ * tentativo) o direttamente a spegnerne una SOLO PER TE (🎛 Scegli le fonti),
+ * che è la cosa che si può fare senza toccare il codice.
+ */
+export function diagnosticaKeyboard(): InlineKeyboardMarkup {
+  return {
+    inline_keyboard: [
+      [button("📡 Fonti", "s:fonti"), button("🎛 Scegli le fonti", "s:filtri-fonti")],
       [button("🔄 Aggiorna", "refresh"), button("🏠 Menù", "home")],
     ],
   };
@@ -316,9 +469,13 @@ export function backKeyboard(): InlineKeyboardMarkup {
  * Elenco vuoto. Se la chat ha dei filtri attivi la strada per tornare indietro
  * deve stare lì: "non c'è niente" e "hai spento tu le fonti" sono due cose
  * diverse, e senza questo bottone la seconda sembra la prima.
+ *
+ * `marche` fa lo stesso per la sezione dei preferiti: quando è vuota perché non
+ * segui ancora nessuna marca, il posto dove rimediare è la schermata delle marche.
  */
-export function emptyKeyboard(conFiltri: boolean): InlineKeyboardMarkup {
+export function emptyKeyboard(conFiltri: boolean, marche = false): InlineKeyboardMarkup {
   const rows: InlineKeyboardButton[][] = [];
+  if (marche) rows.push([button("🏷 Preferiti per marca", "s:preferiti")]);
   if (conFiltri) rows.push([button("🎛 Cosa vedi", "s:filtri")]);
   return { inline_keyboard: [...rows, ...navRows()] };
 }
@@ -347,6 +504,8 @@ export function sectionTitle(section: string): string {
       return "Scartati da te";
     case "news":
       return "Articoli e news";
+    case "coupon":
+      return "Coupon e rimborsi";
     case "fonti":
       return "Fonti e raccolte";
     case "vantaggio":
@@ -357,6 +516,12 @@ export function sectionTitle(section: string): string {
       return "Cosa vedi";
     case "filtri-fonti":
       return "Scegli le fonti";
+    case "preferiti":
+      return "Preferiti per marca";
+    case "diagnostica":
+      return "Diagnostica delle fonti";
+    case "preferiti-lista":
+      return "Le marche che segui";
     case "cerca":
       return "Cerca";
     default:

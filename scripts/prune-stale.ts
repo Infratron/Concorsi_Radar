@@ -2,7 +2,7 @@ import { pathToFileURL } from "node:url";
 import type { ItemRow } from "../src/types.ts";
 import type { Store } from "../src/db/store.ts";
 import { createD1HttpStore, d1HttpOptionsFromEnv } from "../src/db/d1-http.ts";
-import { indexPageUrls, staleItemReason } from "../src/enrich/freshness.ts";
+import { AGED_OFFER_REASON, indexPageUrls, staleItemReason } from "../src/enrich/freshness.ts";
 
 /**
  * Pulizia dell'archivio dai non-concorsi.
@@ -17,6 +17,13 @@ import { indexPageUrls, staleItemReason } from "../src/enrich/freshness.ts";
  * Guarda SOLO gli item senza scadenza: uno con una scadenza è un concorso aperto,
  * e non si tocca. Per il resto decide lo stesso cancello della raccolta, quindi
  * qui non c'è una seconda verità da tenere allineata.
+ *
+ * Una cosa la pulizia NON fa, ed è dichiarata: un coupon invecchiato non si
+ * cancella. Non è un falso positivo — è un'offerta vera il cui tempo è passato,
+ * e a chiuderla pensa il cron (`expireOldItems`: stato 'expired', fuori dalle
+ * liste, dentro lo storico). Qui si toglie quello che non è mai stato né un
+ * concorso né un'offerta: cataloghi, tassonomie, pagine indice, annunci di
+ * vincitori.
  *
  * Due passaggi, di proposito: prima l'elenco (prova a vuoto), poi la
  * cancellazione con --apply. Cancellare è irreversibile, e un comando che cancella
@@ -46,7 +53,12 @@ export function selectStale(rows: ItemRow[], now: Date): StaleRow[] {
   const stale: StaleRow[] = [];
   for (const row of rows) {
     const reason = staleItemReason(row, now);
-    if (reason !== null) stale.push({ row, reason });
+    if (reason === null) continue;
+    // Un'offerta invecchiata la chiude il cron, non la cancellazione: così il
+    // coupon resta nello storico invece di sparire per un comando di manutenzione
+    // (e il motivo è il suo, non "questa pagina non era niente").
+    if (row.kind === "coupon" && reason.startsWith(AGED_OFFER_REASON)) continue;
+    stale.push({ row, reason });
   }
   return stale;
 }

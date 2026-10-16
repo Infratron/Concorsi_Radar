@@ -67,15 +67,18 @@ Decisioni di progetto che contano:
   in archivio ([src/enrich/freshness.ts](src/enrich/freshness.ts)): fuori le
   pagine di un'edizione passata, quelle che dicono "vincitori" o "concluso", le
   pagine ferme da più di sei mesi e — dalle fonti di elenco, dove il titolo è lo
-  slug — le pagine di catalogo, le tassonomie e le pagine indice. Le stesse
+  slug — le pagine di catalogo, le tassonomie e le pagine indice. Le **offerte**
+  invecchiano prima: un coupon non dichiara quasi mai una scadenza, quindi lì
+  conta la data di pubblicazione, e dopo 60 giorni è fuori — sia all'ingresso sia
+  nella pulizia (`expireOldItems`, che tiene la stessa regola). Le stesse
   regole valgono per il digest e per la pulizia dell'archivio (`npm run prune`),
   e la nota di ogni raccolta dice quanti item ha scartato e perché.
   Due falsi positivi misurati il 16/10/2026 e corretti: un anno citato vale come
   edizione chiusa solo se è plausibile ("Philips Airfryer **Serie 2000**" non è
   un'edizione del 2000) e la parola "vincitore" da sola non chiude niente —
   "incontra il vincitore di X Factor" è il premio, non la fine della gara.
-- **Concorsi e articoli sono due cose diverse, e in chat stanno in due posti.**
-  Ogni item entra in archivio con un tipo (`contest` o `news`) deciso in
+- **Tre tipi, tre sezioni: concorso, offerta, articolo.**
+  Ogni item entra in archivio con un tipo (`contest`, `coupon` o `news`) deciso in
   [src/enrich/kind.ts](src/enrich/kind.ts) da URL, titolo e tipo di fonte: la
   sezione dei concorsi contiene **solo pagine su cui si partecipa**, mentre la
   notizia *sul* concorso, la pagina-elenco e la tassonomia finiscono in 📰 News.
@@ -89,6 +92,23 @@ Decisioni di progetto che contano:
   pagina, non una categoria) e "scopri tutti i premi" è il premio di una
   raccolta punti, non il titolo di una rassegna — **24 promo vere su 24
   finivano in News**, ora zero.
+- **Le offerte hanno una sezione loro, e una vita più corta.** Un buono sconto
+  non si vince, si spende: le due cose si cercano in momenti diversi, quindi
+  💶 Coupon e rimborsi è una sezione a sé (sei fonti dichiarano la categoria
+  `coupon` in [src/config/sources.ts](src/config/sources.ts)) e le offerte **non
+  producono notifiche** — avvisi e digest guardano i soli concorsi, perché un
+  coupon da stampare non è mai urgente come una scadenza. La promozione che
+  **annuncia anche un premio** resta invece un concorso, e lo fa in modo
+  dichiarato: "Cashback Fabuloso: 5 € di rimborso **e vinci** una lavatrice" sta
+  fra i concorsi, perché nasconderlo costerebbe più di un coupon di troppo (la
+  regola sta in [src/enrich/kind.ts](src/enrich/kind.ts)).
+- **Il bando si cerca dove c'è, e si salva sulla riga.** Il bottone 📄 Regolamento
+  della scheda non dipende più dal fatto che il riassunto del feed nomini il
+  bando: la raccolta legge la pagina del concorso, sceglie il link che somiglia al
+  regolamento (il nome conta più dell'URL, l'origine uguale spareggia, il PDF vale
+  un punto in più) e lo salva su `items.rules_url`. Le regole di questa ricerca
+  sono in [src/enrich/regulation.ts](src/enrich/regulation.ts) e i numeri veri —
+  **73 bandi su 83 concorsi nuovi** e zero link sbagliati — sono nella sezione 5.
 - **Google News è la fonte più fresca** (batte gli aggregatori di ore), ma porta
   anche rumore: le sue notizie passano un filtro di pertinenza prima di entrare e
   restano comunque in 📰 News, perché il link è la pagina del giornale.
@@ -164,6 +184,8 @@ npx wrangler login                # una volta sola: apre il browser su Cloudflar
 npm run db:create                 # copia il database_id restituito in wrangler.toml
 npm run db:init                   # crea le tabelle
 npm run db:seed                   # sincronizza le fonti dal file di configurazione
+                                  # (rieseguilo a ogni aggiornamento che ne aggiunge:
+                                  #  es. i sei feed di coupon e rimborsi)
 
 # 2. segreti (uno alla volta, incolla il valore quando richiesto)
 npm run secrets:token
@@ -226,12 +248,15 @@ database è raggiunto via API HTTP di D1. Servono tre *repository secret*
 
 | Secret | Dove prenderlo |
 |---|---|
-| `CLOUDFLARE_ACCOUNT_ID` | dashboard Cloudflare: l'id dell'account è nel primo pezzo dell'URL (`dash.cloudflare.com/<ACCOUNT_ID>/...`) |
-| `CLOUDFLARE_API_TOKEN` | dashboard → My Profile → API Tokens → Create Token → template **D1 / Edit**, limitato al tuo account e a questo database |
-| `D1_DATABASE_ID` | lo stesso `database_id` che sta in `wrangler.toml` |
+| `CLOUDFLARE_ACCOUNT_ID` | dashboard Cloudflare → **Workers & Pages** → **Account details** → colonna **Account ID** (è anche il primo pezzo dell'URL, `dash.cloudflare.com/<ACCOUNT_ID>/...`) |
+| `CLOUDFLARE_API_TOKEN` | dashboard → **Account API tokens** (`dash.cloudflare.com/<ACCOUNT_ID>/api-tokens`) → **Create Token** → **Create custom token** → permesso **Account · D1 · Edit**, risorse limitate al tuo account. Va bene anche la pagina storica `/profile/api-tokens`. Il token si vede **una volta sola**: copialo lì per lì |
+| `D1_DATABASE_ID` | lo stesso `database_id` che sta in `wrangler.toml` (o **D1 SQL database** → il database: è lo UUID nell'URL) |
 
-Facoltativi, per gli avvisi su Telegram (senza, tutto resta visibile solo in
-`/fonti`): `TELEGRAM_BOT_TOKEN` e `ADMIN_CHAT_ID`.
+Il permesso deve essere **Edit**, non Read: la raccolta scrive (e con Read il job
+fallisce con un 403). Non serve nessun permesso di zona o di dominio.
+
+Facoltativi, per gli avvisi e per il **report delle fonti** in chat (senza, tutto
+resta visibile in 📡 Fonti e in `/health`): `TELEGRAM_BOT_TOKEN` e `ADMIN_CHAT_ID`.
 
 Se questi tre secret mancano, il radar non resta muto: il Worker se ne accorge e
 passa alla **raccolta di riserva**, e dopo **tre ore** senza una raccolta su
@@ -254,9 +279,13 @@ del job mostra il riepilogo (fonti ok, item nuovi, duplicati) e i giri successiv
 partono da soli. `npm run ingest` è lo stesso script da riga di comando, con le
 tre variabili esportate a mano: utile per provarlo prima di affidarlo ad Actions.
 
-Se il job diventa rosso, i log dicono quale fonte o quale credenziale non va. Un
-giro in cui **nessuna** fonte risponde fa fallire il job di proposito: è la spia
-di un problema vero (token scaduto, permesso D1 sbagliato, rete).
+Se il job diventa rosso, i log dicono quale fonte o quale credenziale non va:
+`Variabili d'ambiente mancanti: …` è un secret assente (o scritto con un nome
+diverso), `D1 API 401` è il token sbagliato o incollato con uno spazio in fondo,
+`D1 API 403` è il permesso `Read` invece di `Edit`, `D1 API 404` è il
+`D1_DATABASE_ID` sbagliato. Un giro in cui **nessuna** fonte risponde fa fallire
+il job di proposito: è la spia di un problema vero (token scaduto, permesso D1
+sbagliato, rete).
 
 > Minuti Actions: il piano gratuito ne include 2.000 al mese per i repository
 > privati. Un giro dura ~1 minuto e ne partono 1.440 al mese, quindi ci si sta
@@ -349,8 +378,9 @@ casi in chat resta un messaggio solo.
 [📅 7 giorni (40)]    [⏳ Scadenze (2)]
 [⭐ Watchlist (1)]    [📰 News (7)]
 [🔍 Cerca]            [🗂 Storico]
-[🎛 Cosa vedi]        [📡 Fonti]
-[⚙️ Impostazioni]
+[💶 Coupon e rimborsi (67)]
+[🏷 Preferiti per marca (4)] [🎛 Cosa vedi]
+[📡 Fonti]            [⚙️ Impostazioni]
 [🔄 Aggiorna]
 ```
 
@@ -361,12 +391,14 @@ casi in chat resta un messaggio solo.
 | ⏳ Scadenze | chi chiude entro 7 giorni e **non è già chiuso** |
 | ⭐ Watchlist | i concorsi che hai salvato, **ordinati per scadenza** (chi chiude prima sta in cima) e con il promemoria a 3 giorni e 1 giorno dalla chiusura |
 | 📰 News | gli articoli e le pagine-elenco che parlano di concorsi: **non** sono concorsi, e il link porta al pezzo, non alla pagina ufficiale |
+| 💶 Coupon e rimborsi | i buoni sconto, i rimborsi e le operazioni a cashback da spendere al negozio o online: **non** sono concorsi e **non** producono notifiche (qui sotto) |
 | 🗂 Storico | cosa è successo a quello che hai visto: 🏆 vinti, ⌛ chiusi (chi ha chiuso per ultimo in cima) e 🚫 scartati, che da lì puoi riprendere |
 | 🔍 Cerca | scrivi una parola: il bot cancella il tuo messaggio e mostra i risultati (concorsi e news insieme, gli articoli marcati 📰) |
+| 🏷 Preferiti per marca | le marche che segui: filtrano i concorsi, valgono **10 punti in più** e hanno una sezione loro (qui sotto) |
 | 🎛 Cosa vedi | i tuoi filtri: quali tipi di concorso, quali categorie di fonti e quali fonti vuoi vedere (qui sotto) |
-| 📡 Fonti | quali fonti rispondono, quando, e le ultime raccolte |
+| 📡 Fonti | quali fonti rispondono: ora, codice HTTP e item dell'ultimo tentativo, più le ultime raccolte (e la porta a 🌡 Diagnostica) |
 | 🏁 Vantaggio | `/vantaggio`: di quanto arriviamo prima degli aggregatori, e quanto spesso non arriviamo affatto |
-| ⚙️ Impostazioni | soglia degli avvisi, fascia di silenzio, orari dei digest, e la porta ai filtri |
+| ⚙️ Impostazioni | soglia degli avvisi, fascia di silenzio e orari dei digest, regolabili di fino, più la porta ai filtri |
 | 🔄 Aggiorna | rilegge tutto e dice se è arrivato qualcosa di nuovo |
 
 `/vantaggio` (o `/anticipo`) apre la misura del **vantaggio di tempistica**: di
@@ -387,9 +419,31 @@ toccandone uno si apre la scheda, e da lì `⬅️ Torna all'elenco`. Il numero 
 punteggio 0-100 (premio, sforzo, urgenza, freschezza, più i tuoi feedback), ed è
 il criterio con cui gli elenchi dei concorsi sono ordinati: in cima c'è quello che
 vale di più adesso (📰 News fa eccezione: lì l'ordine è l'ultimo arrivato, che è
-l'informazione giusta per un articolo). Nella scheda ci sono le decisioni ⭐ Watchlist, 🚫 Non mi interessa, 🏆
-Vinto (quella già presa resta visibile e inerte), 🔗 Apri e 📄 Regolamento quando
-l'URL è nel testo.
+l'informazione giusta per un articolo; e sulle offerte il numero **non c'è**
+affatto, `💶 · Buono sconto Novi…`: il punteggio risponde a "quanto vale la pena
+guardare questo concorso adesso" e su un buono sconto sarebbe inventato).Nella scheda ci sono le decisioni ⭐ Watchlist, 🚫 Non mi interessa, 🏆
+Vinto (quella già presa resta visibile e inerte), 🔗 Apri e 📄 Regolamento.
+
+**📄 Regolamento** c'è quando il bando si trova, e si trova in due modi
+([src/enrich/regulation.ts](src/enrich/regulation.ts)): dal testo dell'item —
+quando il feed lo cita nel riassunto — oppure **leggendo la pagina del concorso**,
+dove il bando è quasi sempre un link in fondo ("Regolamento completo", "Scarica il
+bando in PDF"). Il secondo modo è quello che lo rende utile: i feed portano un
+riassunto di due righe che il bando non lo nomina, quindi senza la lettura della
+pagina il bottone c'era **quasi mai**. Il link trovato si salva sull'item
+(`items.rules_url`), così la chat non rilegge niente, e compare anche su avvisi e
+digest.
+
+Quando il bando non si trova il bottone non c'è: **mai un link inventato** — una
+pagina di privacy o l'assistenza del sito non sono il regolamento, e chi ci finisce
+ha perso il viaggio. Misurato il 16/10/2026 sulle pagine vere di sette fonti: su
+**83 concorsi nuovi, 73 regolamenti trovati** (le pagine lette sono 83 e i 10
+rimasti non nominano il bando da nessuna parte), tutti link plausibili:
+bando in PDF di Eni, Coca-Cola, Pampers, Loacker, Lindt, Parmigiano Reggiano,
+Leroy Merlin, Colgate, Cupper e i `regolamento.php` dei premi certi di Scontrino
+Felice. Il costo è una richiesta in più **solo per i concorsi nuovi** (mai per un
+coupon o un articolo), con robots.txt rispettato e un tetto per giro: i dettagli
+nella sezione 9.
 
 Ogni elenco è **a pagine di sei**, con `⬅️ Prec` / `Succ ➡️` e il numero di
 pagina in mezzo: la pagina che vedi la legge il database con LIMIT/OFFSET, quindi
@@ -437,6 +491,62 @@ le raccolte punti e la categoria scontrino, l'elenco passa da 3 a 2 concorsi, il
 digest di quella chat cambia e quello dell'altra no, e `♻️ Vedi di nuovo tutto`
 rimette l'archivio intero (31 controlli su 31).
 
+### 🏷 Preferiti per marca: le marche che segui
+
+Ferrero, Coca-Cola, Conad: le marche che ti interessano valgono più delle altre, e
+la sezione **🏷 Preferiti per marca** è dove si dicono. Ogni voce è un
+interruttore (`✅` la segui, `⬜️` no) con **quanti concorsi ha in archivio**: le
+marche che hanno qualcosa stanno in cima, quelle che non ne hanno in fondo, così
+il registro si scorre a pagine di dodici senza cercare niente.
+
+Accendere una marca fa **tre** cose:
+
+1. i suoi concorsi valgono **10 punti in più** (e la scala è dichiarata: è più di
+tutti i segnali di qualità — un premio certo vale 5 — e meno dell'urgenza di una
+scadenza a tre giorni);
+2. i concorsi **già in archivio** vengono ripunteggiati subito, con lo stesso
+conto dell'ingestione: la marca che segui oggi non aspetta la prossima raccolta;
+3. nasce la sezione **📋 I loro concorsi**, che mostra solo quello.
+
+Il filtro vero è a parte, ed è `🌟 Solo le marche seguite: sì`: acceso, **tutti**
+gli elenchi e le notifiche mostrano solo le marche che segui. È voluto che siano
+due cose distinte: *seguire* Ferrero non vuol dire *non volerne sapere* delle
+altre, quindi seguire una marca non nasconde niente e non conta come filtro
+attivo — a nascondere è solo quell'interruttore, e lì il numero sul bottone 🎛 lo
+dice.
+
+**Come si riconosce una marca** (`src/config/brands.ts`). Due strade, e valgono
+tutte e due:
+
+- dalla **fonte**: le fonti di marca dichiarano lo slug nei loro tag, ed è
+  quello giusto — la pagina di un brand non sempre nomina se stessa nell'URL
+  (`/promozioni/…`);
+- dal **testo** (titolo, sommario e URL) quando il concorso arriva da un
+  aggregatore o da una query di news: *Concorso Nutella* è Ferrero anche senza
+  nessun tag addosso.
+
+Le parole si confrontano come token interi e senza diacritici, mai come
+sottostringhe: `aia` non pesca `baia`, e le sotto-marche stanno dentro la marca
+che le possiede (kinder e nutella → Ferrero). Dove la parola è anche una parola
+italiana comune la marca si riconosce da un'altra prova: **AIA** non si cerca in
+`aia` (l'aia della fattoria) ma in `aiafood`, che è in tutti i suoi URL. Una
+marca che non si riconosce resta `null`: una riga in meno, mai una riga
+sbagliata.
+
+La marca è una **colonna di `items`** (`brand`), non un tag: si calcola
+all'ingestione una volta sola, e questo è quello che rende possibile sia la
+sezione (una query, non un filtro in memoria) sia il conteggio per marca sui
+bottoni. Su un archivio già esistente le righe si riempiono con **`npm run brands
+-- --apply`** (senza `--apply` è una prova a vuoto: elenca e basta), e il comando
+serve di nuovo ogni volta che il registro impara una parola nuova — una marca
+aggiunta oggi non riconosce da sola le righe raccolte ieri.
+
+Seguire e non seguire è **per chat**, come i filtri e i pesi: quello che accendi
+tu non cambia niente per l'altra persona. Una cosa sola è condivisa, ed è
+dichiarata: il **bonus di punteggio** si applica alle righe d'archivio, e una
+riga non è di nessuno in particolare — l'insieme delle marche seguite è l'unione
+delle chat attive (`mergedBrands`, in [src/pipeline.ts](src/pipeline.ts)).
+
 **⭐ Watchlist** è il posto dove tieni i concorsi che vuoi fare davvero. Due cose
 la rendono utile: l'ordine per scadenza (chi chiude prima è in cima) e il
 promemoria automatico **tre giorni e un giorno prima della chiusura** — un
@@ -461,8 +571,165 @@ digest e nella scheda — non sposta i pesi due volte.
 I comandi funzionano ancora ma sono scorciatoie, non il modo normale: `/start`
 (che è anche l'iscrizione, ed è l'unico pubblicato nel menù "/" di Telegram),
 `/menu`, `/nuovi`, `/oggi`, `/settimana`, `/scadenze`, `/salvati` (o
-`/watchlist`), `/news`, `/storico`, `/vinti`, `/scaduti`, `/cerca`, `/fonti`,
-`/impostazioni`, `/stop` e `/salva|/vinto|/ignora <id>`.
+`/watchlist`), `/news`, `/coupon`, `/storico`, `/vinti`, `/scaduti`, `/cerca`, `/fonti`,
+`/diagnostica`, `/vantaggio`, `/impostazioni`, `/stop` e
+`/salva|/vinto|/ignora <id>`.
+
+### 💶 Coupon e rimborsi: si spende meno, non si vince
+
+Un buono sconto da stampare, un rimborso con lo scontrino, un cashback che ti
+riaccredita metà della spesa: sono la cosa che si cerca *quando si deve
+comprare*, e in mezzo ai concorsi sarebbero rumore. La sezione è una riga sola
+nel menù — `💶 Coupon e rimborsi (67)` — e dentro c'è solo questo.
+
+Tre differenze dalle altre sezioni, tutte volute:
+
+- **niente punteggio sul bottone** (`💶 · Buono sconto Aia Spinacine…`): il numero
+  risponde a "quanto vale la pena guardare questo concorso adesso" — premio,
+  sforzo, urgenza — e su un'offerta non vuol dire niente. Un numero inventato è
+  peggio di nessun numero;
+- **niente notifiche**: avvisi immediati e digest guardano i soli concorsi. Un
+  buono sconto resta valido per settimane, non c'è niente di urgente da
+  svegliarti per dire;
+- **vita di sessanta giorni**: un coupon non dichiara quasi mai una scadenza, e
+  che sia finito lo scopri quando al negozio il codice non passa. La regola
+  quindi è la **data di pubblicazione**
+  ([src/enrich/freshness.ts](src/enrich/freshness.ts)): all'ingresso un buono
+  pubblicato da più di 60 giorni non entra — il primo giro di una fonte nuova
+  scarica tutto il suo arretrato, e senza il cancello la sezione sarebbe nata
+  piena di offerte morte — e i coupon arrivati da vivi li chiude il cron dopo 60
+  giorni (`expireOldItems`): escono dall'elenco con lo stato *chiuso*, come i
+  concorsi scaduti, e restano nello storico. La pulizia manuale (`npm run prune`)
+  li **lascia stare** di proposito: un'offerta invecchiata non è un falso
+  positivo, e quel comando serve a togliere quello che non è mai stato né un
+  concorso né un'offerta.
+
+La **promozione ibrida** è il caso limite, ed è gestito: "Cashback Fabuloso,
+Ajax, Soflan: ricevi un rimborso di 5 euro **e vinci** una lavatrice Samsung" è un
+rimborso *e* un'estrazione, quindi sta fra i concorsi — la metà da concorso non si
+nasconde. Spegnere la categoria **💶 Coupon e rimborsi** in 🎛 Cosa vedi toglie di
+mezzo la sezione intera, senza toccare le fonti.
+
+Misurato il 16/10/2026 sui feed veri, con la pipeline vera e la schermata vera in
+chat: **6 fonti su 6 rispondono, 107 item letti, 72 nuovi di cui 67 coupon**,
+**31 scartati dal cancello perché vecchi** (18 + 8 + 5, tutti "offerta vecchia"),
+4 duplicati e **4 concorsi nati da queste fonti** — i cashback che annunciano
+anche un premio. Si apre con `/coupon` e la schermata dice `67 coupon · pagina
+1/12`.
+
+### 📡 Fonti: chi ha risposto, senza aprire i log di GitHub
+
+Alle prime raccolte la domanda è una sola — *chi risponde e chi no* — e fino a
+oggi la risposta stava solo nella pagina del job su GitHub. Adesso ogni fonte si
+porta dietro l'esito dell'**ultimo tentativo**, e la chat lo dice in una riga:
+**l'ora, il codice HTTP e quanti item ha portato**.
+
+```
+🟢 Scontrino Felice · premio certo · 16/10 19:10 · HTTP 200 · 25 item
+🔴 Tiscali · concorsi · 16/10 19:05 · HTTP 403 · ⚠️ 2 di fila
+⚪️ Soldissimi · concorsi a premio · 16/10 19:10 · HTTP 304 · non è cambiata
+🚫 Eni Più Insieme · concorsi · 16/10 19:10 · robots.txt vieta la raccolta
+```
+
+Le distinzioni sembrano pignoleria e non lo sono, perché **a occhio si
+confondono**: un **403** e un **timeout** sono guasti diversi (il primo è la
+fonte che ci rifiuta, il secondo una rete caduta — e senza codice HTTP resta il
+messaggio dell'errore), un **200 con 0 item** è una fonte che risponde ed è vuota
+(non è rotta: il numero degli item è lì proprio per distinguerla), un **304** è
+una risposta — la pagina non è cambiata — e **robots.txt** non è né un guasto né
+una risposta: siamo noi a non poterla leggere. Sono le stesse parole nel report,
+nella schermata e in `/health` (`lastStatus`, `lastError`, `lastItems` per fonte),
+perché il vocabolario degli esiti sta in un posto solo
+([src/telegram/report.ts](src/telegram/report.ts)).
+
+**Il report fonte per fonte** arriva in chat all'admin nelle **prime tre raccolte**
+con la diagnostica accesa — con l'esito di ognuna e i problemi in cima — e in ogni
+raccolta lanciata **a mano** dal pulsante *Run workflow*: lì la domanda è di un
+umano ("ho cambiato una fonte, come è andata?"), e a una domanda si risponde
+sempre. Negli altri giri non si manda niente: lo stato resta in 📡 Fonti, che non
+fa rumore. Quale raccolta ha già ricevuto il report lo dice la nota
+dell'esecuzione (`diagnostica: inviata`), e il segno si scrive **solo** se il
+messaggio è partito davvero, così un invio fallito si ritenta al giro dopo invece
+di essere dato per fatto.
+
+### 🌡 Diagnostica: quali fonti valgono la pena
+
+📡 Fonti risponde a *chi ha risposto*. La domanda che viene dopo è un'altra — *e
+questa fonte serve a qualcosa?* — e sono due cose diverse: una fonte che risponde
+benissimo può non aver portato un concorso in un mese (pattern troppo stretto,
+pagina che è un catalogo, feed che ripubblica sempre cose già viste altrove).
+Sono esattamente quelle che conviene togliere per far posto a un'altra, e prima
+di oggi l'unico modo di accorgersene era contare a mano gli item per fonte.
+
+`/diagnostica` (o 🌡 dalla schermata 📡 Fonti) dà **un verdetto per fonte**, con
+il fatto e che farne, e i gruppi sono i verdetti:
+
+| Gruppo | Verdetti | Cosa vuol dire |
+|---|---|---|
+| Falliscono | 🔴 `rotta` · 🟠 ultimo giro fallito | tre fallimenti di fila (o appena fallita): prima di questa, ogni altra spiegazione è prematura |
+| Rispondono ma non portano concorsi | 🟠 `catalogo` · `muta` · 🟡 `vuota` | ha letto pagine e ne ha scartate, o ha letto item e nessuno è diventato un concorso, o risponde senza aver mai portato niente |
+| Non portano più niente di nuovo | 🟡 `ripete` · `esaurita` | vede concorsi che in archivio hanno fatto entrare gli altri, o non ne porta da più di un mese |
+| Da controllare a parte | ⚪️ `mai-provata` · `non-provata` | non è un motivo per toglierla: la rotazione del Worker ne tocca poche per volta, e questo è un limite del Worker, non della fonte |
+
+Le regole stanno in [src/sources-health.ts](src/sources-health.ts), pure e
+senza database, con le soglie esportate (`ROTTA_DA_FALLIMENTI`,
+`NON_PROVATA_DA_MS`, `ESAURITA_DA_MS`): il perché di un verdetto si legge senza
+scavare nel codice. Il contributo di ogni fonte lo legge lo store (`sourceStats`,
+[src/db/store.ts](src/db/store.ts)) e sono **due misure diverse di proposito**:
+
+- **concorsi** = gli item ancora in archivio arrivati per primi da lei;
+- **viste** = ogni concorso che ha visto, anche se in archivio era già entrato da
+  un'altra, e di quelle **quante ha scartato** il cancello di freschezza.
+
+È questa seconda misura che distingue le due fonti che a occhio si confondono:
+quella che **ripete** (molte viste utili, zero concorsi: vale solo come conferma)
+e quella che porta **catalogo** (molte pagine scartate: il pattern pesca la
+pagina sbagliata). Una fonte riconosciuta come catalogo non può essere anche
+"che ripete", perché le viste scartate non sono concorsi visti.
+
+Il verdetto **non è un ordine di cancellazione** — è un indizio, e la schermata
+lo dice: per togliere una fonte si mette `enabled: false` nella sua voce di
+[src/config/sources.ts](src/config/sources.ts) e si lancia `npm run db:seed`; per
+non vederla solo per sé, senza toccare il codice, basta 🎛 **Cosa vedi** →
+**Scegli le fonti**.
+
+Due dettagli che servono a fidarsi dell'elenco: le fonti sane si **contano**
+invece di essere elencate una per una, e le voci che non ci stanno in un
+messaggio (il limite di Telegram, 4096 caratteri, meno il margine) restano
+nell'elenco **con il loro id** — il motivo è già scritto per il gruppo, ma l'id è
+la parte su cui si agisce, e nasconderla toglierebbe proprio una delle fonti da
+togliere.
+
+### ⚙️ Impostazioni: le tre cose che si regolano
+
+`/impostazioni` (o ⚙️ nel menù) è l'unica schermata che cambia qualcosa: soglia
+degli **avvisi immediati**, **fascia di silenzio** e **orari dei digest**. Valgono
+**solo per la tua chat**, come i filtri e i pesi.
+
+Ogni voce si regola di fino e di solito:
+
+| Cosa | Di fino | Di solito |
+|---|---|---|
+| 🔔 Avvisi immediati | `➖ 5` / `➕ 5`, da 0 a 100; ai bordi il cursore c'è ma è inerte, così la riga non si sposta sotto il dito | `60` `70` `80` `90` |
+| 🌙 Silenzio | due cursori, `dalle` e `alle`, un'ora per tocco: dalle 23 alle 22 **allunga** la fascia all'indietro, alle 7 alle 8 la allunga in avanti | `23–7`, `22–8`, `Off` |
+| 📬 Digest | le **24 ore** una per una: un tocco accende l'ora, lo stesso tocco la spegne | `8 + 19`, `7 + 13 + 20`, `Off` |
+
+Dentro la **fascia di silenzio** non parte nessuna notifica — avvisi immediati,
+digest, promemoria della watchlist e promemoria della raccolta ferma — e gli item
+restano in attesa del digest successivo. Con il silenzio spento i due cursori
+partono dalla fascia solita (23–7) e lo riaccendono: chi tocca ➖ ➕ vuole una
+fascia, e `Off` resta a un tocco per disfarlo.
+
+Le ore del **digest** valgono anche nell'ora prima e in quella dopo (è la
+tolleranza per l'ora legale, in `isDigestWindow` in [src/schedule.ts](src/schedule.ts)):
+8 e 9 accese sono quasi la stessa richiesta. Spegnendo l'ultima ora il digest si
+ferma, e la chat lo dice invece di lasciare la griglia tutta spenta senza
+spiegazione.
+
+I conti dei cursori stanno in un posto solo, [src/telegram/prefs-config.ts](src/telegram/prefs-config.ts):
+la tastiera ci scrive il valore sul bottone e il router lo rilegge da lì, quindi
+un bottone disegnato non può essere scartato al tocco (le fasce girano sulla
+giornata — 23 + 1 → 0 — e restano sempre ore vere).
 
 ## 6. Deduplica: perché è fatta così
 
@@ -508,7 +775,8 @@ peggiore.
 Punteggio 0-100 (`src/enrich/score.ts`), pesi trasparenti: valore del premio
 (30), sforzo richiesto (20), scadenza entro 3 giorni (18) o 14 (12), freschezza
 (12/6), nessun obbligo d'acquisto (10), parole chiave come *gift card* o
-*in palio* (5), più bonus/malus dai tuoi feedback.
+*in palio* (5), più bonus/malus dai tuoi feedback (±1 per tag) e **10 punti per
+una marca che segui** (🏷 Preferiti per marca).
 
 Le regole di arricchimento estraggono scadenza (date numeriche e "30 novembre
 2026", con inferenza dell'anno), premio (importi e marche, comprese le auto
@@ -524,7 +792,7 @@ Freni antispam, tutti attivi per default:
 | Concorsi per digest | max 8 (`…e altri N su /oggi`) |
 | Digest vuoto | non viene inviato |
 | Avvisi immediati | max 2 per esecuzione, uno ogni 20 minuti, solo item scoperti da ≤ 3 ore |
-| Fascia di silenzio | 23:00-07:00 italiane |
+| Fascia di silenzio | 23:00-07:00 italiane (è il default: si cambia da ⚙️ Impostazioni) |
 | Primo giro | nessun avviso immediato |
 | Notizie fuori tema | filtrate sulle fonti Google News |
 | Fonte rotta | 3 errori di fila → **un solo** avviso all'admin |
@@ -534,7 +802,9 @@ Freni antispam, tutti attivi per default:
 Verificate il 16/10/2026 (feed leggibili senza login): Premi e Concorsi,
 Scontrino Felice (**quattro** sezioni: con acquisto, gratuiti, premio certo,
 raccolte punti), DimmiCosaCerchi, Soldissimi, Vincimi, più sei query Google News
-e alcune sitemap. L'elenco completo con stato di verifica è in
+e alcune sitemap — e, dallo stesso giorno, **sei feed di coupon e rimborsi** (la
+ricognizione e i motivi delle esclusioni stanno qui sotto). L'elenco completo con
+stato di verifica è in
 [src/config/sources.ts](src/config/sources.ts).
 
 **Scontrino Felice** è la fonte più ricca, e la sua sitemap e i suoi feed
@@ -605,6 +875,48 @@ anche i cataloghi di tazze e borse e le promozioni chiuse anni fa.
 | Google News · brand | query | Nutella, Kinder, Coca-Cola, Mulino Bianco, supermercati |
 | Google News · instant win | query | concorsi con codici sotto il tappo, "in palio" |
 
+**Coupon e rimborsi: la ricognizione del 16/10/2026.** La domanda era dove
+stiano i buoni sconto italiani — quelli che si stampano o si riscattano al
+supermercato — e i rimborsi con lo scontrino, perché **nessuna delle fonti già
+in elenco ne pubblica un elenco**. Ho sondato con i fetcher veri del progetto
+(robots.txt compreso, stessa User-Agent della raccolta) **ventuno candidati**:
+feed di coupon, aggregatori di codici sconto, sitemap di negozi e insegne.
+
+Il risultato divide i candidati in due gruppi netti. **Le tre testate che
+pubblicano un feed di coupon e rimborsi** lo fanno davvero, e sono entrate con
+due sezioni ciascuna (una per i buoni, una per i rimborsi): **Scontrino Felice**,
+**DimmiCosaCerchi** e **scontOmaggio**. **Gli aggregatori di codici sconto**
+(Topnegozi, Widilo, CodiceRisparmio, DoveConviene, Tigotà) rispondono 200 ma
+pubblicano il **catalogo dei negozi**, non le offerte: le loro pagine di negozio
+(`codice-sconto/24bottles`, `negozi/douglas`) escono venti per volta, e la pagina
+di un negozio è a sua volta un elenco di categorie ("Moda & Accessori",
+"Elettronica") o addirittura il carrello e l'assistenza del sito. Da lì non esce
+un buono, quindi sono fuori. **Le insegne** (Conad, Acqua & Sapone, Esselunga)
+tengono i buoni nell'app o sulla carta fedeltà e non pubblicano nessun elenco
+leggibile: le loro promozioni arrivano da qui, perché queste tre fonti le
+raccontano.
+
+| Fonte coupon | Feed | Cosa entra (misura del 16/10/2026) |
+|---|---|---|
+| Scontrino Felice · spendi e riprendi | `/spendi-e-riprendi/feed/` | 20 item: i rimborsi con scontrino, più i cashback che annunciano anche un premio (quelli restano concorsi) |
+| Scontrino Felice · buoni sconto | `/buoni-sconto/feed/` | 20 item, **zero concorsi**: è la sezione dei buoni veri (Novi, Aia, Président, Regina) |
+| DimmiCosaCerchi · cashback | `/cashback/feed` | 15 item: rimborsi (Braun, L'Oréal da Acqua & Sapone, Amazon) e i concorsi-cashback |
+| DimmiCosaCerchi · buoni sconto | `/buoni-sconto-da-stampare/feed` | 15 item, quasi tutti coupon |
+| scontOmaggio · operazioni a cashback | `/cashback/feed/` | 16 item di rimborsi (Fabuloso, Braun, L'Oréal) |
+| scontOmaggio · buoni sconto | `/coupon/feed/` | 16 item, quasi tutti coupon (CremaNovi, Multicentrum, Regina) |
+
+La sitemap di Scontrino Felice porta gli stessi buoni (`/buoni-sconto/…`, 3 URL
+nell'ultimo giro) ma con lo **slug** al posto del titolo, quindi anche qui si
+leggono i feed, come per i concorsi. Il risultato in archivio, con la pipeline
+vera: **67 coupon**, 4 concorsi ibridi e 31 offerte fermate all'ingresso perché
+troppo vecchie (18 + 8 + 5).
+
+Esclusi con il motivo, perché la ricognizione serve a non riprovarli:
+**OmaggioMania** risponde 200 ma il suo feed è il blog generalista del sito
+(omaggi con acquisto, volantini, concorsi) e le offerte da spendere sono la
+minoranza — 10 item letti, e quel poco di buono lo portano già le altre tre;
+**SpesaBack** pubblica la home, la guida e il "come funziona", non le offerte.
+
 Misura della prima raccolta completa con tutte le fonti (22 su 22, 16/10/2026):
 **267 item letti, 213 nuovi, 32 duplicati, 22 fuori tema, 0 errori**, in 9 secondi.
 Prima di queste fonti la stessa raccolta ne trovava 99. Il cancello di freschezza è
@@ -615,7 +927,10 @@ la promo Conad del 2024 — sono stati tolti con `npm run prune -- --apply`.
 
 **Aggiungere una fonte**: aggiungi una voce in `SOURCES` (basta `id`, `name`,
 `kind`, `url`, `category`, `tags`, `cadenceMin`), poi `npm run db:seed` e
-`npm run deploy`. Le fonti marcate `enabled: false` sono da validare a mano
+`npm run deploy`. Per una fonte di **offerte** basta dichiarare
+`category: "coupon"`: la classificazione la legge e i suoi item finiscono in
+💶 Coupon e rimborsi invece che fra i concorsi, senza altra configurazione. Le
+fonti marcate `enabled: false` sono da validare a mano
 (i selettori/pattern non sono ancora verificati sul markup reale).
 
 **Rimuoverne una**: imposta `enabled: false` e riesegui il seed, oppure
@@ -642,6 +957,28 @@ La raccolta sulle Actions ha un tetto di CPU suo (`ACTIONS_CPU_BUDGET_MS` nello
 script): è altissimo apposta, perché lì il limite di 10 ms non esiste. Le misure
 qui sotto restano la documentazione del percorso dentro il Worker (e il motivo
 per cui la raccolta è uscita da lì).
+
+### La ricerca del regolamento costa richieste, non CPU
+
+Leggere la pagina di un concorso per trovarci il bando (sezione 5) è **una
+richiesta HTTP in più per concorso nuovo**: l'attesa non è CPU, e la scansione
+del testo sì ma pesa meno di un item qualsiasi. I tetti, tutti dichiarati:
+
+| Tetto | Valore | Dove |
+|---|---|---|
+| Ricerche per giro | 100 | `MAX_RULES_LOOKUPS_PER_RUN` in [src/config/sources.ts](src/config/sources.ts) |
+| Tempo di parete per la ricerca, nel Worker | 8 s | `RULES_LOOKUP_BUDGET_MS` in [src/pipeline.ts](src/pipeline.ts) |
+| Tempo di parete per la ricerca, su Actions | 120 s | `ACTIONS_RULES_LOOKUP_MS` in [scripts/ingest.ts](scripts/ingest.ts) |
+| Tentativi per pagina | 1 (nessun retry) | `regulationUrlFromPage` |
+| Chi si legge | solo concorsi **nuovi**; mai coupon o articoli | `regolamentoPer`, in [src/pipeline.ts](src/pipeline.ts) |
+| Prima di leggere | robots.txt (in cache 24 h in D1) | `robotsAllows`, in [src/ingest/index.ts](src/ingest/index.ts) |
+
+Ultima misura con le pagine vere (7 fonti, 16/10/2026): 83 concorsi nuovi → 83
+pagine lette, **73 bandi trovati**, in ~1 secondo di media per pagina. In regime le
+fonti portano pochi concorsi nuovi per volta, quindi l'extra è di poche richieste
+per giro; la prima raccolta è l'unica che ne fa tante, ed è il motivo per cui il
+tetto sulle ricerche è alto. Quello che resta senza bando lo prende
+`npm run rules -- --apply` (sezione 11).
 
 ### I 10 ms di CPU reggono il parsing dei feed?
 
@@ -717,13 +1054,17 @@ npm run dry-run                                        # cosa verrebbe inviato, 
 npm run ingest                                         # raccolta vera, come su Actions
 npm run prune                                          # cosa non è più un concorso attivo (elenco)
 npm run prune -- --apply                               # e lo toglie dall'archivio
-npm test                                               # 357 test
+npm test                                               # 449 test
 npm run typecheck
 ```
 
-In chat: 📡 **Fonti** per lo stato di ogni fonte e delle ultime raccolte, ⚙️
-**Impostazioni** per soglia, silenzio e digest, 🎛 **Cosa vedi** per i filtri
-personali.
+In chat: 📡 **Fonti** per lo stato di ogni fonte — ora, codice HTTP e item
+letti nell'ultimo tentativo — e delle ultime raccolte, 🌡 **Diagnostica** (o
+`/diagnostica`) per sapere quali fonti **non portano concorsi** o falliscono, con
+il contributo di ognuna letto dall'archivio, ⚙️ **Impostazioni** per
+soglia, silenzio e digest (a cursori: vedi la sezione 5), 🎛 **Cosa vedi** per i
+filtri personali. Le stesse informazioni per fonte stanno in `/health`, nei campi
+`lastStatus` / `lastError` / `lastItems`.
 La tabella `runs` in D1 conserva la nota di ogni esecuzione: quelle con
 `trigger = actions` sono la raccolta su GitHub, le altre i tick del Worker.
 
@@ -752,6 +1093,14 @@ La tabella `runs` in D1 conserva la nota di ogni esecuzione: quelle con
   riattivarli dal pulsante *Enable workflow*). Per un radar di concorsi va bene;
   se ti serve puntualità, l'alternativa è Workers Paid con la raccolta dentro il
   Worker.
+- **Il report delle fonti gira dentro la raccolta su Actions**, quindi per
+  vederlo arrivare serve che quel codice sia **su GitHub**: un deploy del Worker
+  non lo aggiorna, e il report è dell'ambiente in cui la raccolta gira davvero (i
+  log del runner sono la ragione per cui esiste). Le colonne dell'ultimo
+  tentativo invece le scrive anche il Worker, nella raccolta di riserva: appena un
+  tick gira, 📡 Fonti ha i codici HTTP di tutte le fonti che la rete di Cloudflare
+  raggiunge. L'invio del messaggio è coperto dai test con il client Telegram finto
+  ([test/report.test.ts](test/report.test.ts)), come le altre notifiche.
 - **La raccolta dipende dai tre secret su GitHub**: senza, il job fallisce subito
   e per due ore il radar resta completamente fermo; poi il Worker riparte con la
   raccolta di riserva (2 fonti su 12 da qui, contro 12 su 12 da Actions). Dopo tre
@@ -766,8 +1115,21 @@ La tabella `runs` in D1 conserva la nota di ogni esecuzione: quelle con
   la copertura reale è "aggregatori + brand mappati". Il registro ufficiale
   MIMIT/PREMA **non è pubblico** (richiede SPID/CNS), quindi nessun bot può
   leggerlo.
-- OmaggioMania e scontOmaggio rispondono 403 al fetch diretto: esclusi
-  (servirebbe un browser headless su un secondo host).
+- **Il giro dei coupon è fatto di ciò che viene pubblicato, non di tutto ciò
+  che è risparmiabile.** Un buono che vive solo dentro l'app o sulla carta
+  fedeltà di un'insegna (Conad, Esselunga, Acqua & Sapone) non è leggibile da
+  nessuna parte: entra in 💶 soltanto quando una delle fonti monitorate lo
+  racconta. Gli aggregatori di codici sconto (Topnegozi, Widilo,
+  CodiceRisparmio, DoveConviene, Tigotà) restano fuori per il motivo opposto: le
+  loro pagine sono il catalogo dei negozi, non le offerte (sezione 8).
+- **Un coupon vive sessanta giorni dalla pubblicazione** se non dichiara una
+  scadenza: un buono stagionale ancora spendibile dopo due mesi sparisce
+  dall'elenco, e resta solo nello storico con lo stato *chiuso* (`npm run prune`
+  non lo cancella, perché non è un falso positivo: se ne occupa il cron). È la scommessa
+  opposta a quella dei concorsi — lì una coda in più costa meno di una riga
+  persa, qui una coda di offerte morte rende la sezione inutile. E le offerte
+  **non producono notifiche**, per scelta: quando serve un buono lo decidi tu.
+  Senza data di pubblicazione il coupon non si giudica e resta.
 - Promo ibride (cashback con buoni) possono passare il filtro pertinenza.
 - Il digest delle 06:05/17:05 UTC slitta di un'ora tra ora solare e legale: la
   finestra lo tollera, ma se vuoi orari fissi cambia i cron in `wrangler.toml`.
@@ -784,15 +1146,52 @@ La tabella `runs` in D1 conserva la nota di ogni esecuzione: quelle con
   con lo stesso account la schermata è la stessa, perché è la stessa chat.
 - **Aggiornando un archivio già esistente serve una riga di SQL a mano.** `npm
   run db:init` usa `CREATE TABLE IF NOT EXISTS`, quindi non tocca le tabelle già
-  create: la colonna `kind` (concorso o articolo) va aggiunta con
+  create: la colonna `kind` (concorso, offerta o articolo) va aggiunta con
   `ALTER TABLE items ADD COLUMN kind TEXT NOT NULL DEFAULT 'contest';` — altrimenti
   il Worker nuovo non legge l'archivio. Le righe già dentro diventano concorsi,
-  che è il valore giusto per un archivio nato prima della divisione.
+  che è il valore giusto per un archivio nato prima della divisione. Il valore
+  `coupon` invece **non chiede nessun `ALTER`**: è un valore nuovo di una colonna
+  che c'è già, quindi chi ha già la `kind` è a posto. Per il resto, la sezione
+  coupon non porta tabelle nuove: le sei fonti si portano in D1 con `npm run
+  db:seed` (le fonti si seminano, non si alterano).
+- **Stessa cosa per la diagnostica delle fonti**: le colonne `last_status`,
+  `last_error` e `last_items` di `sources` vanno aggiunte con
+  `ALTER TABLE sources ADD COLUMN last_status INTEGER;`,
+  `ALTER TABLE sources ADD COLUMN last_error TEXT;` e
+  `ALTER TABLE sources ADD COLUMN last_items INTEGER NOT NULL DEFAULT 0;` prima di
+  pubblicare il codice che le scrive (l'`ALTER` è già stato eseguito sul database
+  di produzione il 16/10/2026). Su un database non ancora migrato la schermata
+  legge `null` e `0` — "non lo so" — invece di inventare un successo, e per una
+  fonte riprovata prima della migrazione scrive `ok, codice non registrato`
+  invece di uno `0 item` che sarebbe una misura inventata: ogni fonte torna alla
+  riga completa al primo tentativo successivo.
 - **Stessa cosa per i filtri personali**: la colonna `filters` di `prefs` va
   aggiunta con `ALTER TABLE prefs ADD COLUMN filters TEXT NOT NULL DEFAULT '{}';`
   prima di pubblicare il codice che la usa (l'`ALTER` è già stato eseguito sul
   database di produzione il 16/10/2026). Il valore `{}` significa "vedi tutto":
   chi non ha mai aperto 🎛 Cosa vedi continua a vedere l'archivio intero.
+- **Stessa cosa per la marca dei concorsi**: la colonna `brand` di `items` va
+  aggiunta con `ALTER TABLE items ADD COLUMN brand TEXT;` più
+  `CREATE INDEX IF NOT EXISTS idx_items_brand ON items (brand);` prima di
+  pubblicare il codice che la legge e la scrive (eseguiti in produzione il
+  16/10/2026). Un database non ancora migrato risponde `null` — "marca non
+  riconosciuta" — invece di rompere la lettura, e le righe già in archivio si
+  riempiono con `npm run brands -- --apply`.
+- **Stessa cosa per il regolamento dei concorsi**: la colonna `rules_url` di
+  `items` va aggiunta con `ALTER TABLE items ADD COLUMN rules_url TEXT;` prima di
+  pubblicare il codice che la scrive — la raccolta **inserisce** quella colonna,
+  quindi su un database non migrato ogni item nuovo fallirebbe. Un database
+  migrato e uno no si comportano diversamente solo in lettura, e in modo sicuro:
+  senza la colonna la chat non trova nessun bando salvato e ricade sul testo
+dell'item, quindi il bottone 📄 Regolamento resta quello di prima. Le righe già in
+  archivio (e la coda di un giro affollato) si riempiono con `npm run rules --
+  --apply`, che rispetta robots.txt come la raccolta, non sovrascrive un bando già
+  salvato e in mancanza di `--apply` si limita a elencare quello che farebbe.
+- **Il bando si trova sulla pagina, quindi può non esserci**: se il regolamento è
+dietro un pulsante JavaScript, dentro un form di iscrizione o in un PDF caricato
+dopo la registrazione, il link non c'è nell'HTML e il bottone non compare — meglio
+  niente che un link sbagliato. Misurato: **10 concorsi su 83** senza bando, tutti
+  di promo che il regolamento non lo pubblicano affatto.
 - **La tabella `sightings` (vantaggio di tempistica) è nata con `npm run db:init`
   il 16/10/2026**, quindi in produzione c'è. Su un database nuovo la crea
   `db:init` insieme alle altre: è una `CREATE TABLE IF NOT EXISTS`, non serve
@@ -823,25 +1222,31 @@ src/
   filters.ts               i filtri di una chat: esclusioni, chiavi, etichette, query
   types.ts                 tipi condivisi
   config/sources.ts        fonti dichiarative + cap di sicurezza
+  config/brands.ts         le marche seguibili e come si riconoscono
   config/env.ts            allow-list chat, variabili mancanti
   lib/text.ts              normalizzazione, URL canonico, SimHash, deduplica titoli
   lib/titles.ts            titoli leggibili (urlati, parole incollate, anno attaccato)
   lib/http.ts              fetch con ETag, retry, timeout
   lib/robots.ts            parsing e matching di robots.txt
   ingest/                  rss.ts, sitemap.ts, httplist.ts, index.ts
-  enrich/                  rules.ts, score.ts, ai.ts, kind.ts (concorso o articolo), freshness.ts,
+  enrich/                  rules.ts, score.ts, ai.ts, kind.ts (concorso, offerta o articolo), freshness.ts,
+                           regulation.ts (il bando del concorso: dal testo o dalla sua pagina),
                            lead.ts (vantaggio di tempistica: canali, viste, statistiche)
   db/                      schema.sql, store.ts, d1.ts, d1-http.ts, memory.ts
   telegram/                api.ts, format.ts, keyboard.ts, screens.ts, bot.ts, digest.ts
   debug/bench.ts           misura della CPU per invocazione (Node e workerd)
 scripts/
   ingest.ts                la raccolta: stessa pipeline, store su API HTTP di D1
+  backfill-brands.ts       riempie la marca dei concorsi già in archivio
+                           (prova a vuoto, poi --apply)
+  backfill-rules.ts        cerca il regolamento dei concorsi già in archivio e di
+                           quelli rimasti in coda (prova a vuoto, poi --apply)
   prune-stale.ts           toglie dall'archivio i falsi positivi (prova a vuoto,
                            poi --apply): stesso cancello della raccolta
   dry-run.ts               prova generale senza inviare nulla
   bench-cpu.ts             stessa misura su Node, con le fonti vere
   seed-sources.ts          genera l'SQL di sincronizzazione delle fonti
-test/                      19 file, 357 test (vitest, nessuna rete tranne i finti)
+test/                      25 file, 493 test (vitest, nessuna rete tranne i finti)
 ```
 
 Il tratto che tiene insieme tutto: **una sola copia dell'SQL**. `src/db/d1.ts`

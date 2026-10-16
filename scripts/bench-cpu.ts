@@ -35,7 +35,10 @@ const quanteFonti = numero("--fonti", 6);
 const runs = numero("--runs", 9);
 
 function toRow(config: (typeof SOURCES)[number]): SourceRow {
-  return { ...config, etag: null, lastModified: null, lastRunAt: null, lastOkAt: null, failStreak: 0 };
+  return {
+    ...config, etag: null, lastModified: null, lastRunAt: null, lastOkAt: null, failStreak: 0,
+    lastStatus: null, lastError: null, lastItems: 0,
+  };
 }
 
 function ms(value: number): string {

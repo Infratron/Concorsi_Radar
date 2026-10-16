@@ -19,7 +19,10 @@ const fontiIndex = args.indexOf("--fonti");
 const maxSources = fontiIndex >= 0 ? Number(args[fontiIndex + 1]) : 4;
 
 function toSourceRow(config: (typeof SOURCES)[number]): SourceRow {
-  return { ...config, etag: null, lastModified: null, lastRunAt: null, lastOkAt: null, failStreak: 0 };
+  return {
+    ...config, etag: null, lastModified: null, lastRunAt: null, lastOkAt: null, failStreak: 0,
+    lastStatus: null, lastError: null, lastItems: 0,
+  };
 }
 
 function itemsForDigest(items: ItemRow[], now: Date): ItemRow[] {
@@ -69,8 +72,14 @@ async function main(): Promise<void> {
   // divisione, altrimenti non è una prova generale.
   const items = archivio.filter((item) => item.kind === "contest");
   const news = archivio.filter((item) => item.kind === "news");
-  console.log(`\nArchivio di questa esecuzione: ${items.length} concorsi, ${news.length} news.`);
+  const coupon = archivio.filter((item) => item.kind === "coupon");
+  console.log(
+    `\nArchivio di questa esecuzione: ${items.length} concorsi, ${coupon.length} coupon, ${news.length} news.`,
+  );
   for (const articolo of news) console.log(`  📰 ${articolo.title} → ${articolo.url}`);
+  // I coupon non entrano nel digest né negli avvisi (vedi src/telegram/digest.ts):
+  // la prova generale li mostra a parte, come farebbe 💶 Coupon e rimborsi.
+  for (const offerta of coupon) console.log(`  💶 ${offerta.title} → ${offerta.url}`);
   if (items.length === 0) {
     console.log("\nNessun concorso nuovo da mostrare.");
     return;

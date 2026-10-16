@@ -1,11 +1,15 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { createMemoryStore, type MemoryStore } from "../src/db/memory.ts";
-import { dueSources, runIngest, type IngestSummary } from "../src/pipeline.ts";
+import { dueSources, expireOldItems, runIngest, type IngestSummary } from "../src/pipeline.ts";
+// La vita di un coupon è UNA regola, scritta dove si applica all'ingresso
+// (src/enrich/freshness.ts) e riusata dalla pulizia periodica: qui si legge da lì.
+import { COUPON_TTL_DAYS } from "../src/enrich/freshness.ts";
 import { DIGEST_MAX_ITEMS, sendDigests, sendInstantAlerts } from "../src/telegram/digest.ts";
 import { defaultFilters } from "../src/filters.ts";
 import { MAX_MESSAGE_CHARS } from "../src/telegram/api.ts";
 import type { TelegramClient } from "../src/telegram/api.ts";
-import type { FetchLike, Prefs, SourceRow } from "../src/types.ts";
+import type { FetchLike, ItemRow, Prefs, SourceRow } from "../src/types.ts";
+import { SCORE_WEIGHTS } from "../src/enrich/score.ts";
 
 /**
  * Test end-to-end del percorso reale: due fonti RSS finte → ingestione →
@@ -22,6 +26,7 @@ function source(id: string, name: string, url: string): SourceRow {
   return {
     id, name, kind: "rss", url, category: "online", tags: ["aggregatore"], cadenceMin: 15, enabled: true,
     etag: null, lastModified: null, lastRunAt: null, lastOkAt: null, failStreak: 0,
+    lastStatus: null, lastError: null, lastItems: 0,
   };
 }
 
@@ -150,6 +155,76 @@ describe("pipeline · ingestione e deduplica cross-fonte", () => {
     expect(barilla[0].title).not.toContain("Scontrino Felice");
     expect(barilla[0].deadline).toBe("2026-10-25");
     expect(barilla[0].score).toBeGreaterThanOrEqual(80);
+  });
+
+  it("riconosce la marca all'ingestione e premia quelle che segui", async () => {
+    const fonti = [
+      source("fonte-a", "Aggregatore A", "https://a.example/feed"),
+      source("fonte-b", "Scontrino Felice · concorsi con acquisto", "https://b.example/feed"),
+    ];
+    const ingerisci = async (store: MemoryStore, favorites: string[]): Promise<void> => {
+      store.seedSources(fonti);
+      await store.upsertPrefs({ ...prefs(200), filters: { ...defaultFilters(), favoriteBrands: favorites } });
+      await runIngest({ store, fetcher: fetcherFor(PAGES), ai: null }, NOW, SOLO_FONTI_DEL_TEST);
+    };
+    const senzaPreferiti = createMemoryStore();
+    await ingerisci(senzaPreferiti, []);
+    const conPreferiti = createMemoryStore();
+    await ingerisci(conPreferiti, ["ferrero"]);
+
+    const cerca = async (store: MemoryStore, testo: string): Promise<ItemRow | undefined> =>
+      (await store.queryItems({ limit: 50 })).find((item) => item.title.toLowerCase().includes(testo));
+
+    // La marca si riconosce dal titolo, non dalla fonte: quel concorso arriva da
+    // un aggregatore e non ha nessun tag "ferrero" addosso.
+    expect((await cerca(senzaPreferiti, "nutella"))?.brand).toBe("ferrero");
+    expect((await cerca(conPreferiti, "nutella"))?.brand).toBe("ferrero");
+    // Seguirla vale dieci punti, e solo per lei: Barilla non si muove.
+    const prima = await cerca(senzaPreferiti, "nutella");
+    const dopo = await cerca(conPreferiti, "nutella");
+    expect((dopo?.score ?? 0) - (prima?.score ?? 0)).toBe(SCORE_WEIGHTS.favoriteBrand);
+    expect((await cerca(conPreferiti, "barilla"))?.score).toBe((await cerca(senzaPreferiti, "barilla"))?.score);
+  });
+
+  it("racconta l'esito di OGNI fonte: codice HTTP, item letti e chi non ha risposto", async () => {
+    // Una fonte risponde 200 con tre item, l'altra 403: sono le due righe che il
+    // report delle prime raccolte manda in chat, e lo stato che 📡 Fonti mostra
+    // per sempre — prima esistevano solo nel log del runner.
+    const fetcher: FetchLike = async (input) =>
+      input === "https://a.example/feed"
+        ? new Response(PAGES["https://a.example/feed"], { status: 200, headers: { "content-type": "application/rss+xml" } })
+        : new Response("no", { status: 403 });
+
+    const summary = await runIngest({ store, fetcher, ai: null }, NOW, SOLO_FONTI_DEL_TEST);
+
+    expect(summary.attempts).toHaveLength(2);
+    const andata = summary.attempts.find((attempt) => attempt.sourceId === "fonte-a");
+    expect(andata).toMatchObject({
+      name: "Aggregatore A",
+      at: NOW.toISOString(),
+      httpStatus: 200,
+      items: 3,
+      error: null,
+      notModified: false,
+      robotsDenied: false,
+    });
+    const fallita = summary.attempts.find((attempt) => attempt.sourceId === "fonte-b");
+    expect(fallita?.httpStatus).toBe(403);
+    expect(fallita?.error).toBe("HTTP 403");
+    expect(fallita?.items).toBe(0);
+
+    // Lo stesso esito resta in archivio, riga per riga: è quello che la chat legge.
+    const righe = await store.getSources();
+    const rigaA = righe.find((riga) => riga.id === "fonte-a");
+    expect(rigaA?.lastStatus).toBe(200);
+    expect(rigaA?.lastItems).toBe(3);
+    expect(rigaA?.lastOkAt).toBe(NOW.toISOString());
+    const rigaB = righe.find((riga) => riga.id === "fonte-b");
+    expect(rigaB?.lastStatus).toBe(403);
+    expect(rigaB?.lastError).toBe("HTTP 403");
+    expect(rigaB?.lastItems).toBe(0);
+    expect(rigaB?.failStreak).toBe(1);
+    expect(rigaB?.lastOkAt).toBeNull();
   });
 
   it("registra la vista di ogni concorso e di ogni fonte, una volta sola", async () => {
@@ -678,7 +753,7 @@ describe("pipeline · raccolta completa (GitHub Actions)", () => {
     const vecchia = new Date(NOW.getTime() - 3_600_000).toISOString();
     for (const row of LARGHE) {
       await store.recordSourceRun(row.id, {
-        ok: true, httpStatus: 200, etag: null, lastModified: null, error: null,
+        ok: true, httpStatus: 200, etag: null, lastModified: null, error: null, items: 1,
         now: row.id === "largo-0" ? vecchia : NOW.toISOString(),
       });
     }
@@ -838,3 +913,196 @@ describe("pipeline · solo concorsi ancora attivi", () => {
     expect(sent.join("\n")).not.toContain("Tazzine");
   });
 });
+
+describe("pipeline · coupon e rimborsi", () => {
+  it("una fonte di coupon produce offerte, non concorsi né viste", async () => {
+    const store = createMemoryStore();
+    const offerte = source("fonte-coupon", "Buoni sconto", "https://coupon.example/feed");
+    // È la categoria a dichiarare che cosa pubblica la fonte: da qui la
+    // classificazione la legge (src/enrich/kind.ts).
+    offerte.category = "coupon";
+    store.seedSources([offerte]);
+    await store.upsertPrefs(prefs(200));
+
+    const summary = await runIngest(
+      {
+        store,
+        ai: null,
+        fetcher: fetcherFor({
+          "https://coupon.example/feed": rssFeed([
+            {
+              title: "Buono sconto Crema Novi Fondente da 1,50 euro",
+              link: "https://coupon.example/novi",
+              description: "Stampa il coupon e portalo al supermercato: 1,50 euro di sconto.",
+            },
+            {
+              title: "Cashback Ymea: richiedi 25 euro di rimborso",
+              link: "https://coupon.example/ymea",
+              description: "Acquista il prodotto e richiedi il rimborso entro il 30 novembre 2026.",
+            },
+            {
+              // Il rimborso che annuncia anche un premio: quella metà è un
+              // concorso, e non si nasconde dalla sezione dei concorsi.
+              title: "Cashback Fabuloso: 5 euro di rimborso e vinci una lavatrice Samsung",
+              link: "https://coupon.example/fabuloso",
+              description: "Rimborso di 5 euro con lo scontrino, in palio una lavatrice.",
+            },
+          ]),
+        }),
+      },
+      NOW,
+      UNA_FONTE_DEL_TEST,
+    );
+
+    const items = await store.queryItems({ limit: 10 });
+    expect(items.filter((row) => row.kind === "coupon")).toHaveLength(2);
+    expect(items.filter((row) => row.kind === "contest")).toHaveLength(1);
+    expect(summary.itemsNew).toBe(3);
+
+    // Le viste restano dei concorsi: /vantaggio misura l'anticipo su quello su cui
+    // si partecipa, e una fonte di coupon giudicata dalle viste risulterebbe
+    // sempre vuota (vedi SourceStat in src/db/store.ts).
+    const viste = await store.listSightings("2026-01-01T00:00:00.000Z");
+    expect(viste).toHaveLength(1);
+    expect(viste.every((vista) => vista.kind === "contest")).toBe(true);
+  });
+
+  it("un coupon vecchio esce dall'elenco da solo", async () => {
+    const store = createMemoryStore();
+    await store.upsertPrefs(prefs(200));
+    const vecchio = new Date(NOW.getTime() - (COUPON_TTL_DAYS + 1) * 86_400_000).toISOString();
+    await store.insertItem(
+      newItem({ title: "Buono sconto vecchio", kind: "coupon", firstSeenAt: vecchio, lastSeenAt: vecchio }),
+    );
+    await store.insertItem(newItem({ title: "Buono sconto di oggi", kind: "coupon" }));
+    // Un concorso senza scadenza non si tocca per vecchiaia: la vita corta è del
+    // coupon, che una scadenza non ce l'ha quasi mai.
+    await store.insertItem(
+      newItem({ title: "Concorso senza scadenza", kind: "contest", firstSeenAt: vecchio, lastSeenAt: vecchio, deadline: null }),
+    );
+
+    const quanti = await expireOldItems(store, NOW);
+
+    expect(quanti).toBe(1);
+    const tutti = await store.queryItems({ limit: 10 });
+    const statoDi = (titolo: string): string | undefined => tutti.find((row) => row.title === titolo)?.status;
+    expect(statoDi("Buono sconto vecchio")).toBe("expired");
+    expect(statoDi("Buono sconto di oggi")).toBe("new");
+    expect(statoDi("Concorso senza scadenza")).toBe("new");
+  });
+});
+
+describe("pipeline · regolamento sulla pagina del concorso", () => {
+  /** Il fetcher dei test, con l'elenco delle pagine che ha davvero letto. */
+  function contaFetcher(pages: Record<string, string>): { fetcher: FetchLike; letture: string[] } {
+    const letture: string[] = [];
+    const base = fetcherFor(pages);
+    const fetcher: FetchLike = async (input, init) => {
+      letture.push(String(input));
+      return base(input, init);
+    };
+    return { fetcher, letture };
+  }
+
+  it("il bando che sta solo nella pagina finisce sull'item", async () => {
+    const store = createMemoryStore();
+    store.seedSources([source("fonte-a", "Aggregatore A", "https://a.example/feed")]);
+    await store.upsertPrefs(prefs(200));
+    const { fetcher, letture } = contaFetcher({
+      "https://a.example/feed": rssFeed([
+        {
+          title: "Concorso Barilla: vinci una Fiat Panda",
+          link: "https://a.example/barilla",
+          // Il riassunto non nomina NESSUN regolamento: è il caso per cui il
+          // bottone non c'era.
+          description: "Concorso gratuito senza obbligo di acquisto. Scade il 25 ottobre 2026.",
+        },
+      ]),
+      "https://a.example/barilla": `<html><body><a href="/files/bando-barilla.pdf">Regolamento completo</a></body></html>`,
+    });
+
+    const summary = await runIngest({ store, ai: null, fetcher }, NOW, UNA_FONTE_DEL_TEST);
+
+    const item = (await store.queryItems({ limit: 5 }))[0];
+    expect(item?.rulesUrl).toBe("https://a.example/files/bando-barilla.pdf");
+    expect(letture).toContain("https://a.example/barilla");
+    // La nota del giro dice quante pagine sono state lette per cercare un bando:
+    // è il numero con cui ci si accorge che il tetto per giro è basso, o che le
+    // pagine hanno smesso di rispondere.
+    expect(summary.notes.some((nota) => /^regolamenti: 1 trovati su 1 pagine/.test(nota))).toBe(true);
+  });
+
+  it("se il bando è già nel riassunto non apre la pagina", async () => {
+    const store = createMemoryStore();
+    store.seedSources([source("fonte-a", "Aggregatore A", "https://a.example/feed")]);
+    await store.upsertPrefs(prefs(200));
+    const { fetcher, letture } = contaFetcher({
+      "https://a.example/feed": rssFeed([
+        {
+          title: "Concorso Barilla: vinci una Fiat Panda",
+          link: "https://a.example/barilla",
+          description: "Concorso gratuito. Regolamento su https://a.example/bando-barilla.pdf .",
+        },
+      ]),
+    });
+
+    const summary = await runIngest({ store, ai: null, fetcher }, NOW, UNA_FONTE_DEL_TEST);
+
+    const item = (await store.queryItems({ limit: 5 }))[0];
+    expect(item?.rulesUrl).toBe("https://a.example/bando-barilla.pdf");
+    expect(letture).not.toContain("https://a.example/barilla");
+    expect(summary.notes.some((nota) => nota.startsWith("regolamenti:"))).toBe(false);
+  });
+
+  it("un coupon non paga la ricerca del bando", async () => {
+    const store = createMemoryStore();
+    const offerte = source("fonte-coupon", "Buoni sconto", "https://coupon.example/feed");
+    offerte.category = "coupon";
+    store.seedSources([offerte]);
+    await store.upsertPrefs(prefs(200));
+    const { fetcher, letture } = contaFetcher({
+      "https://coupon.example/feed": rssFeed([
+        {
+          title: "Buono sconto Crema Novi Fondente da 1,50 euro",
+          link: "https://coupon.example/novi",
+          description: "Stampa il coupon e portalo al supermercato.",
+        },
+      ]),
+    });
+
+    await runIngest({ store, ai: null, fetcher }, NOW, UNA_FONTE_DEL_TEST);
+
+    const item = (await store.queryItems({ limit: 5 }))[0];
+    expect(item?.kind).toBe("coupon");
+    // Un'offerta non ha un bando: non si apre la sua pagina per cercarlo.
+    expect(item?.rulesUrl).toBeNull();
+    expect(letture).not.toContain("https://coupon.example/novi");
+  });
+});
+
+/** Un item completo: i campi che non contano restano ai valori di comodo. */
+function newItem(partial: Partial<import("../src/types.ts").NewItem> & Pick<import("../src/types.ts").NewItem, "title">) {
+  return {
+    sourceId: "fonte-coupon",
+    url: `https://coupon.example/${partial.title.replace(/\W+/g, "-").toLowerCase()}`,
+    urlKey: `key-${partial.title.replace(/\W+/g, "-").toLowerCase()}`,
+    simhash: "0000000000000000",
+    summary: "",
+    publishedAt: null,
+    firstSeenAt: NOW.toISOString(),
+    lastSeenAt: NOW.toISOString(),
+    deadline: null,
+    prize: null,
+    participation: null,
+    prizeValue: 0,
+    effort: 0.5,
+    requiresPurchase: false,
+    tags: [],
+    score: 30,
+    clusterId: null,
+    status: "new" as const,
+    aiUsed: false,
+    kind: "contest" as const,
+    ...partial,
+  };
+}

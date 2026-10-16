@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { STALE_PAGE_DAYS, indexPageUrls, staleItemReason, staleReason } from "../src/enrich/freshness.ts";
+import {
+  COUPON_TTL_DAYS,
+  STALE_PAGE_DAYS,
+  indexPageUrls,
+  staleItemReason,
+  staleReason,
+  type FreshnessInput,
+} from "../src/enrich/freshness.ts";
 
 /**
  * Il cancello di "concorso ancora attivo".
@@ -11,7 +18,7 @@ import { STALE_PAGE_DAYS, indexPageUrls, staleItemReason, staleReason } from "..
 
 const NOW = new Date("2026-10-16T10:00:00.000Z");
 
-function item(partial: Partial<Parameters<typeof staleReason>[0]> = {}) {
+function item(partial: Partial<FreshnessInput> = {}): FreshnessInput {
   return {
     title: "Concorso esempio",
     url: "https://www.esempio.it/concorsi/esempio",
@@ -19,6 +26,8 @@ function item(partial: Partial<Parameters<typeof staleReason>[0]> = {}) {
     publishedAt: null,
     deadline: null,
     fromListing: false,
+    // Di default è un concorso: le prove sui coupon lo dicono esplicitamente.
+    kind: "contest",
     ...partial,
   };
 }
@@ -179,6 +188,7 @@ describe("cancello · concorso ancora attivo", () => {
           summary: "",
           publishedAt: "2025-07-02T00:00:00.000Z",
           deadline: null,
+          kind: "contest",
         },
         NOW,
       ),
@@ -194,10 +204,29 @@ describe("cancello · concorso ancora attivo", () => {
           summary: "",
           publishedAt: null,
           deadline: null,
+          kind: "contest",
         },
         NOW,
       ),
     ).toBe("nessun segnale di concorso");
+  });
+
+  it("le offerte invecchiano prima dei concorsi", () => {
+    // Un coupon non dichiara quasi mai una scadenza: la sua vita si misura dalla
+    // pubblicazione, ed è corta (COUPON_TTL_DAYS). Mezzo anno dopo la sua data di
+    // pubblicazione una pagina di concorso è ancora in tempo, un buono sconto no.
+    const vecchio = new Date(NOW.getTime() - (COUPON_TTL_DAYS + 10) * 86_400_000).toISOString();
+    expect(
+      staleReason(item({ kind: "coupon", title: "Buono sconto Novi", publishedAt: vecchio }), NOW),
+    ).toBe(`offerta vecchia (${COUPON_TTL_DAYS + 10} giorni)`);
+    // Lo stesso item come concorso passa: la regola è del coupon.
+    expect(staleReason(item({ title: "Buono sconto Novi", publishedAt: vecchio }), NOW)).toBeNull();
+    // Senza data di pubblicazione non si giudica: "non lo so" non è una prova.
+    expect(staleReason(item({ kind: "coupon", title: "Buono sconto Novi" }), NOW)).toBeNull();
+    // E una scadenza futura salva comunque l'offerta, come i concorsi.
+    expect(
+      staleReason(item({ kind: "coupon", publishedAt: vecchio, deadline: "2026-11-30" }), NOW),
+    ).toBeNull();
   });
 });
 

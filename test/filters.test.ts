@@ -12,6 +12,7 @@ import {
   filtersFor,
   isSeeingAll,
   mutedSourceIds,
+  onlyFavoriteBrands,
   parseFilters,
   starLabel,
   withFilterChange,
@@ -158,6 +159,8 @@ describe("filtri · traduzione in query", () => {
 describe("filtri · lettura dal database", () => {
   it("rilegge quello che ha scritto", () => {
     const filters = {
+      favoriteBrands: ["ferrero", "conad"],
+      brandsOnly: true,
       mutedSources: ["vincimi"],
       mutedCategories: ["giftcard" as const],
       mutedTags: ["food"],
@@ -165,6 +168,11 @@ describe("filtri · lettura dal database", () => {
       minScore: 75,
     };
     expect(parseFilters(JSON.stringify(filters))).toEqual(filters);
+  });
+
+  it("scarta le marche che non sono più nel registro", () => {
+    const filters = parseFilters(JSON.stringify({ favoriteBrands: ["ferrero", "marca-sparita", "ferrero"] }));
+    expect(filters.favoriteBrands).toEqual(["ferrero"]);
   });
 
   it("un valore rovinato non rompe niente: si torna a vedere tutto", () => {
@@ -202,5 +210,62 @@ describe("filtri · conferma del tocco", () => {
     expect(etichetta({ kind: "free", value: true })).toBe("🎁 Solo senza acquisto");
     expect(etichetta({ kind: "free", value: false })).toContain("acquisto");
     expect(etichetta({ kind: "reset" })).toContain("tutto");
+    expect(etichetta({ kind: "brand", value: "ferrero" })).toContain("segui");
+  });
+});
+
+describe("filtri · preferiti per marca", () => {
+  it("seguire una marca non nasconde niente e non conta come filtro", () => {
+    const filters = withFilterChange(defaultFilters(), { kind: "brand", value: "ferrero" });
+    expect(filters.favoriteBrands).toEqual(["ferrero"]);
+    expect(activeFilterCount(filters)).toBe(0);
+    expect(isSeeingAll(filters)).toBe(true);
+    expect(filtersFor(filters, { limit: 6 })).toEqual({ limit: 6 });
+  });
+
+  it("lo stesso tocco la toglie dall'elenco", () => {
+    const acceso = withFilterChange(defaultFilters(), { kind: "brand", value: "conad" });
+    expect(withFilterChange(acceso, { kind: "brand", value: "conad" }).favoriteBrands).toEqual([]);
+    expect(withFilterChange(acceso, { kind: "brand", value: "ferrero" }).favoriteBrands).toEqual(["conad", "ferrero"]);
+  });
+
+  it("il filtro \"solo queste marche\" nasconde il resto e si vede nel conteggio", () => {
+    const filters = withFilterChange(
+      withFilterChange(defaultFilters(), { kind: "brand", value: "ferrero" }),
+      { kind: "brandsOnly", value: true },
+    );
+    expect(onlyFavoriteBrands(filters)).toBe(true);
+    expect(activeFilterCount(filters)).toBe(1);
+    expect(isSeeingAll(filters)).toBe(false);
+    expect(filtersFor(filters, { kinds: ["contest"] })).toEqual({ kinds: ["contest"], brands: ["ferrero"] });
+  });
+
+  it("acceso senza marche da seguire non filtra niente: non è un filtro attivo", () => {
+    const filters = withFilterChange(defaultFilters(), { kind: "brandsOnly", value: true });
+    expect(onlyFavoriteBrands(filters)).toBe(false);
+    expect(activeFilterCount(filters)).toBe(0);
+    expect(isSeeingAll(filters)).toBe(true);
+    expect(filtersFor(filters, { limit: 6 })).toEqual({ limit: 6 });
+  });
+
+  it("svuotare l'elenco spegne anche il filtro", () => {
+    const filters = withFilterChange(
+      withFilterChange(
+        withFilterChange(defaultFilters(), { kind: "brand", value: "ferrero" }),
+        { kind: "brandsOnly", value: true },
+      ),
+      { kind: "brandsReset" },
+    );
+    expect(filters.favoriteBrands).toEqual([]);
+    expect(filters.brandsOnly).toBe(false);
+    expect(isSeeingAll(filters)).toBe(true);
+  });
+
+  it("\"vedi di nuovo tutto\" rimette anche le marche e il filtro", () => {
+    const filters = withFilterChange(
+      withFilterChange(defaultFilters(), { kind: "brand", value: "ferrero" }),
+      { kind: "brandsOnly", value: true },
+    );
+    expect(withFilterChange(filters, { kind: "reset" })).toEqual(defaultFilters());
   });
 });

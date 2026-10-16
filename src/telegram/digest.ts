@@ -5,6 +5,7 @@ import type { TelegramClient } from "./api.ts";
 import { daysLeft, formatDigest, formatItemCard, localDateString, localHour, type DigestSection } from "./format.ts";
 import { digestKeyboard, instantKeyboard } from "./keyboard.ts";
 import { staleItemReason } from "../enrich/freshness.ts";
+import { isSamePage, regulationUrlFromText } from "../enrich/regulation.ts";
 import { filtersFor } from "../filters.ts";
 
 /**
@@ -68,11 +69,16 @@ export function isQuietHour(prefs: Prefs, now: Date): boolean {
 
 /** URL del regolamento dentro il testo dell'item, se ne troviamo uno diverso dalla pagina. */
 export function regolamentoUrl(item: ItemRow): string | null {
-  const haystack = `${item.summary} ${item.participation ?? ""}`;
-  const match = /https?:\/\/[^\s"'<>)]*regolament[^\s"'<>)]*/i.exec(haystack);
-  if (!match) return null;
-  const url = match[0].replace(/[.,;]+$/, "");
-  return url === item.url ? null : url;
+  // Prima quello che la pipeline ha trovato SULLA PAGINA del concorso e salvato
+  // sull'item: è il caso in cui il riassunto del feed il bando non lo nominava
+  // affatto, ed è il motivo per cui questa colonna esiste.
+  const salvato = item.rulesUrl ?? null;
+  if (salvato !== null && !isSamePage(salvato, item.url)) return salvato;
+
+  // Poi il testo dell'item: copre le righe raccolte prima di quella ricerca e i
+  // feed che il link ce l'hanno nel riassunto. Stessa funzione dell'ingestione,
+  // quindi la definizione di "regolamento" è una sola (src/enrich/regulation.ts).
+  return regulationUrlFromText(`${item.summary} ${item.participation ?? ""}`, item.url);
 }
 
 function sectionsFor(items: ItemRow[], now: Date): DigestSection[] {

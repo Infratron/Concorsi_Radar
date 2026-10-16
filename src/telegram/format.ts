@@ -41,6 +41,21 @@ export function localHour(now: Date): number {
   return hour === 24 ? 0 : hour;
 }
 
+/**
+ * Ora locale italiana "12:03": è l'ora che il report della raccolta mette accanto
+ * a ogni fonte ("ha risposto alle 12:03"). Niente giorno: il report è di adesso.
+ */
+export function localTimeShort(now: Date): string {
+  const parts = new Intl.DateTimeFormat("it-IT", {
+    timeZone: ROME,
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).formatToParts(now);
+  const get = (type: string): string => parts.find((p) => p.type === type)?.value ?? "";
+  return `${get("hour")}:${get("minute")}`;
+}
+
 /** Data locale italiana come YYYY-MM-DD (per confronti con le scadenze). */
 export function localDateString(now: Date): string {
   const parts = new Intl.DateTimeFormat("en-CA", {
@@ -92,7 +107,11 @@ function purchaseLabel(item: ItemRow): string {
 }
 
 function tagLabel(item: ItemRow, max = 4): string {
-  const tags = item.tags.filter((tag) => tag !== "aggregatore" && tag !== "sitemap" && tag !== "news");
+  // Via i tag che dicono solo da dove arriva l'item o che cosa è: "coupon" e
+  // "cashback" li dice già la sezione (e il 💶 della riga).
+  const tags = item.tags.filter(
+    (tag) => tag !== "aggregatore" && tag !== "sitemap" && tag !== "news" && tag !== "coupon" && tag !== "cashback",
+  );
   if (tags.length === 0) return "";
   return `🏷 ${escapeHtml(tags.slice(0, max).join(", "))}`;
 }
@@ -102,18 +121,28 @@ export function formatItemLine(item: ItemRow, now: Date): string {
   const left = daysLeft(item.deadline, now);
   const urgency = left !== null && left >= 0 && left <= 7 ? ` ⏳${left}gg` : "";
   const title = truncate(item.title, 90);
-  return `⭐${item.score}${urgency} · <a href="${escapeHtml(item.url)}">${escapeHtml(title)}</a>`;
+  // 💶 al posto del punteggio: un buono sconto non si giudica con "quanto vale la
+  // pena guardare questo concorso" (premio, sforzo, scadenza).
+  const testa = item.kind === "coupon" ? "💶" : `⭐${item.score}`;
+  return `${testa}${urgency} · <a href="${escapeHtml(item.url)}">${escapeHtml(title)}</a>`;
 }
 
-/** Scheda completa di un concorso, usata per gli avvisi istantanei. */
+/** Scheda completa di un concorso, usata dagli avvisi istantanei e dalle schede. */
 export function formatItemCard(item: ItemRow, now: Date): string {
   const lines: string[] = [];
   const articolo = item.kind === "news";
-  lines.push(`${articolo ? "📰" : "🎁"} <b>${item.score}</b>/100${deadlineLabel(item, now)}${purchaseLabel(item)}`);
+  const offerta = item.kind === "coupon";
+  lines.push(
+    offerta
+      ? `💶 <b>Coupon o rimborso</b>${deadlineLabel(item, now)}${purchaseLabel(item)}`
+      : `${articolo ? "📰" : "🎁"} <b>${item.score}</b>/100${deadlineLabel(item, now)}${purchaseLabel(item)}`,
+  );
   lines.push(`<b><a href="${escapeHtml(item.url)}">${escapeHtml(truncate(item.title, 160))}</a></b>`);
-  // Chi apre la scheda deve sapere se quel link è il concorso o un pezzo che ne
-  // parla: è la differenza che l'utente ha chiesto di rendere evidente.
+  // Chi apre la scheda deve sapere che cosa ha davanti: la pagina del concorso, un
+  // pezzo che ne parla, o un'offerta da spendere. È la differenza che l'utente ha
+  // chiesto di rendere evidente.
   if (articolo) lines.push("📰 Articolo sul concorso: il link non è la pagina ufficiale.");
+  if (offerta) lines.push("💶 Buono sconto o rimborso: qui non si vince niente, si spende meno.");
   if (item.prize) lines.push(`🏆 Premio: ${escapeHtml(truncate(item.prize, 160))}`);
   if (item.participation) lines.push(`📝 Come partecipare: ${escapeHtml(truncate(item.participation, 160))}`);
   const tags = tagLabel(item);

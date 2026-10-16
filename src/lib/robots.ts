@@ -11,6 +11,14 @@ export interface RobotsRules {
 
 const EMPTY: RobotsRules = { allow: [], disallow: [], crawlDelay: null };
 
+/**
+ * Come si scrive il motivo quando robots.txt ci vieta la raccolta: in archivio,
+ * in chat e nei report. Non è un guasto della fonte — la fonte risponde, siamo
+ * noi a non poterla leggere — e senza un testo condiviso la riga in chat
+ * resterebbe senza codice HTTP e senza spiegazione.
+ */
+export const ROBOTS_DENIED_REASON = "robots.txt vieta la raccolta";
+
 /** Estrae i gruppi che si applicano al nostro User-Agent (con fallback su "*"). */
 export function parseRobots(body: string, userAgent: string): RobotsRules {
   const uaLower = userAgent.toLowerCase();

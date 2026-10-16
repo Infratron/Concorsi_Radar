@@ -32,14 +32,21 @@ function needsRobotsCheck(source: SourceRow): boolean {
   return source.kind === "html" || source.kind === "sitemap";
 }
 
-async function robotsDenied(
-  source: SourceRow,
+/**
+ * robots.txt per un URL qualsiasi, non solo per le fonti: serve anche alla
+ * ricerca del regolamento, che apre la pagina di UN concorso
+ * (src/enrich/regulation.ts). Fail-open come sopra: robots assente, 404 o errore
+ * = permesso, e l'esito resta in cache 24 ore in D1 (tabella `robots`), quindi
+ * una pagina di concorso non scarica `robots.txt` a ogni giro.
+ */
+export async function robotsAllows(
+  url: string,
   deps: IngestDeps,
   ctx: IngestContext,
   now: Date,
 ): Promise<boolean> {
-  const origin = originOf(source.url);
-  if (!origin) return false;
+  const origin = originOf(url);
+  if (!origin) return true;
 
   const ttlMs = (deps.robotsTtlHours ?? DEFAULT_ROBOTS_TTL_HOURS) * 3_600_000;
   let body: string | null = null;
@@ -54,16 +61,27 @@ async function robotsDenied(
     await deps.store.saveRobots(origin, body, now.toISOString());
   }
 
-  if (!body || body.trim().length === 0) return false;
+  // robots.txt assente o vuoto = permesso: `true` è "si può leggere", che è il
+  // senso di questa funzione (il suo contrario sta in robotsDenied).
+  if (!body || body.trim().length === 0) return true;
 
   let path = "/";
   try {
-    const parsed = new URL(source.url);
+    const parsed = new URL(url);
     path = `${parsed.pathname}${parsed.search}`;
   } catch {
-    return false;
+    return true;
   }
-  return !isPathAllowed(parseRobots(body, deps.userAgent), path);
+  return isPathAllowed(parseRobots(body, deps.userAgent), path);
+}
+
+async function robotsDenied(
+  source: SourceRow,
+  deps: IngestDeps,
+  ctx: IngestContext,
+  now: Date,
+): Promise<boolean> {
+  return !(await robotsAllows(source.url, deps, ctx, now));
 }
 
 /** Su un <sitemapindex> segue al più 3 figlie, preferendo quelle sui concorsi. */

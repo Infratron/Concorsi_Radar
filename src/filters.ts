@@ -1,4 +1,5 @@
 import { SOURCES } from "./config/sources.ts";
+import { brandLabel, isBrandId } from "./config/brands.ts";
 import type { Category, ChatFilters, ItemQuery } from "./types.ts";
 
 /**
@@ -13,9 +14,16 @@ import type { Category, ChatFilters, ItemQuery } from "./types.ts";
  * Sono tutti elenchi di ESCLUSIONI: una fonte o un tipo nuovi sono visibili a
  * tutti finché qualcuno non li spegne. Con l'elenco inverso (inclusioni) una
  * fonte aggiunta oggi resterebbe invisibile a chi non la conosce.
+ *
+ * L'unica eccezione sono le marche seguite (⭐ Preferiti per marca), e la
+ * differenza è voluta: accendere una marca non toglie niente a nessuno — aggiunge
+ * un punteggio più alto e la sua sezione — mentre è `brandsOnly` a nascondere il
+ * resto, e quello è un filtro come gli altri.
  */
 
 export const DEFAULT_FILTERS: ChatFilters = {
+  favoriteBrands: [],
+  brandsOnly: false,
   mutedSources: [],
   mutedCategories: [],
   mutedTags: [],
@@ -25,7 +33,15 @@ export const DEFAULT_FILTERS: ChatFilters = {
 
 /** Copia nuova dei filtri di default: nessuno può mutare la costante. */
 export function defaultFilters(): ChatFilters {
-  return { mutedSources: [], mutedCategories: [], mutedTags: [], freeOnly: false, minScore: 0 };
+  return {
+    favoriteBrands: [],
+    brandsOnly: false,
+    mutedSources: [],
+    mutedCategories: [],
+    mutedTags: [],
+    freeOnly: false,
+    minScore: 0,
+  };
 }
 
 /**
@@ -38,14 +54,17 @@ export function starLabel(soglia: number): string {
   return soglia === 0 ? "⭐ Tutte" : `⭐ ${soglia}+`;
 }
 
-/** Ordine in cui i filtri si mostrano: dal più ampio al più specifico. */
-export const CATEGORY_ORDER: Category[] = ["online", "punto_vendita", "scontrino", "giftcard", "altro"];
+/** Ordine in cui i filtri si mostrano: prima i concorsi, poi le offerte, poi il resto. */
+export const CATEGORY_ORDER: Category[] = ["online", "punto_vendita", "scontrino", "giftcard", "coupon", "altro"];
 
 export const CATEGORY_LABELS: Record<Category, string> = {
   online: "🌐 Online",
   punto_vendita: "🏬 Punto vendita",
   scontrino: "🧾 Scontrino",
   giftcard: "💳 Gift card",
+  // Le fonti di coupon: spegnere questa categoria toglie di mezzo 💶 Coupon e
+  // rimborsi, e nient'altro (i concorsi di quelle insegne arrivano da altrove).
+  coupon: "💶 Coupon e rimborsi",
   altro: "📦 Altro",
 };
 
@@ -107,9 +126,15 @@ export function mutedSourceIds(filters: ChatFilters): string[] {
   return [...spenti];
 }
 
-/** Quanti filtri sono accesi: è il numero che l'interfaccia mostra sul bottone. */
+/**
+ * Quanti filtri sono accesi: è il numero che l'interfaccia mostra sul bottone.
+ * Le marche seguite contano solo se il filtro "solo queste marche" è acceso: la
+ * lista dei preferiti da sola non nasconde niente, e contarli direbbe all'utente
+ * che sta perdendo qualcosa quando non è vero.
+ */
 export function activeFilterCount(filters: ChatFilters): number {
   return (
+    (onlyFavoriteBrands(filters) ? 1 : 0) +
     filters.mutedSources.length +
     filters.mutedCategories.length +
     filters.mutedTags.length +
@@ -118,9 +143,19 @@ export function activeFilterCount(filters: ChatFilters): number {
   );
 }
 
+/**
+ * true quando il filtro "solo le marche che seguo" è davvero operante: acceso e
+ * con almeno una marca da seguire. Senza marche non filtra niente, e trattarlo
+ * come un filtro attivo farebbe mentire il numero del bottone.
+ */
+export function onlyFavoriteBrands(filters: ChatFilters): boolean {
+  return filters.brandsOnly && filters.favoriteBrands.length > 0;
+}
+
 /** true quando la chat vede tutto: serve a non scrivere "filtri attivi" per niente. */
 export function isSeeingAll(filters: ChatFilters): boolean {
   return (
+    !onlyFavoriteBrands(filters) &&
     filters.mutedSources.length === 0 &&
     filters.mutedCategories.length === 0 &&
     filters.mutedTags.length === 0 &&
@@ -141,6 +176,9 @@ export function isSeeingAll(filters: ChatFilters): boolean {
 export function filtersFor(filters: ChatFilters, query: ItemQuery = {}): ItemQuery {
   const sources = mutedSourceIds(filters);
   const risultato: ItemQuery = { ...query };
+  if (onlyFavoriteBrands(filters)) {
+    risultato.brands = [...filters.favoriteBrands];
+  }
   if (sources.length > 0) {
     risultato.excludeSources = [...(query.excludeSources ?? []), ...sources];
   }
@@ -161,6 +199,10 @@ export type FilterChange =
   | { kind: "tag"; value: string }
   | { kind: "free"; value: boolean }
   | { kind: "star"; value: number }
+  /** Una marca del registro che si accende o si spegne nell'elenco dei preferiti. */
+  | { kind: "brand"; value: string }
+  | { kind: "brandsOnly"; value: boolean }
+  | { kind: "brandsReset" }
   | { kind: "reset" };
 
 function toggled<T>(list: T[], value: T): T[] {
@@ -180,6 +222,14 @@ export function withFilterChange(filters: ChatFilters, change: FilterChange): Ch
       return { ...filters, freeOnly: change.value };
     case "star":
       return { ...filters, minScore: STAR_CHOICES.includes(change.value) ? change.value : 0 };
+    case "brand":
+      return { ...filters, favoriteBrands: toggled(filters.favoriteBrands, change.value) };
+    case "brandsOnly":
+      return { ...filters, brandsOnly: change.value };
+    // Svuotare i preferiti spegne anche il filtro: lasciarlo acceso senza marche
+    // non filtrerebbe niente, ma resterebbe scritto che c'è un filtro.
+    case "brandsReset":
+      return { ...filters, favoriteBrands: [], brandsOnly: false };
     case "reset":
       return defaultFilters();
   }
@@ -200,6 +250,14 @@ export function filterChangeLabel(filters: ChatFilters, change: FilterChange, na
       return change.value ? "🎁 Solo senza acquisto" : "🎁 Anche con acquisto";
     case "star":
       return change.value === 0 ? "⭐ Tutti i punteggi" : `⭐ Solo da ${change.value} in su`;
+    case "brand":
+      return filters.favoriteBrands.includes(change.value)
+        ? `🏷 Segui ${brandLabel(change.value)}`
+        : `🏷 Non segui più ${brandLabel(change.value)}`;
+    case "brandsOnly":
+      return change.value ? "🏷 Solo le marche che seguo" : "🏷 Anche le altre marche";
+    case "brandsReset":
+      return "🧹 Elenco marche svuotato";
     case "reset":
       return "♻️ Vedi di nuovo tutto";
   }
@@ -236,6 +294,11 @@ export function parseFilters(raw: unknown): ChatFilters {
   );
   const stelle = typeof record.minScore === "number" && Number.isFinite(record.minScore) ? Math.trunc(record.minScore) : 0;
   return {
+    // Una marca uscita dal registro si legge come "non seguita": tenerla in
+    // elenco farebbe filtrare `brandsOnly` su un id che non esiste più, cioè su
+    // niente.
+    favoriteBrands: stringList(record.favoriteBrands, isBrandId),
+    brandsOnly: record.brandsOnly === true,
     mutedSources: stringList(record.mutedSources),
     mutedCategories: categorie,
     mutedTags: stringList(record.mutedTags),

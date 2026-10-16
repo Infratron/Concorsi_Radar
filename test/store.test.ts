@@ -19,6 +19,9 @@ function makeSource(overrides: Partial<SourceRow> = {}): SourceRow {
     lastRunAt: null,
     lastOkAt: null,
     failStreak: 0,
+    lastStatus: null,
+    lastError: null,
+    lastItems: 0,
     ...overrides,
   };
 }
@@ -349,32 +352,45 @@ describe("memory store · fonti, run, ai e robots", () => {
     store.seedSources([makeSource({ failStreak: 0 }), makeSource({ id: "vincimi", name: "Vincimi", kind: "rss", url: "https://www.vincimi.it/feed/" })]);
   });
 
-  it("recordSourceRun incrementa e azzera fail_streak", async () => {
+  it("recordSourceRun tiene la storia e l'ultimo tentativo, che non coincidono", async () => {
     await store.recordSourceRun("scontrinofelice-acquisto", {
-      ok: false, httpStatus: 500, etag: null, lastModified: null, error: "HTTP 500", now: "2026-10-16T08:00:00.000Z",
+      ok: false, httpStatus: 500, etag: null, lastModified: null, error: "HTTP 500", items: 0,
+      now: "2026-10-16T08:00:00.000Z",
     });
     let source = (await store.getSources()).find((s) => s.id === "scontrinofelice-acquisto");
     expect(source?.failStreak).toBe(1);
     expect(source?.lastOkAt).toBeNull();
+    // L'ultimo tentativo si legge anche quando fallisce: è quello che la chat mostra.
+    expect(source?.lastRunAt).toBe("2026-10-16T08:00:00.000Z");
+    expect(source?.lastStatus).toBe(500);
+    expect(source?.lastError).toBe("HTTP 500");
+    expect(source?.lastItems).toBe(0);
 
     await store.recordSourceRun("scontrinofelice-acquisto", {
-      ok: false, httpStatus: 500, etag: null, lastModified: null, error: "HTTP 500", now: "2026-10-16T08:15:00.000Z",
+      ok: false, httpStatus: 500, etag: null, lastModified: null, error: "HTTP 500", items: 0,
+      now: "2026-10-16T08:15:00.000Z",
     });
     source = (await store.getSources()).find((s) => s.id === "scontrinofelice-acquisto");
     expect(source?.failStreak).toBe(2);
 
     await store.recordSourceRun("scontrinofelice-acquisto", {
-      ok: true, httpStatus: 200, etag: "W/abc", lastModified: "Thu, 16 Oct 2026 08:00:00 GMT", error: null, now: "2026-10-16T08:30:00.000Z",
+      ok: true, httpStatus: 200, etag: "W/abc", lastModified: "Thu, 16 Oct 2026 08:00:00 GMT", error: null,
+      items: 3, now: "2026-10-16T08:30:00.000Z",
     });
     source = (await store.getSources()).find((s) => s.id === "scontrinofelice-acquisto");
     expect(source?.failStreak).toBe(0);
     expect(source?.lastOkAt).toBe("2026-10-16T08:30:00.000Z");
     expect(source?.etag).toBe("W/abc");
     expect(source?.lastModified).toBe("Thu, 16 Oct 2026 08:00:00 GMT");
+    // L'errore vecchio non resta appeso: adesso l'ultimo tentativo è riuscito.
+    expect(source?.lastStatus).toBe(200);
+    expect(source?.lastError).toBeNull();
+    expect(source?.lastItems).toBe(3);
 
     // Un id sconosciuto non deve esplodere.
     await store.recordSourceRun("assente", {
-      ok: true, httpStatus: 200, etag: null, lastModified: null, error: null, now: "2026-10-16T08:30:00.000Z",
+      ok: true, httpStatus: 200, etag: null, lastModified: null, error: null, items: 0,
+      now: "2026-10-16T08:30:00.000Z",
     });
     expect(await store.getSources()).toHaveLength(2);
   });
@@ -473,6 +489,83 @@ describe("memory store · fonti, run, ai e robots", () => {
       "vincimi",
       "vincimi",
     ]);
+  });
+
+  it("la marca si salva, si filtra e si conta", async () => {
+    await store.insertItem(makeItem({ urlKey: "key-1", url: "https://a.example/1", brand: "ferrero" }));
+    await store.insertItem(makeItem({ urlKey: "key-2", url: "https://b.example/2", brand: "conad" }));
+    await store.insertItem(makeItem({ urlKey: "key-3", url: "https://c.example/3", brand: "ferrero", kind: "news" }));
+    // Un concorso senza marca riconosciuta: non è di nessuno, e non sparisce.
+    await store.insertItem(makeItem({ urlKey: "key-4", url: "https://d.example/4", brand: null }));
+
+    expect((await store.getItem(1))?.brand).toBe("ferrero");
+    expect((await store.getItem(4))?.brand).toBeNull();
+    expect(await store.countItems({ brands: ["ferrero"] })).toBe(2);
+    expect((await store.queryItems({ brands: ["conad"], limit: 10 })).map((row) => row.id)).toEqual([2]);
+    // Elenco vuoto = nessun filtro, come tutti gli altri campi della query.
+    expect(await store.countItems({ brands: [] })).toBe(4);
+    // Il conteggio per marca conta solo i concorsi: l'articolo non gonfia il numero
+    // che la chat scrive sul bottone.
+    expect(await store.brandCounts()).toEqual({ ferrero: 1, conad: 1 });
+
+    // La marca si aggiorna quando si riconosce, e un null non cancella quella che c'è.
+    await store.updateItem(2, { brand: "esselunga" });
+    expect((await store.getItem(2))?.brand).toBe("esselunga");
+    await store.updateItem(2, { brand: null });
+    expect((await store.getItem(2))?.brand).toBe("esselunga");
+  });
+
+  it("racconta quanto ha reso ogni fonte: concorsi, ultimo, viste e scartate", async () => {
+    await store.insertItem(
+      makeItem({ urlKey: "key-1", url: "https://a.example/1", sourceId: "vincimi", firstSeenAt: "2026-10-10T08:00:00.000Z" }),
+    );
+    await store.insertItem(
+      makeItem({ urlKey: "key-2", url: "https://b.example/2", sourceId: "vincimi", firstSeenAt: "2026-10-16T08:00:00.000Z" }),
+    );
+    // Un articolo non è un concorso: non entra nel contributo della fonte.
+    await store.insertItem(
+      makeItem({ urlKey: "key-3", url: "https://c.example/3", sourceId: "news-brand", kind: "news" }),
+    );
+    // Viste: una ripetuta, una scartata dal cancello di freschezza.
+    await store.recordSighting({
+      urlKey: "key-1", sourceId: "sitemap-conad", itemId: 1, kind: "contest", channel: "brand",
+      seenAt: "2026-10-16T09:00:00.000Z", kept: true,
+    });
+    await store.recordSighting({
+      urlKey: "key-9", sourceId: "sitemap-conad", itemId: null, kind: "contest", channel: "brand",
+      seenAt: "2026-10-16T09:00:00.000Z", kept: false,
+    });
+
+    const stats = await store.sourceStats();
+    expect(stats.vincimi).toEqual({
+      offers: 2, lastOfferAt: "2026-10-16T08:00:00.000Z", sightings: 0, discarded: 0,
+    });
+    // Conad: due viste, nessun concorso portato per prima, una pagina scartata.
+    expect(stats["sitemap-conad"]).toEqual({
+      offers: 0, lastOfferAt: null, sightings: 2, discarded: 1,
+    });
+    // Una fonte mai vista non compare: chi legge usa SourceStat vuoto.
+    expect(stats["sitemap-ferrero"]).toBeUndefined();
+  });
+
+  it("un coupon è un contributo: la fonte di buoni sconto non risulta vuota", async () => {
+    // Senza questo, la diagnostica direbbe "non ha mai portato un concorso" di una
+    // fonte che pubblica buoni sconto — cioè che non fa il suo lavoro, mentre lo
+    // sta facendo (vedi SourceStat e src/sources-health.ts).
+    await store.insertItem(
+      makeItem({
+        urlKey: "key-1",
+        url: "https://a.example/1",
+        sourceId: "scontrinofelice-coupon",
+        kind: "coupon",
+        firstSeenAt: "2026-10-16T09:30:00.000Z",
+      }),
+    );
+
+    const stats = await store.sourceStats();
+    expect(stats["scontrinofelice-coupon"]).toEqual({
+      offers: 1, lastOfferAt: "2026-10-16T09:30:00.000Z", sightings: 0, discarded: 0,
+    });
   });
 
   it("salva e ricarica robots.txt per origine", async () => {

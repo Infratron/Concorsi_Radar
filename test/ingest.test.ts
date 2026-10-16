@@ -21,6 +21,9 @@ function source(overrides: Partial<SourceRow> & Pick<SourceRow, "id" | "kind" | 
     lastRunAt: null,
     lastOkAt: null,
     failStreak: 0,
+    lastStatus: null,
+    lastError: null,
+    lastItems: 0,
     ...overrides,
   };
 }

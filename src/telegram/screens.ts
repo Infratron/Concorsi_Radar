@@ -1,23 +1,32 @@
 import type { ItemRow, Prefs, RunRow, SourceRow, UiState } from "../types.ts";
-import { CATEGORY_LABELS, isSeeingAll, mutedSourceIds, type FilterSource } from "../filters.ts";
+import { brandLabel, type BrandChoice } from "../config/brands.ts";
+import { GRUPPI_DIAGNOSI, type Diagnosi, type RiepilogoDiagnosi } from "../sources-health.ts";
+import { CATEGORY_LABELS, isSeeingAll, mutedSourceIds, onlyFavoriteBrands, type FilterSource } from "../filters.ts";
 import type { LeadStats } from "../enrich/lead.ts";
 import type { InlineKeyboardMarkup } from "./api.ts";
 import { escapeHtml, formatDate, formatItemCard, sourceLabel } from "./format.ts";
+import { esitoUltimoTentativo } from "./report.ts";
+import { truncate } from "../lib/text.ts";
 import {
+  BRANDS_PAGE_SIZE,
   PAGE_SIZE,
   backKeyboard,
   cardKeyboard,
+  diagnosticaKeyboard,
   emptyKeyboard,
   filtriKeyboard,
   filtriFontiKeyboard,
+  fontiKeyboard,
   itemButtonLabel,
   listKeyboard,
+  marcheKeyboard,
   menuKeyboard,
   sectionTitle,
   settingsKeyboard,
   storicoKeyboard,
   vantaggioKeyboard,
 } from "./keyboard.ts";
+import { hourLabel, parseQuietRange } from "./prefs-config.ts";
 
 /**
  * Le schermate del bot, come funzioni pure: dato lo stato della chat e i dati
@@ -36,23 +45,29 @@ export interface Screen {
 }
 
 /**
- * Cosa cambia un tocco nelle impostazioni: le quattro preferenze di sempre più i
- * filtri ("cosa vedi") di QUESTA chat.
+ * Cosa cambia un tocco nelle impostazioni: le preferenze delle consegne (soglia,
+ * silenzio, ore del digest, notifiche) più i filtri ("cosa vedi") di QUESTA chat.
+ * "hour" accende o spegne una singola ora del digest.
  */
 export type ConfigKey =
   | "score"
   | "quiet"
   | "digest"
+  | "hour"
   | "notify"
   | "cat"
   | "tag"
   | "src"
   | "free"
   | "star"
+  /** Una marca del registro da accendere o spegnere nei preferiti. */
+  | "brand"
+  /** Il filtro "solo le marche che seguo" (on/off) e lo svuotamento dell'elenco (reset). */
+  | "brands"
   | "reset";
 
 const CONFIG_KEYS: readonly ConfigKey[] = [
-  "score", "quiet", "digest", "notify", "cat", "tag", "src", "free", "star", "reset",
+  "score", "quiet", "digest", "hour", "notify", "cat", "tag", "src", "free", "star", "brand", "brands", "reset",
 ];
 
 /** Cosa vuole fare l'utente: i bottoni e i comandi si traducono tutti qui. */
@@ -86,6 +101,10 @@ export const SECTIONS = [
   "impostazioni",
   "filtri",
   "filtri-fonti",
+  "preferiti",
+  "preferiti-lista",
+  "coupon",
+  "diagnostica",
 ] as const;
 
 export function isKnownSection(section: string): boolean {
@@ -173,8 +192,14 @@ export interface ScreenCounts {
   salvati: number;
   /** Articoli e pagine-contenitore in archivio (tutta la sezione news). */
   news: number;
+  /** Coupon e rimborsi in archivio, con i filtri di questa chat. */
+  coupon: number;
+  /** Coupon e rimborsi in archivio, senza filtri: serve a dire "vedi X di Y". */
+  couponTotal: number;
   /** Concorsi in archivio, di qualunque stato: la metà "buona" dell'archivio. */
   contest: number;
+  /** Concorsi delle marche seguite, con i filtri della chat: è il numero sul bottone. */
+  preferiti: number;
   /** Storico: contati solo quando si apre 🗂 Storico, per non pesare sul menù. */
   vinti: number;
   scaduti: number;
@@ -202,6 +227,10 @@ export interface ScreenData {
   regolamentoUrl: string | null;
   sources: SourceRow[];
   runs: RunRow[];
+  /** Verdetto su ogni fonte accesa: si legge solo nella schermata della diagnostica. */
+  diagnosi: Diagnosi[];
+  /** I numeri della testata della diagnostica (null altrove). */
+  diagnosiRiepilogo: RiepilogoDiagnosi | null;
   /** Statistiche del vantaggio di tempistica: solo nella sezione /vantaggio. */
   lead: LeadStats | null;
   /** Anticipo del concorso aperto in scheda, in ore: null se non è misurabile. */
@@ -212,6 +241,10 @@ export interface ScreenData {
   filterSources: FilterSource[];
   /** Quante fonti si possono spegnere in tutto (per la paginazione). */
   filterSourcesTotal: number;
+  /** Pagina di marche da mostrare in 🏷 Preferiti per marca (già ritagliata). */
+  brandChoices: BrandChoice[];
+  /** Quante marche ha il registro in tutto (per la paginazione). */
+  brandChoicesTotal: number;
 }
 
 function oreMinuti(iso: string | null): string {
@@ -239,13 +272,13 @@ function headerLines(state: UiState, data: ScreenData, now: Date): string[] {
   // articoli che ne parlano. Dirle entrambe evita di far sembrare l'archivio
   // grande quanto i concorsi.
   righe.push(
-    `🗂 <b>${data.counts.contest}</b> concorsi · <b>${data.counts.news}</b> news in archivio · controllati ${oreMinuti(state.lastCheckAt)}`,
+    `🗂 <b>${data.counts.contest}</b> concorsi · <b>${data.counts.coupon}</b> coupon · <b>${data.counts.news}</b> news in archivio · controllati ${oreMinuti(state.lastCheckAt)}`,
   );
   // Con i filtri accesi il numero di sopra è quello che VEDI, non quello che
   // esiste: senza questa riga l'archivio sembrerebbe più piccolo di com'è.
   if (data.counts.filtri > 0) {
     righe.push(
-      `🎛 Filtri tuoi: <b>${data.counts.contest}</b> di <b>${data.counts.contestTotal}</b> concorsi · <b>${data.counts.news}</b> di <b>${data.counts.newsTotal}</b> news`,
+      `🎛 Filtri tuoi: <b>${data.counts.contest}</b> di <b>${data.counts.contestTotal}</b> concorsi · <b>${data.counts.coupon}</b> di <b>${data.counts.couponTotal}</b> coupon · <b>${data.counts.news}</b> di <b>${data.counts.newsTotal}</b> news`,
     );
   }
   return righe;
@@ -266,6 +299,8 @@ function listScreen(state: UiState, data: ScreenData, now: Date): Screen {
     vinti: ["concorso vinto", "concorsi vinti"],
     scaduti: ["concorso chiuso", "concorsi chiusi"],
     ignorati: ["concorso scartato", "concorsi scartati"],
+    // "un coupon" e "12 coupon": la parola non cambia al plurale.
+    coupon: ["coupon", "coupon"],
   };
   const [singolare, plurale] = nomi[state.section] ?? ["concorso", "concorsi"];
   if (data.items.length === 0) {
@@ -275,6 +310,10 @@ function listScreen(state: UiState, data: ScreenData, now: Date): Screen {
       vinti: "Nessuna vittoria registrata: quando ne vinci uno, apri la scheda e tocca 🏆 Vinto.",
       scaduti: "Nessun concorso chiuso in archivio: qui finiscono quelli la cui scadenza è passata.",
       ignorati: "Non hai scartato niente: quello che tocchi 🚫 finisce qui, e da qui puoi riprenderlo.",
+      "preferiti-lista":
+        "Non segui ancora nessuna marca, quindi non c'è niente da mostrare qui: aprine una in 🏷 Preferiti per marca.",
+      coupon:
+        "Nessun coupon in archivio: i buoni sconto e i rimborsi arrivano dalle fonti di coupon, appena le trovano.",
     };
     const filtrata = data.counts.filtri > 0;
     const righeVuote = [
@@ -288,7 +327,10 @@ function listScreen(state: UiState, data: ScreenData, now: Date): Screen {
     if (filtrata) {
       righeVuote.push("", `🎛 Hai <b>${data.counts.filtri}</b> filtri attivi: può essere per quello.`);
     }
-    return { text: righeVuote.join("\n"), keyboard: emptyKeyboard(filtrata) };
+    return {
+      text: righeVuote.join("\n"),
+      keyboard: emptyKeyboard(filtrata, state.section === "preferiti-lista"),
+    };
   }
 
   const nome = data.total === 1 ? singolare : plurale;
@@ -299,9 +341,13 @@ function listScreen(state: UiState, data: ScreenData, now: Date): Screen {
     "",
     state.section === "news"
       ? "Qui ci sono gli articoli: il link porta al pezzo, non alla pagina del concorso."
-      : state.section === "salvati"
+      : state.section === "coupon"
+        ? "Qui ci sono i buoni sconto e i rimborsi: si spende meno, non si vince. Non finiscono nei concorsi né negli avvisi."
+        : state.section === "salvati"
         ? "Ordinati per scadenza: chi chiude prima sta in cima. Ti avviso 3 giorni e 1 giorno prima."
-        : "Tocca un concorso per aprirlo:",
+        : state.section === "preferiti-lista"
+          ? "Solo le marche che segui, dal punteggio più alto: è il motivo per cui le trovi qui in cima."
+          : "Tocca un concorso per aprirlo:",
   ];
   return {
     text: righe.join("\n"),
@@ -315,7 +361,7 @@ function listScreen(state: UiState, data: ScreenData, now: Date): Screen {
  * e Watchlist, Storico e Cerca sono scelte esplicite: lì una riga in più sarebbe
  * solo un tasto che non serve.
  */
-const SEZIONI_STELLE = new Set(["nuovi", "oggi", "settimana", "scadenze", "scaduti"]);
+const SEZIONI_STELLE = new Set(["nuovi", "oggi", "settimana", "scadenze", "scaduti", "preferiti-lista"]);
 
 function stellePer(data: ScreenData, section: string): number | null {
   return SEZIONI_STELLE.has(section) ? data.prefs.filters.minScore : null;
@@ -456,10 +502,20 @@ function sourcesScreen(data: ScreenData): Screen {
   const attive = data.sources.filter((source) => source.enabled).length;
   const righe = [`📡 <b>Fonti</b> · ${data.sources.length} configurate, ${attive} attive`, ""];
   for (const source of data.sources) {
-    const stato = source.enabled ? "🟢" : "⚪️";
-    const ultimo = source.lastOkAt ? oreMinuti(source.lastOkAt) : "mai";
-    const errore = source.failStreak > 0 ? ` · ⚠️ ${source.failStreak} di fila` : "";
-    righe.push(`${stato} ${escapeHtml(source.name)} · ok ${ultimo}${errore}`);
+    if (!source.enabled) {
+      righe.push(`⚪️ ${escapeHtml(source.name)} · spenta`);
+      continue;
+    }
+    // Si racconta l'ULTIMO tentativo, non l'ultimo successo: "quando è andata
+    // bene l'ultima volta" non dice se la fonte risponde ADESSO, che è la
+    // domanda quando una fonte smette di portare roba. Il codice HTTP e i item
+    // letti sono quelli che prima esistevano solo nel log del runner.
+    const esito = esitoUltimoTentativo(source);
+    const quando = source.lastRunAt === null ? "mai provata" : oreMinuti(source.lastRunAt);
+    const sospetta = source.failStreak > 0 ? ` · ⚠️ ${source.failStreak} di fila` : "";
+    righe.push(
+      `${esito.emoji} ${escapeHtml(source.name)} · ${quando} · ${escapeHtml(truncate(esito.motivo, 60))}${sospetta}`,
+    );
   }
 
   if (data.runs.length > 0) {
@@ -471,16 +527,82 @@ function sourcesScreen(data: ScreenData): Screen {
       );
     }
   }
-  return { text: righe.join("\n"), keyboard: backKeyboard() };
+  return { text: righe.join("\n"), keyboard: fontiKeyboard() };
+}
+
+/**
+ * 🌡 Diagnostica delle fonti: quali valgono e quali no.
+ *
+ * Rispetto a 📡 Fonti, che risponde a "chi ha risposto?", qui la domanda è "e
+ * questa fonte serve a qualcosa?". L'elenco è raggruppato per problema — prima
+ * chi fallisce, poi chi risponde senza portare concorsi — e ogni riga dice il
+ * fatto e che farne; in fondo, in una riga sola, le fonti che lavorano.
+ *
+ * Quello che NON c'è: un ordine di cancellazione. Il verdetto è un indizio, non
+ * una decisione, e le due righe finali lo dicono (la fonte si toglie dal file di
+ * configurazione; per non vederla solo per un po' basta 🎛 Scegli le fonti).
+ *
+ * Il tetto alle voci raccontate per esteso è quel che ci sta in un messaggio
+ * (MAX_MESSAGE_CHARS): oltre, la schermata elenca gli id di quelle che restano,
+ * perché l'id è la parte su cui si agisce e un elenco che ne nascondesse una
+ * toglierebbe proprio una delle fonti da togliere.
+ */
+const DIAGNOSI_MAX = 12;
+
+function diagnosticaScreen(data: ScreenData): Screen {
+  const diagnosi = data.diagnosi;
+  const riepilogo = data.diagnosiRiepilogo ?? { accese: 0, utili: 0, rotte: 0, daGuardare: 0 };
+  const righe = [
+    "🌡 <b>Diagnostica delle fonti</b>",
+    "",
+    riepilogo.daGuardare === 0
+      ? `👌 Nessuna delle <b>${riepilogo.accese}</b> fonti accese ha qualcosa che non va.`
+      : `🩺 <b>${riepilogo.daGuardare}</b> fonti da guardare su <b>${riepilogo.accese}</b> accese · <b>${riepilogo.utili}</b> portano concorsi nuovi e non falliscono.`,
+  ];
+
+  // Solo le fonti con qualcosa da dire, e solo per il numero di righe che ci sta
+  // in un messaggio: un elenco di venti voci non si legge, e le fonti sane sono
+  // già contate nella riga in testa.
+  let righeLibere = DIAGNOSI_MAX;
+  for (const gruppo of GRUPPI_DIAGNOSI) {
+    const voci = diagnosi.filter((voce) => gruppo.esiti.includes(voce.esito));
+    if (voci.length === 0) continue;
+    const visibili = voci.slice(0, Math.max(0, righeLibere));
+    const resto = voci.slice(visibili.length);
+    righeLibere -= visibili.length;
+    righe.push("", `<b>${gruppo.titolo}</b> (${voci.length})`);
+    for (const voce of visibili) {
+      righe.push(
+        `${voce.emoji} <code>${escapeHtml(voce.source.id)}</code> · ${escapeHtml(voce.source.name)}`,
+        `   ${escapeHtml(truncate(voce.motivo, 120))}`,
+      );
+      if (voce.consiglio.length > 0) righe.push(`   ↳ <i>${escapeHtml(truncate(voce.consiglio, 140))}</i>`);
+    }
+    if (resto.length > 0) {
+      // Il motivo è lo stesso di quelli sopra (è lo stesso gruppo): qui serve solo
+      // sapere CHI sono, e l'id è quello che si va a cercare in sources.ts.
+      righe.push(
+        `   … e altre ${resto.length}: ${resto.map((voce) => `<code>${escapeHtml(voce.source.id)}</code>`).join(" · ")}`,
+      );
+    }
+  }
+
+  righe.push("", `✅ Le altre <b>${riepilogo.utili}</b> fonti portano concorsi nuovi e non falliscono.`);
+  righe.push(
+    "",
+    "🔧 Per toglierne una:<code> enabled: false</code> nella sua voce di src/config/sources.ts, poi <code>npm run db:seed</code>. Per non vederla solo qui: 🎛 Scegli le fonti.",
+  );
+  return { text: righe.join("\n"), keyboard: diagnosticaKeyboard() };
 }
 
 function settingsScreen(data: ScreenData): Screen {
   const { prefs } = data;
-  const silenzio = prefs.quietHours.length === 0 ? "nessuno" : `${prefs.quietHours.replace("-", ":00–")}:00`;
+  const fascia = parseQuietRange(prefs.quietHours);
+  const silenzio = fascia === null ? "nessuno" : `${hourLabel(fascia.start)}–${hourLabel(fascia.end)}`;
   const digest =
     prefs.digestHours.length === 0
       ? "spenti"
-      : prefs.digestHours.map((hour) => `${String(hour).padStart(2, "0")}:00`).join(" e ");
+      : prefs.digestHours.map((hour) => hourLabel(hour)).join(", ");
   const righe = [
     "⚙️ <b>Impostazioni</b>",
     "",
@@ -490,6 +612,8 @@ function settingsScreen(data: ScreenData): Screen {
     `📣 Notifiche: <b>${prefs.active ? "attive" : "sospese"}</b>`,
     `🎛 Cosa vedi: <b>${isSeeingAll(prefs.filters) ? "tutto" : `${data.counts.filtri} filtri attivi`}</b>`,
     "",
+    "➖ ➕ spostano di poco; le voci in fondo sono i valori soliti.",
+    "Le ore del digest valgono anche nell'ora prima e dopo: è la tolleranza per l'ora legale.",
     "Valgono solo per te: l'altra persona ha le sue.",
   ];
   return { text: righe.join("\n"), keyboard: settingsKeyboard(prefs) };
@@ -506,6 +630,9 @@ function filtriScreen(data: ScreenData): Screen {
     ...(filtro.minScore > 0
       ? [`⭐ Stelle minime: <b>${filtro.minScore}</b>/100 — vedi solo la testa della classifica.`]
       : ["⭐ Stelle minime: <b>nessuna</b> — gli elenchi sono comunque ordinati dal punteggio più alto."]),
+    `🏷 Marche seguite: <b>${
+      filtro.favoriteBrands.length === 0 ? "nessuna" : escapeHtml(filtro.favoriteBrands.map((id) => brandLabel(id)).join(", "))
+    }</b>${onlyFavoriteBrands(filtro) ? " — e vedi solo queste" : ""}`,
     "",
   ];
   if (isSeeingAll(filtro)) {
@@ -518,6 +645,7 @@ function filtriScreen(data: ScreenData): Screen {
     if (filtro.mutedSources.length > 0) pezzi.push(`${filtro.mutedSources.length} fonti spente`);
     if (filtro.mutedTags.length > 0) pezzi.push(`${filtro.mutedTags.length} tipi spenti`);
     if (filtro.freeOnly) pezzi.push("solo senza acquisto");
+    if (onlyFavoriteBrands(filtro)) pezzi.push("solo le marche seguite");
     righe.push(`👁 <b>${data.counts.contest}</b> di <b>${data.counts.contestTotal}</b> concorsi visibili.`);
     righe.push(`🚫 Fuori: ${escapeHtml(pezzi.join(" · "))}`);
   }
@@ -527,6 +655,42 @@ function filtriScreen(data: ScreenData): Screen {
     keyboard: filtriKeyboard(prefs, {
       sources: data.filterSourcesTotal,
       spenti: mutedSourceIds(filtro).length,
+    }),
+  };
+}
+
+/**
+ * 🏷 Preferiti per marca: l'elenco delle marche da seguire, con quanti concorsi
+ * ha ciascuna in archivio. È una schermata di scelte, quindi dice cosa cambia
+ * accendere una marca — un punteggio più alto e una sezione sua — invece di
+ * lasciarlo scoprire toccando.
+ */
+function marcheScreen(data: ScreenData): Screen {
+  const { prefs } = data;
+  const seguite = prefs.filters.favoriteBrands;
+  const pagine = Math.max(1, Math.ceil(data.brandChoicesTotal / BRANDS_PAGE_SIZE));
+  const page = Math.min(Math.max(data.page, 0), pagine - 1);
+  const righe = [
+    "🏷 <b>Preferiti per marca</b>",
+    "",
+    "✅ la segui · ⬜️ no. Una marca che segui <b>vale 10 punti in più</b> e ha la sua sezione: l'elenco qui sotto è ordinato da chi ha più concorsi in archivio.",
+    "",
+    seguite.length === 0
+      ? "Non ne segui ancora nessuna."
+      : `Segui <b>${seguite.length}</b> ${seguite.length === 1 ? "marca" : "marche"}: ${escapeHtml(
+          seguite.map((id) => brandLabel(id)).join(", "),
+        )} — <b>${data.counts.preferiti}</b> concorsi in archivio.`,
+  ];
+  if (onlyFavoriteBrands(prefs.filters)) {
+    righe.push("🌟 Filtro acceso: negli elenchi e negli avvisi vedi <b>solo</b> queste marche.");
+  }
+  righe.push("", `Pagina ${page + 1}/${pagine} delle marche · vale solo per te.`);
+  return {
+    text: righe.join("\n"),
+    keyboard: marcheKeyboard(data.brandChoices, {
+      seguite: seguite.length,
+      brandsOnly: prefs.filters.brandsOnly,
+      page: { index: page, total: pagine },
     }),
   };
 }
@@ -587,6 +751,10 @@ export function renderScreen(state: UiState, data: ScreenData, now: Date): Scree
       return filtriScreen(data);
     case "filtri-fonti":
       return filtriFontiScreen(data);
+    case "preferiti":
+      return marcheScreen(data);
+    case "diagnostica":
+      return diagnosticaScreen(data);
     case "cerca":
       return searchPromptScreen();
     default:

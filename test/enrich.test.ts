@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createMemoryStore } from "../src/db/memory.ts";
 import { extractDeadline, extractParticipation, extractPrize, extractTags, enrichWithRules } from "../src/enrich/rules.ts";
-import { SCORE_WEIGHTS, applyWeights, baseScore, scoreItem } from "../src/enrich/score.ts";
+import { SCORE_WEIGHTS, applyBrandBonus, applyWeights, baseScore, rescoreRow, scoreItem } from "../src/enrich/score.ts";
 import { MAX_NEURONS_PER_DAY, enrichWithAi, mergeInsight, needsAi } from "../src/enrich/ai.ts";
 import type { AiBinding, Insight, RawItem } from "../src/types.ts";
 
@@ -182,6 +182,63 @@ describe("punteggio", () => {
   it("scoreItem somma punteggio base e pesi", () => {
     const base = baseScore(insight(), { title: "Concorso Esselunga", summary: "x" }, NOW);
     expect(scoreItem(insight(), { title: "Concorso Esselunga", summary: "x" }, { giftcard: 0 }, NOW)).toBe(base);
+  });
+
+  it("la marca seguita vale dieci punti, solo se la segui", () => {
+    const esselunga = { title: "Concorso Esselunga", summary: "x", brand: "esselunga" };
+    const senza = scoreItem(insight(), esselunga, {}, NOW);
+    expect(scoreItem(insight(), esselunga, {}, NOW, ["esselunga"])).toBe(senza + SCORE_WEIGHTS.favoriteBrand);
+    // Un'altra marca seguita non cambia niente: il bonus è della SUA marca.
+    expect(scoreItem(insight(), esselunga, {}, NOW, ["ferrero"])).toBe(senza);
+    // Un concorso senza marca riconosciuta non prende niente da nessuno.
+    expect(scoreItem(insight(), { title: "Concorso", summary: "x", brand: null }, {}, NOW, ["ferrero"])).toBe(
+      scoreItem(insight(), { title: "Concorso", summary: "x" }, {}, NOW),
+    );
+    // Il tetto resta 100, e il conto non sfonda.
+    expect(applyBrandBonus(95, "ferrero", ["ferrero"])).toBe(100);
+    expect(applyBrandBonus(50, null, ["ferrero"])).toBe(50);
+  });
+
+  it("il ricalcolo di una riga d'archivio rifà lo stesso conto dell'ingestione", () => {
+    // È la funzione che accende una marca sui concorsi già in archivio: parte
+    // dai campi della riga, quindi il punteggio di prima viene sostituito, non
+    // sommato a una differenza tenuta a mente.
+    const riga = {
+      id: 1,
+      sourceId: "sitemap-ferrero",
+      brand: "ferrero",
+      kind: "contest" as const,
+      url: "https://a.example/1",
+      urlKey: "key-1",
+      simhash: "0123456789abcdef",
+      title: "Concorso Nutella",
+      summary: "Partecipa e vinci",
+      publishedAt: NOW.toISOString(),
+      firstSeenAt: NOW.toISOString(),
+      lastSeenAt: NOW.toISOString(),
+      deadline: "2026-11-30",
+      prize: "1000 euro",
+      participation: "iscrizione online",
+      rulesUrl: null,
+      prizeValue: 0.8,
+      effort: 0.9,
+      requiresPurchase: false,
+      tags: ["giftcard"],
+      score: 10,
+      clusterId: null,
+      status: "new" as const,
+      aiUsed: false,
+    };
+    const atteso = scoreItem(
+      insight({ deadline: "2026-11-30", prize: "1000 euro", prizeValue: 0.8, effort: 0.9, tags: ["giftcard"] }),
+      riga,
+      { giftcard: 1 },
+      NOW,
+      ["ferrero"],
+    );
+    expect(rescoreRow(riga, { giftcard: 1 }, ["ferrero"], NOW)).toBe(atteso);
+    expect(rescoreRow(riga, { giftcard: 1 }, [], NOW)).toBe(atteso - SCORE_WEIGHTS.favoriteBrand);
+    expect(rescoreRow(riga, { giftcard: 1 }, ["ferrero"], NOW)).not.toBe(riga.score);
   });
 });
 

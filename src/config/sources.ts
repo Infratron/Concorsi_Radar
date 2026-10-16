@@ -162,6 +162,93 @@ export const SOURCES: SourceConfig[] = [
     maxItems: 25,
   },
 
+  // ---------- coupon e rimborsi (verificati il 16/10/2026) ----------
+  //
+  // Perché sono qui: un buono sconto o un rimborso non è un concorso — si spende,
+  // non si vince — e le due cose si cercano in momenti diversi. Quello che lo
+  // dichiara è la categoria `coupon`, che la classificazione legge
+  // (src/enrich/kind.ts): gli item di queste fonti finiscono in 💶 Coupon e
+  // rimborsi invece che fra i concorsi, senza toccare il resto.
+  //
+  // Perché proprio queste: sono le uniche che pubblicano un FEED di coupon e
+  // rimborsi italiani, provate con i parser veri prima di accenderle (item letti
+  // in un giro, fra parentesi). Le altre strade sono state provate e scartate con
+  // il motivo: gli aggregatori di codici sconto (Topnegozi, Widilo,
+  // CodiceRisparmio, DoveConviene, Tigotà) espongono pagine di negozio, e da lì
+  // esce il catalogo dei negozi, non le offerte; le insegne (Conad, Acqua &
+  // Sapone, Esselunga) tengono i buoni nell'app o sulla carta fedeltà e non
+  // pubblicano nessun elenco — le loro promozioni arrivano da qui, perché queste
+  // fonti le raccontano.
+  {
+    id: "scontrinofelice-cashback",
+    name: "Scontrino Felice · spendi e riprendi",
+    kind: "rss",
+    url: "https://www.scontrinofelice.it/spendi-e-riprendi/feed/",
+    category: "coupon",
+    tags: ["coupon", "cashback"],
+    cadenceMin: 60,
+    enabled: true,
+    // 20 item e 5 ms di parsing (misurato): il feed è ricco, e tagliare a 15
+    // perderebbe le code che invece sono offerte ancora valide.
+    maxItems: 25,
+  },
+  {
+    id: "scontrinofelice-coupon",
+    name: "Scontrino Felice · buoni sconto",
+    kind: "rss",
+    url: "https://www.scontrinofelice.it/buoni-sconto/feed/",
+    category: "coupon",
+    tags: ["coupon"],
+    cadenceMin: 60,
+    enabled: true,
+    maxItems: 25,
+  },
+  {
+    id: "dimmicosacerchi-cashback",
+    name: "DimmiCosaCerchi · cashback e rimborsi",
+    kind: "rss",
+    url: "https://www.dimmicosacerchi.it/cashback/feed",
+    category: "coupon",
+    tags: ["coupon", "cashback"],
+    cadenceMin: 60,
+    enabled: true,
+    // 15 item (misurato): è il tetto che il feed dà da sé.
+    maxItems: 15,
+  },
+  {
+    id: "dimmicosacerchi-coupon",
+    name: "DimmiCosaCerchi · buoni sconto",
+    kind: "rss",
+    url: "https://www.dimmicosacerchi.it/buoni-sconto-da-stampare/feed",
+    category: "coupon",
+    tags: ["coupon"],
+    cadenceMin: 60,
+    enabled: true,
+    maxItems: 15,
+  },
+  {
+    id: "scontomaggio-cashback",
+    name: "scontOmaggio · operazioni a cashback",
+    kind: "rss",
+    url: "https://www.scontomaggio.com/cashback/feed/",
+    category: "coupon",
+    tags: ["coupon", "cashback"],
+    cadenceMin: 60,
+    enabled: true,
+    maxItems: 20,
+  },
+  {
+    id: "scontomaggio-coupon",
+    name: "scontOmaggio · buoni sconto",
+    kind: "rss",
+    url: "https://www.scontomaggio.com/coupon/feed/",
+    category: "coupon",
+    tags: ["coupon"],
+    cadenceMin: 60,
+    enabled: true,
+    maxItems: 20,
+  },
+
   // ---------- sitemap: intercetta le pagine nuove prima dei feed ----------
   {
     id: "sitemap-premieconcorsi",
@@ -394,9 +481,26 @@ export const SOURCES: SourceConfig[] = [
 ];
 
 /** Fonti note ma non utilizzabili: tenute come promemoria nel README. */
+/**
+ * Fonti note ma non utilizzabili: tenute come promemoria nel README.
+ *
+ * Nota del 16/10/2026: OmaggioMania e scontOmaggio rispondono 200 ai FEED con la
+ * nostra User-Agent (provati), anche se le loro pagine di categoria rispondono
+ * 403: la voce qui sotto riguarda le pagine, non i feed. I feed di scontOmaggio
+ * sono utilizzati come fonti coupon (vedi sopra).
+ *
+ * Gli aggregatori di codici sconto invece non sono un problema di blocchi: le
+ * loro pagine parlano di negozi, non di offerte — cioè non c'è niente da
+ * raccogliere con i parser che abbiamo.
+ */
 export const REJECTED_SOURCES: { url: string; reason: string }[] = [
-  { url: "https://www.omaggiomania.com/concorsi-a-premi/", reason: "403 al fetch diretto (blocco anti-bot)" },
-  { url: "https://www.scontomaggio.com/concorsi-con-acquisto/", reason: "403 al fetch diretto (blocco anti-bot)" },
+  { url: "https://www.omaggiomania.com/concorsi-a-premi/", reason: "403 al fetch diretto delle pagine (il feed risponde)" },
+  { url: "https://www.scontomaggio.com/concorsi-con-acquisto/", reason: "403 al fetch diretto delle pagine (i feed rispondono)" },
+  { url: "https://www.topnegozi.it/sitemap_shops.xml", reason: "403 sull'XML, e le pagine negozio elencano negozi, non coupon" },
+  { url: "https://www.widilo.it/codice-sconto", reason: "pagine di negozio: si raccoglie la navigazione, non le offerte" },
+  { url: "https://www.doveconviene.it/", reason: "volantini e reparti: nessun elenco di coupon da leggere" },
+  { url: "https://www.acquaesapone.it/il-club/", reason: "coupon solo sulla Carta Club: nessun elenco pubblico" },
+  { url: "https://www.conad.it/hey-conad/app", reason: "buoni digitali nell'app HeyConad: nessun elenco pubblico" },
   { url: "https://www.mimit.gov.it/.../manifestazioni-a-premio", reason: "nessun elenco pubblico: PREMA richiede SPID/CNS" },
   { url: "https://www.concorsando.it/blog/concorsi-pubblici/", reason: "bandi di lavoro, non concorsi a premi" },
 ];
@@ -427,3 +531,27 @@ export const MAX_SOURCES_PER_RUN = 4;
  * 10 disponibili invece di 9 e mezzo.
  */
 export const CPU_BUDGET_MS = 6;
+
+/**
+ * Quanti concorsi nuovi, per giro, possono costare UNA richiesta in più per
+ * cercare il regolamento sulla loro pagina (src/enrich/regulation.ts).
+ *
+ * Il bando è quasi sempre un link dentro la pagina del concorso (misurato il
+ * 16/10/2026: 17 bandi veri su 20 pagine lette), e senza questa ricerca il
+ * bottone 📄 Regolamento non comparirebbe quasi mai; ma ogni ricerca è una
+ * pagina scaricata e scandita, quindi non si fa per tutto l'archivio a ogni giro.
+ *
+ * Cento coprono un giro normale con abbondanza — in regime le fonti portano
+ * pochi concorsi NUOVI per volta — e coprono anche la PRIMA raccolta, dove una
+ * fonte nuova scarica tutto il suo arretrato: misurato il 16/10/2026 con sette
+ * fonti, 83 concorsi nuovi in un giro, e con un tetto più basso (20, poi 60) la
+ * coda del giro restava senza bottone — cioè proprio i concorsi appena arrivati.
+ * Il tetto vero resta il tempo: vedi RULES_LOOKUP_BUDGET_MS. I freni veri
+ * restano altri e sono
+ * dichiarati: una richiesta per concorso nuovo, mai per un coupon, il tempo di
+ * parete massimo (`RULES_LOOKUP_BUDGET_MS` nel Worker, `rulesLookupMs` sulla
+ * raccolta), il budget di CPU e robots.txt prima di ogni lettura. Quello che
+ * resta fuori lo prende `npm run rules -- --apply`, che è anche il comando per
+ * l'archivio raccolto prima di questa funzione.
+ */
+export const MAX_RULES_LOOKUPS_PER_RUN = 100;

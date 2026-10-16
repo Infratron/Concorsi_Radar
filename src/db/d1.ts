@@ -1,5 +1,6 @@
-import type { Store } from "./store.ts";
+import type { SourceStat, Store } from "./store.ts";
 import type {
+  ItemKind,
   ItemPatch,
   ItemQuery,
   ItemRow,
@@ -43,6 +44,8 @@ export interface D1Like {
 interface ItemDbRow {
   id: number;
   source_id: string;
+  /** Assente su un database antecedente alla migrazione: si legge come "non so". */
+  brand?: string | null;
   kind: string;
   url: string;
   url_key: string;
@@ -55,6 +58,8 @@ interface ItemDbRow {
   deadline: string | null;
   prize: string | null;
   participation: string | null;
+  /** Assente su un database antecedente alla migrazione: vedi src/db/schema.sql. */
+  rules_url?: string | null;
   prize_value: number;
   effort: number;
   requires_purchase: number;
@@ -79,6 +84,10 @@ interface SourceDbRow {
   last_run_at: string | null;
   last_ok_at: string | null;
   fail_streak: number;
+  /** Assenti su un database antecedente alla migrazione: vedi src/db/schema.sql. */
+  last_status?: number | null;
+  last_error?: string | null;
+  last_items?: number | null;
 }
 
 interface PrefsDbRow {
@@ -166,12 +175,26 @@ function parseNumberArray(raw: unknown): number[] {
   }
 }
 
+/**
+ * Il tipo salvato nella colonna `kind`. Un valore inatteso (database non ancora
+ * aggiornato, riga scritta a mano) vale "concorso": è il significato di default
+ * della colonna e l'unico che non nasconde una riga alle statistiche.
+ * I tre valori sono quelli di ItemKind: concorso, coupon, articolo.
+ */
+function itemKind(raw: unknown): ItemKind {
+  return raw === "news" || raw === "coupon" ? raw : "contest";
+}
+
 function rowToItem(row: ItemDbRow): ItemRow {
   return {
     id: row.id,
     sourceId: row.source_id,
+    // Come per le colonne di `sources`: un database non ancora migrato risponde
+    // `undefined`, e "non lo so" è un valore legittimo (una marca non
+    // riconosciuta), non un motivo per rompere la lettura.
+    brand: row.brand ?? null,
     // Un valore inatteso non deve mai arrivare all'interfaccia: resta un concorso.
-    kind: row.kind === "news" ? "news" : "contest",
+    kind: itemKind(row.kind),
     url: row.url,
     urlKey: row.url_key,
     simhash: row.simhash,
@@ -183,6 +206,10 @@ function rowToItem(row: ItemDbRow): ItemRow {
     deadline: row.deadline,
     prize: row.prize,
     participation: row.participation,
+    // Come per la marca: un database non ancora migrato risponde `undefined`, e
+    // "non lo so" è legittimo (nessun regolamento salvato) — la chat ricade sul
+    // testo dell'item.
+    rulesUrl: row.rules_url ?? null,
     prizeValue: row.prize_value,
     effort: row.effort,
     requiresPurchase: row.requires_purchase === 1,
@@ -201,7 +228,7 @@ function rowToSighting(row: SightingDbRow): Sighting {
     itemId: row.item_id,
     // Valore inatteso = concorso, come per gli item: è il significato di default
     // della colonna e l'unico che non nasconde una riga alle statistiche.
-    kind: row.kind === "news" ? "news" : "contest",
+    kind: itemKind(row.kind),
     // Un canale scritto male vale "stampa", cioè resta fuori dal confronto:
     // meglio non contare una vista che contarla dalla parte sbagliata.
     channel: row.channel === "brand" || row.channel === "aggregatore" ? row.channel : "stampa",
@@ -225,6 +252,12 @@ function rowToSource(row: SourceDbRow): SourceRow {
     lastRunAt: row.last_run_at,
     lastOkAt: row.last_ok_at,
     failStreak: row.fail_streak,
+    // Un database non ancora migrato risponde `undefined`: si legge come "non lo
+    // so", non come un successo. Le colonne si aggiungono con le ALTER TABLE
+    // scritte in src/db/schema.sql.
+    lastStatus: row.last_status ?? null,
+    lastError: row.last_error ?? null,
+    lastItems: row.last_items ?? 0,
   };
 }
 
@@ -265,8 +298,8 @@ function rowToRun(row: RunDbRow): RunRow {
 
 /** Colonne di items, nell'ordine usato dagli INSERT. */
 const ITEM_COLUMNS = [
-  "source_id", "kind", "url", "url_key", "simhash", "title", "summary", "published_at",
-  "first_seen_at", "last_seen_at", "deadline", "prize", "participation", "prize_value",
+  "source_id", "brand", "kind", "url", "url_key", "simhash", "title", "summary", "published_at",
+  "first_seen_at", "last_seen_at", "deadline", "prize", "participation", "rules_url", "prize_value",
   "effort", "requires_purchase", "tags", "score", "cluster_id", "status", "ai_used",
 ];
 
@@ -322,6 +355,9 @@ function buildWhere(query: ItemQuery): { sql: string; params: unknown[] } {
   if (query.withoutDeadline === true) {
     where.push("deadline IS NULL");
   }
+  if (query.withoutRules === true) {
+    where.push("rules_url IS NULL");
+  }
   if (query.deadlineBefore) {
     where.push("deadline IS NOT NULL AND deadline <= ?");
     params.push(query.deadlineBefore);
@@ -352,6 +388,10 @@ function buildWhere(query: ItemQuery): { sql: string; params: unknown[] } {
   if (query.withoutPurchase === true) {
     where.push("requires_purchase = 0");
   }
+  if (query.brands && query.brands.length > 0) {
+    where.push(`brand IN (${query.brands.map(() => "?").join(", ")})`);
+    params.push(...query.brands);
+  }
 
   return { sql: where.length > 0 ? `WHERE ${where.join(" AND ")}` : "", params };
 }
@@ -371,7 +411,10 @@ export function createD1Store(db: D1Like): Store {
                   last_modified = COALESCE(?, last_modified),
                   last_run_at = ?,
                   fail_streak = CASE WHEN ? = 1 THEN 0 ELSE fail_streak + 1 END,
-                  last_ok_at = CASE WHEN ? = 1 THEN ? ELSE last_ok_at END
+                  last_ok_at = CASE WHEN ? = 1 THEN ? ELSE last_ok_at END,
+                  last_status = ?,
+                  last_error = ?,
+                  last_items = ?
             WHERE id = ?`,
         )
         .bind(
@@ -381,6 +424,9 @@ export function createD1Store(db: D1Like): Store {
           result.ok ? 1 : 0,
           result.ok ? 1 : 0,
           result.now,
+          result.httpStatus,
+          result.error,
+          result.items,
           id,
         )
         .run();
@@ -405,9 +451,9 @@ export function createD1Store(db: D1Like): Store {
     async insertItem(item: NewItem): Promise<{ item: ItemRow; created: boolean }> {
       const placeholders = ITEM_COLUMNS.map(() => "?").join(", ");
       const values: unknown[] = [
-        item.sourceId, item.kind ?? "contest", item.url, item.urlKey, item.simhash, item.title, item.summary,
+        item.sourceId, item.brand ?? null, item.kind ?? "contest", item.url, item.urlKey, item.simhash, item.title, item.summary,
         item.publishedAt, item.firstSeenAt, item.lastSeenAt, item.deadline, item.prize,
-        item.participation, item.prizeValue, item.effort, item.requiresPurchase ? 1 : 0,
+        item.participation, item.rulesUrl ?? null, item.prizeValue, item.effort, item.requiresPurchase ? 1 : 0,
         JSON.stringify(item.tags), item.score, item.clusterId, item.status, item.aiUsed ? 1 : 0,
       ];
       const inserted = await db
@@ -438,12 +484,18 @@ export function createD1Store(db: D1Like): Store {
       };
 
       if (patch.lastSeenAt !== undefined) push("last_seen_at", patch.lastSeenAt);
+      // La marca si scrive solo quando c'è: un duplicato senza marca riconosciuta
+      // non deve cancellare quella già in archivio.
+      if (patch.brand !== undefined && patch.brand !== null) push("brand", patch.brand);
       if (patch.title !== undefined) push("title", patch.title);
       if (patch.simhash !== undefined) push("simhash", patch.simhash);
       if (patch.kind !== undefined) push("kind", patch.kind);
       if (patch.deadline !== undefined) push("deadline", patch.deadline);
       if (patch.prize !== undefined) push("prize", patch.prize);
       if (patch.participation !== undefined) push("participation", patch.participation);
+      // Come la marca: si scrive quando c'è, e un null non cancella il bando che
+      // una raccolta precedente aveva già trovato.
+      if (patch.rulesUrl !== undefined && patch.rulesUrl !== null) push("rules_url", patch.rulesUrl);
       if (patch.prizeValue !== undefined) push("prize_value", patch.prizeValue);
       if (patch.effort !== undefined) push("effort", patch.effort);
       if (patch.requiresPurchase !== undefined) push("requires_purchase", patch.requiresPurchase ? 1 : 0);
@@ -482,6 +534,59 @@ export function createD1Store(db: D1Like): Store {
         .bind(...filter.params)
         .first<{ n: number }>();
       return row?.n ?? 0;
+    },
+
+    async sourceStats(): Promise<Record<string, SourceStat>> {
+      // Due letture, una per tabella: "che cosa è rimasto in archivio grazie a
+      // lei" (items, dove source_id è chi l'ha trovato per primo) e "quanto ha
+      // visto" (sightings, che registra ogni vista anche quando il concorso era
+      // già noto). Sono due cose diverse di proposito: la seconda dice anche
+      // quanto una fonte ripete gli altri.
+      //
+      // La prima conta concorsi E coupon (tutto tranne gli articoli): una fonte
+      // di coupon che porta venti buoni sconto non è una fonte inutile, e con
+      // `kind = 'contest'` la diagnostica le direbbe di no.
+      const items = await db
+        .prepare(
+          `SELECT source_id, COUNT(*) AS n, MAX(first_seen_at) AS ultimo
+           FROM items WHERE kind <> 'news' GROUP BY source_id`,
+        )
+        .all<{ source_id: string; n: number; ultimo: string | null }>();
+      // La tabella delle viste è una misura, e una misura non deve poter rompere
+      // la schermata: su un archivio antecedente alla sua creazione la diagnostica
+      // resta quella che si ricava dai fallimenti, con zero viste.
+      const sightings = await db
+        .prepare(
+          `SELECT source_id, COUNT(*) AS n, SUM(CASE WHEN kept = 0 THEN 1 ELSE 0 END) AS scartate
+           FROM sightings GROUP BY source_id`,
+        )
+        .all<{ source_id: string; n: number; scartate: number | null }>()
+        .catch(() => ({ results: [] as { source_id: string; n: number; scartate: number | null }[] }));
+
+      const stats: Record<string, SourceStat> = {};
+      const vuoto = (): SourceStat => ({ offers: 0, lastOfferAt: null, sightings: 0, discarded: 0 });
+      for (const row of items.results ?? []) {
+        const stat = (stats[row.source_id] ??= vuoto());
+        stat.offers = row.n;
+        stat.lastOfferAt = row.ultimo;
+      }
+      for (const row of sightings.results ?? []) {
+        const stat = (stats[row.source_id] ??= vuoto());
+        stat.sightings = row.n;
+        stat.discarded = row.scartate ?? 0;
+      }
+      return stats;
+    },
+
+    async brandCounts(): Promise<Record<string, number>> {
+      // Solo concorsi: gli articoli che parlano di una marca non sono concorsi da
+      // seguire, e contarli gonfierebbe il numero scritto sul bottone.
+      const result = await db
+        .prepare("SELECT brand, COUNT(*) AS n FROM items WHERE brand IS NOT NULL AND kind = 'contest' GROUP BY brand")
+        .all<{ brand: string; n: number }>();
+      const counts: Record<string, number> = {};
+      for (const row of result.results ?? []) counts[row.brand] = row.n;
+      return counts;
     },
 
     async setStatus(id: number, status: ItemStatus): Promise<void> {

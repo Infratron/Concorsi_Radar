@@ -46,6 +46,17 @@ export const CHANNEL_BY_SOURCE: Record<string, SourceChannel> = {
   dimmicosacerchi: "aggregatore",
   soldissimi: "aggregatore",
   vincimi: "aggregatore",
+  // Le fonti di coupon sono aggregatori come gli altri (raccontano le promozioni
+  // delle insegne), anche se quasi non producono viste: le viste si registrano
+  // solo per i concorsi, e un buono sconto non lo è. Restano qui perché una di
+  // quelle pagine può comunque annunciare un'estrazione, e allora è un concorso
+  // visto da un aggregatore — esattamente quello che questa tabella misura.
+  "scontrinofelice-cashback": "aggregatore",
+  "scontrinofelice-coupon": "aggregatore",
+  "dimmicosacerchi-cashback": "aggregatore",
+  "dimmicosacerchi-coupon": "aggregatore",
+  "scontomaggio-cashback": "aggregatore",
+  "scontomaggio-coupon": "aggregatore",
 
   // --- Stampa: le query Google News. Non sono la fonte del concorso e non sono
   // nemmeno un aggregatore: sono echi, e restano fuori dal confronto (altrimenti

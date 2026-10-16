@@ -6,11 +6,14 @@ import {
   COLLECTION_SILENCE_MS,
   DIGEST_CRONS,
   FALLBACK_INGEST_AFTER_MS,
+  INGEST_REPORT_MARK,
+  INGEST_REPORT_SKIP,
   NOTIFY_CRON,
   collectionCheck,
   isDigestWindow,
   jobFor,
   shouldFallbackIngest,
+  shouldReportIngest,
 } from "../src/schedule.ts";
 import type { RunRow } from "../src/types.ts";
 
@@ -138,6 +141,46 @@ describe("collectionCheck · il promemoria quando la raccolta è ferma", () => {
     const esito = collectionCheck([tick(0.25, COLLECTION_REMINDER_SKIP), run("actions", 5)], NOW);
     expect(esito.ripetuto).toBe(false);
     expect(esito.avvisare).toBe(true);
+  });
+});
+
+describe("shouldReportIngest · il report delle prime raccolte", () => {
+  /** Una raccolta su GitHub con la nota che scrive scripts/ingest.ts. */
+  function raccolta(note: string | null): RunRow {
+    return {
+      startedAt: "2026-10-16T12:00:00.000Z", trigger: "actions", sourcesOk: 1, sourcesFail: 0,
+      itemsNew: 0, ms: 100, note,
+    };
+  }
+
+  it("senza raccolte precedenti il report tocca a questo giro", () => {
+    expect(shouldReportIngest([], "schedule")).toBe(true);
+  });
+
+  it("si ferma dopo le prime raccolte con la diagnostica accesa", () => {
+    const conDiagnostica = [raccolta(INGEST_REPORT_MARK), raccolta(INGEST_REPORT_MARK)];
+    expect(shouldReportIngest(conDiagnostica, "schedule")).toBe(true);
+    expect(shouldReportIngest([...conDiagnostica, raccolta(INGEST_REPORT_MARK)], "schedule")).toBe(false);
+  });
+
+  it("conta le raccolte, non i tick del Worker", () => {
+    const tick: RunRow = {
+      startedAt: "2026-10-16T12:00:00.000Z", trigger: NOTIFY_CRON, sourcesOk: 1, sourcesFail: 0,
+      itemsNew: 0, ms: 100, note: INGEST_REPORT_MARK,
+    };
+    expect(shouldReportIngest([tick, tick], "schedule")).toBe(true);
+  });
+
+  it("una nota senza diagnostica inviata non conta: quelle raccolte sono di prima", () => {
+    // Stessa trappola del promemoria: la nota c'è a ogni giro, il segno no.
+    const vecchie = [raccolta(INGEST_REPORT_SKIP), raccolta("actions | 4 fonti"), raccolta(null)];
+    expect(shouldReportIngest(vecchie, "schedule")).toBe(true);
+  });
+
+  it("il workflow lanciato a mano riceve sempre il report", () => {
+    const tante = Array.from({ length: 10 }, () => raccolta(INGEST_REPORT_MARK));
+    expect(shouldReportIngest(tante, "workflow_dispatch")).toBe(true);
+    expect(shouldReportIngest(tante, "schedule")).toBe(false);
   });
 });
 

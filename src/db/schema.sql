@@ -14,16 +14,51 @@ CREATE TABLE IF NOT EXISTS sources (
   last_modified TEXT,
   last_run_at   TEXT,
   last_ok_at    TEXT,
-  fail_streak   INTEGER NOT NULL DEFAULT 0
+  fail_streak   INTEGER NOT NULL DEFAULT 0,
+  last_status   INTEGER,
+  last_error    TEXT,
+  last_items    INTEGER NOT NULL DEFAULT 0
 );
+
+-- `last_status`, `last_error` e `last_items` raccontano l'ULTIMO tentativo su
+-- quella fonte (codice HTTP, motivo del fallimento, item grezzi letti): sono la
+-- diagnostica delle prime raccolte — "chi ha risposto e chi no" — leggibile
+-- dalla chat e da /health, senza aprire i log di GitHub. Su un database già
+-- creato le colonne vanno aggiunte a mano PRIMA di pubblicare il codice che le
+-- legge e le scrive:
+--   ALTER TABLE sources ADD COLUMN last_status INTEGER;
+--   ALTER TABLE sources ADD COLUMN last_error TEXT;
+--   ALTER TABLE sources ADD COLUMN last_items INTEGER NOT NULL DEFAULT 0;
 
 -- `kind` distingue i concorsi veri dagli articoli e dalle pagine-contenitore che
 -- ne parlano: nello stesso archivio convivono i due, e la chat li mostra in
 -- sezioni diverse. Su un database già creato la colonna va aggiunta a mano:
 --   ALTER TABLE items ADD COLUMN kind TEXT NOT NULL DEFAULT 'contest';
+--
+-- `brand` è la marca del concorso (id di src/config/brands.ts), riconosciuta
+-- all'ingestione dalla fonte o dal testo: è quello che rende possibile la
+-- sezione "Preferiti per marca" e il filtro "solo le marche che seguo". Su un
+-- database già creato la colonna va aggiunta a mano, e le righe già in archivio
+-- si riempiono con `npm run brands -- --apply`:
+--   ALTER TABLE items ADD COLUMN brand TEXT;
+--   CREATE INDEX IF NOT EXISTS idx_items_brand ON items (brand);
+--
+-- `kind` vale 'contest' (concorso), 'coupon' (buono sconto, rimborso, cashback)
+-- oppure 'news' (articolo o pagina-contenitore). Il terzo valore non richiede
+-- nessuna migrazione: la colonna è TEXT e il default resta 'contest', che è il
+-- valore giusto per un archivio nato prima dei coupon.
+--
+-- `rules_url` è il regolamento (bando) del concorso quando NON è nel testo
+-- dell'item: la pipeline lo cerca nella pagina del concorso e lo salva qui, così
+-- in chat il bottone 📄 Regolamento c'è anche quando il testo non lo nomina
+-- (src/enrich/regulation.ts). Su un database già creato la colonna va aggiunta a
+-- mano, e le righe già in archivio (i concorsi raccolti prima) si riempiono con
+-- `npm run rules -- --apply`:
+--   ALTER TABLE items ADD COLUMN rules_url TEXT;
 CREATE TABLE IF NOT EXISTS items (
   id                INTEGER PRIMARY KEY AUTOINCREMENT,
   source_id         TEXT NOT NULL,
+  brand             TEXT,
   kind              TEXT NOT NULL DEFAULT 'contest',
   url               TEXT NOT NULL,
   url_key           TEXT NOT NULL UNIQUE,
@@ -36,6 +71,7 @@ CREATE TABLE IF NOT EXISTS items (
   deadline          TEXT,
   prize             TEXT,
   participation     TEXT,
+  rules_url         TEXT,
   prize_value       REAL NOT NULL DEFAULT 0,
   effort            REAL NOT NULL DEFAULT 0.5,
   requires_purchase INTEGER NOT NULL DEFAULT 0,
@@ -46,14 +82,17 @@ CREATE TABLE IF NOT EXISTS items (
   ai_used           INTEGER NOT NULL DEFAULT 0
 );
 
--- Le sezioni della chat leggono "i concorsi degli ultimi N giorni": l'indice
+-- Le sezioni della chat leggono "gli item degli ultimi N giorni": l'indice
 -- composto serve proprio a quella coppia di filtri (un indice sul solo kind, con
--- due valori possibili, non aiuterebbe).
+-- tre valori possibili, non aiuterebbe).
 CREATE INDEX IF NOT EXISTS idx_items_kind_seen  ON items (kind, first_seen_at DESC);
 CREATE INDEX IF NOT EXISTS idx_items_first_seen ON items (first_seen_at DESC);
 CREATE INDEX IF NOT EXISTS idx_items_deadline   ON items (deadline);
 CREATE INDEX IF NOT EXISTS idx_items_status     ON items (status);
 CREATE INDEX IF NOT EXISTS idx_items_score      ON items (score DESC);
+-- Le due letture della sezione preferiti: "i concorsi di questa marca" (filtro
+-- sull'elenco) e "quanti ne ha ogni marca" (il conteggio dei bottoni).
+CREATE INDEX IF NOT EXISTS idx_items_brand      ON items (brand);
 
 -- `sightings`: la prima volta che ogni fonte ha visto un concorso. È la memoria
 -- che serve al vantaggio di tempistica (comando /vantaggio): in `items` resta solo
@@ -82,6 +121,12 @@ CREATE TABLE IF NOT EXISTS sightings (
 CREATE INDEX IF NOT EXISTS idx_sightings_seen ON sightings (seen_at DESC);
 -- La scheda di un concorso chiede le sue viste: senza indice è una scansione.
 CREATE INDEX IF NOT EXISTS idx_sightings_item ON sightings (item_id);
+-- La diagnostica delle fonti conta le viste PER FONTE (sourceStats in
+-- src/db/store.ts) e quante di quelle sono state scartate: non è una finestra di
+-- tempo, quindi non usa idx_sightings_seen. Con questo indice il conteggio si
+-- legge per indice invece che riga per riga ("kept" sta nell'indice perché è la
+-- seconda cosa che si conta).
+CREATE INDEX IF NOT EXISTS idx_sightings_source ON sightings (source_id, kept);
 
 CREATE TABLE IF NOT EXISTS deliveries (
   chat_id INTEGER NOT NULL,

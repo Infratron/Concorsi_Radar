@@ -1,4 +1,4 @@
-import type { Store } from "./store.ts";
+import type { SourceStat, Store } from "./store.ts";
 import type {
   ItemPatch,
   ItemQuery,
@@ -72,12 +72,18 @@ export function createMemoryStore(): MemoryStore {
 
   const applyPatch = (row: ItemRow, patch: ItemPatch): void => {
     if (patch.lastSeenAt !== undefined) row.lastSeenAt = patch.lastSeenAt;
+    // Come in D1: la marca si scrive quando c'è, e un duplicato senza marca non
+    // cancella quella già riconosciuta.
+    if (patch.brand !== undefined && patch.brand !== null) row.brand = patch.brand;
     if (patch.title !== undefined) row.title = patch.title;
     if (patch.simhash !== undefined) row.simhash = patch.simhash;
     if (patch.kind !== undefined) row.kind = patch.kind;
     if (patch.deadline !== undefined) row.deadline = patch.deadline;
     if (patch.prize !== undefined) row.prize = patch.prize;
     if (patch.participation !== undefined) row.participation = patch.participation;
+    // Come in D1: si scrive quando c'è, e un null non cancella il regolamento già
+    // trovato da una raccolta precedente.
+    if (patch.rulesUrl !== undefined && patch.rulesUrl !== null) row.rulesUrl = patch.rulesUrl;
     if (patch.prizeValue !== undefined) row.prizeValue = patch.prizeValue;
     if (patch.effort !== undefined) row.effort = patch.effort;
     if (patch.requiresPurchase !== undefined) row.requiresPurchase = patch.requiresPurchase;
@@ -100,6 +106,7 @@ export function createMemoryStore(): MemoryStore {
       if (!haystack.includes(keyword)) return false;
     }
     if (query.withoutDeadline === true && row.deadline !== null) return false;
+    if (query.withoutRules === true && row.rulesUrl !== null) return false;
     if (query.deadlineBefore) {
       if (row.deadline === null || row.deadline > query.deadlineBefore) return false;
     }
@@ -112,6 +119,9 @@ export function createMemoryStore(): MemoryStore {
       return false;
     }
     if (query.withoutPurchase === true && row.requiresPurchase) return false;
+    if (query.brands && query.brands.length > 0 && (row.brand === null || !query.brands.includes(row.brand))) {
+      return false;
+    }
     return true;
   };
 
@@ -154,6 +164,11 @@ export function createMemoryStore(): MemoryStore {
       if (result.etag !== null) source.etag = result.etag;
       if (result.lastModified !== null) source.lastModified = result.lastModified;
       source.lastRunAt = result.now;
+      // Come in D1: la storia (fail_streak, last_ok_at) e l'ultimo tentativo
+      // (codice, errore, item) sono due cose diverse, e si scrivono tutte e due.
+      source.lastStatus = result.httpStatus;
+      source.lastError = result.error;
+      source.lastItems = result.items;
       if (result.ok) {
         source.failStreak = 0;
         source.lastOkAt = result.now;
@@ -182,9 +197,18 @@ export function createMemoryStore(): MemoryStore {
       const existing = items.find((row) => row.urlKey === item.urlKey);
       if (existing) return { item: clone(existing), created: false };
 
-      // `kind` esplicito: chi non lo passa sta inserendo un concorso (è il caso
-      // dei test e degli strumenti che non si occupano di classificazione).
-      const row: ItemRow = { id: nextItemId++, ...clone(item), kind: item.kind ?? "contest" };
+      // `kind` e `brand` espliciti: chi non li passa sta inserendo un concorso
+      // senza marca dichiarata (è il caso dei test e degli strumenti che non si
+      // occupano di classificazione).
+      const row: ItemRow = {
+        id: nextItemId++,
+        ...clone(item),
+        brand: item.brand ?? null,
+        kind: item.kind ?? "contest",
+        // Chi non dichiara un regolamento ottiene null, non undefined: la chat
+        // ricade sul testo dell'item (vedi src/telegram/digest.ts).
+        rulesUrl: item.rulesUrl ?? null,
+      };
       items.push(row);
       return { item: clone(row), created: true };
     },
@@ -212,6 +236,33 @@ export function createMemoryStore(): MemoryStore {
 
     async countItems(query: ItemQuery): Promise<number> {
       return items.filter((row) => matchesQuery(row, query)).length;
+    },
+
+    async sourceStats(): Promise<Record<string, SourceStat>> {
+      const stats: Record<string, SourceStat> = {};
+      const vuoto = (): SourceStat => ({ offers: 0, lastOfferAt: null, sightings: 0, discarded: 0 });
+      for (const row of items) {
+        // Concorsi e coupon: gli articoli non sono un contributo (vedi SourceStat).
+        if (row.kind === "news") continue;
+        const stat = (stats[row.sourceId] ??= vuoto());
+        stat.offers += 1;
+        if (stat.lastOfferAt === null || row.firstSeenAt > stat.lastOfferAt) stat.lastOfferAt = row.firstSeenAt;
+      }
+      for (const vista of sightings) {
+        const stat = (stats[vista.sourceId] ??= vuoto());
+        stat.sightings += 1;
+        if (!vista.kept) stat.discarded += 1;
+      }
+      return stats;
+    },
+
+    async brandCounts(): Promise<Record<string, number>> {
+      const counts: Record<string, number> = {};
+      for (const row of items) {
+        if (row.brand === null || row.kind !== "contest") continue;
+        counts[row.brand] = (counts[row.brand] ?? 0) + 1;
+      }
+      return counts;
     },
 
     async setStatus(id: number, status: ItemStatus): Promise<void> {

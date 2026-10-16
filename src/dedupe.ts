@@ -1,5 +1,6 @@
-import type { Insight, ItemKind, ItemRow, NewItem, RawItem, SourceKind } from "./types.ts";
+import type { Category, Insight, ItemKind, ItemRow, NewItem, RawItem, SourceKind } from "./types.ts";
 import type { Store } from "./db/store.ts";
+import { brandFor } from "./config/brands.ts";
 import { classifyKind } from "./enrich/kind.ts";
 import { readableTitle } from "./lib/titles.ts";
 import {
@@ -29,8 +30,16 @@ export interface PreparedItem {
   urlKey: string;
   simhash: string;
   /**
-   * Concorso o articolo/aggregatore. Si decide in ingresso (src/enrich/kind.ts)
-   * e viaggia con l'item, così in chat le due sezioni sono già separate.
+   * La marca riconosciuta (src/config/brands.ts): si calcola QUI, con il titolo
+   * già ripulito, perché è l'unico punto in cui si vedono insieme la fonte, il
+   * titolo definitivo e l'URL canonico — cioè tutte le prove che servono a dire
+   * di chi è il concorso.
+   */
+  brand: string | null;
+  /**
+   * Concorso, offerta (coupon/rimborso) o articolo/aggregatore. Si decide in
+   * ingresso (src/enrich/kind.ts) e viaggia con l'item, così in chat le tre
+   * sezioni sono già separate.
    */
   kind: ItemKind;
 }
@@ -54,6 +63,8 @@ export async function prepareItem(
   raw: RawItem,
   sourceName?: string | Set<string>,
   sourceKind: SourceKind = "rss",
+  /** Categoria della fonte: le fonti coupon si riconoscono da qui (kind.ts). */
+  sourceCategory: Category = "altro",
 ): Promise<PreparedItem> {
   const canonical = canonicalUrl(raw.url);
   const title = cleanTitle(raw.title, sourceName);
@@ -62,7 +73,8 @@ export async function prepareItem(
     title,
     urlKey: urlKey(canonical),
     simhash: simhash(title),
-    kind: classifyKind({ url: canonical, title, sourceKind }),
+    brand: brandFor({ sourceId: raw.sourceId, title, summary: raw.summary, url: canonical }),
+    kind: classifyKind({ url: canonical, title, sourceKind, sourceCategory }),
   };
 }
 
@@ -176,9 +188,17 @@ export function toNewItem(
   insight: Insight,
   score: number,
   now: Date,
+  /**
+   * Il regolamento trovato per questo concorso (src/enrich/regulation.ts): la
+   * pipeline lo cerca sulla pagina, la chat lo usa per il bottone 📄 Regolamento.
+   * Di default non c'è — chi chiama questa funzione senza cercarlo (test,
+   * strumenti) ottiene una riga senza bando, e in chat il bottone non compare.
+   */
+  rulesUrl: string | null = null,
 ): NewItem {
   return {
     sourceId: raw.sourceId,
+    brand: prepared.brand,
     kind: prepared.kind,
     url: prepared.url,
     urlKey: prepared.urlKey,
@@ -191,6 +211,7 @@ export function toNewItem(
     deadline: insight.deadline,
     prize: insight.prize,
     participation: insight.participation,
+    rulesUrl,
     prizeValue: insight.prizeValue,
     effort: insight.effort,
     requiresPurchase: insight.requiresPurchase,
@@ -213,10 +234,17 @@ export async function mergeDuplicate(
   insight: Insight,
   score: number,
   now: Date,
+  /** La marca riconosciuta sulla copia arrivata adesso: riempie quella mancante. */
+  brand: string | null = null,
 ): Promise<void> {
   const iso = now.toISOString();
+  // La marca si scrive anche su una riga già in archivio: un concorso arrivato
+  // prima da una fonte che non lo nominava riceve il nome dalla copia di oggi.
+  // Una riga che ha già una marca non si sovrascrive (non c'è un motivo per
+  // credere che la copia nuova la riconosca meglio).
+  const nuovaMarca = existing.brand === null && brand !== null ? brand : undefined;
   if (existing.clusterId === null) {
-    await store.updateItem(existing.id, { clusterId: existing.id, lastSeenAt: iso });
+    await store.updateItem(existing.id, { clusterId: existing.id, lastSeenAt: iso, brand: nuovaMarca });
     return;
   }
 
@@ -224,6 +252,10 @@ export async function mergeDuplicate(
   // arricchiamo la riga esistente invece di buttare via l'informazione.
   const patch: Parameters<Store["updateItem"]>[1] = { lastSeenAt: iso };
   let improved = false;
+  if (nuovaMarca !== undefined) {
+    patch.brand = nuovaMarca;
+    improved = true;
+  }
   if (existing.deadline === null && insight.deadline !== null) {
     patch.deadline = insight.deadline;
     improved = true;

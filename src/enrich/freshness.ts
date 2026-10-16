@@ -1,5 +1,6 @@
 import { SOURCES } from "../config/sources.ts";
 import { looksLikeListingContest } from "./rules.ts";
+import type { ItemKind } from "../types.ts";
 
 /**
  * Il cancello di "concorso ANCORA ATTIVO".
@@ -28,6 +29,34 @@ import { looksLikeListingContest } from "./rules.ts";
  * perché scartare un concorso vivo costa più che tenere un dubbio.
  */
 export const STALE_PAGE_DAYS = 180;
+
+/**
+ * Da quanto un coupon è troppo vecchio per essere ancora spendibile.
+ *
+ * La regola vale DUE volte, ed è la stessa: qui all'ingresso (un buono sconto
+ * pubblicato due mesi fa non entra in archivio: il primo giro di una fonte nuova
+ * scarica il suo arretrato, e senza questo cancello la sezione dei coupon
+ * nascebbe piena di offerte morte) e nella pulizia periodica (src/pipeline.ts
+ * `expireOldItems`, che toglie dall'elenco i coupon arrivati da vivi e invecchiati
+ * lì).
+ *
+ * Sessanta giorni è largo per una promozione stagionale e corto abbastanza perché
+ * 💶 Coupon non diventi un cimitero: un coupon non dichiara quasi mai una
+ * scadenza, e si scopre che era finito solo quando al negozio il codice non passa.
+ * I coupon senza data di pubblicazione non si giudicano: "non lo so" non è una
+ * prova.
+ */
+export const COUPON_TTL_DAYS = 60;
+
+/**
+ * Parola con cui comincia il motivo di un'offerta invecchiata. È esportata
+ * perché chi decide se CANCELLARE una riga deve saper distinguere "l'offerta ha
+ * finito il suo tempo" da "questa pagina non è mai stata né un concorso né
+ * un'offerta": la prima si chiude e resta nello storico, la seconda si toglie
+ * (vedi scripts/prune-stale.ts). Il numero di giorni segue la parola, quindi il
+ * confronto è per prefisso.
+ */
+export const AGED_OFFER_REASON = "offerta vecchia";
 
 /** Anni in un titolo, in un testo o in un URL. */
 const YEAR = /\b(20\d{2})\b/g;
@@ -75,6 +104,8 @@ export interface FreshnessInput {
   deadline: string | null;
   /** true per le fonti di elenco (sitemap, html): lì il titolo è lo slug. */
   fromListing: boolean;
+  /** Concorso, coupon o articolo: i coupon hanno una vita più corta. */
+  kind: ItemKind;
 }
 
 /** Fonti il cui titolo è ricavato dall'URL e che non portano testo di pagina. */
@@ -123,6 +154,13 @@ function pastYear(text: string, now: Date): number | null {
 export function staleReason(item: FreshnessInput, now: Date): string | null {
   // Una scadenza è la prova più forte: il concorso è aperto.
   if (item.deadline !== null) return null;
+
+  // I coupon invecchiano prima: la stessa regola della pulizia periodica, qui
+  // all'ingresso (vedi COUPON_TTL_DAYS).
+  if (item.kind === "coupon" && item.publishedAt !== null) {
+    const age = daysSince(item.publishedAt, now);
+    if (age !== null && age > COUPON_TTL_DAYS) return `${AGED_OFFER_REASON} (${age} giorni)`;
+  }
 
   const haystack = `${item.title}\n${item.url}\n${item.summary}`;
   const year = pastYear(haystack, now);
@@ -182,7 +220,15 @@ function carriesContestSignal(item: { title: string; url: string }): boolean {
 
 /** Il cancello applicato a un item già in archivio. */
 export function staleItemReason(
-  row: { sourceId: string; title: string; url: string; summary: string; publishedAt: string | null; deadline: string | null },
+  row: {
+    sourceId: string;
+    title: string;
+    url: string;
+    summary: string;
+    publishedAt: string | null;
+    deadline: string | null;
+    kind: ItemKind;
+  },
   now: Date,
 ): string | null {
   return staleReason(
@@ -193,6 +239,7 @@ export function staleItemReason(
       publishedAt: row.publishedAt,
       deadline: row.deadline,
       fromListing: isListingItem(row.sourceId, row.summary),
+      kind: row.kind,
     },
     now,
   );
