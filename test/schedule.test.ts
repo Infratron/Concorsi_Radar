@@ -5,13 +5,16 @@ import {
   COLLECTION_REMINDER_SKIP,
   COLLECTION_SILENCE_MS,
   DIGEST_CRONS,
+  EXTERNAL_TRIGGERS,
   FALLBACK_INGEST_AFTER_MS,
   INGEST_REPORT_MARK,
   INGEST_REPORT_SKIP,
   NOTIFY_CRON,
   collectionCheck,
   isDigestWindow,
+  isExternalTrigger,
   jobFor,
+  runOrigin,
   shouldFallbackIngest,
   shouldReportIngest,
 } from "../src/schedule.ts";
@@ -181,6 +184,58 @@ describe("shouldReportIngest · il report delle prime raccolte", () => {
     const tante = Array.from({ length: 10 }, () => raccolta(INGEST_REPORT_MARK));
     expect(shouldReportIngest(tante, "workflow_dispatch")).toBe(true);
     expect(shouldReportIngest(tante, "schedule")).toBe(false);
+  });
+});
+
+describe("la raccolta esterna: GitHub o il PC, non conta quale", () => {
+  const NOW = new Date("2026-10-16T12:00:00.000Z");
+  function run(trigger: string, oreFa: number, note: string | null = null): RunRow {
+    return {
+      startedAt: new Date(NOW.getTime() - oreFa * 3_600_000).toISOString(),
+      trigger,
+      sourcesOk: 0,
+      sourcesFail: 0,
+      itemsNew: 0,
+      ms: 100,
+      note,
+    };
+  }
+
+  it("i due esecutori del progetto sono raccolte esterne; un cron no", () => {
+    expect([...EXTERNAL_TRIGGERS]).toEqual(["actions", "local"]);
+    expect(isExternalTrigger("actions")).toBe(true);
+    expect(isExternalTrigger("local")).toBe(true);
+    expect(isExternalTrigger(NOTIFY_CRON)).toBe(false);
+  });
+
+  it("una raccolta recente dal PC tiene il Worker fuori dai feed", () => {
+    // È il caso reale di questa installazione: GitHub Actions non gira, la
+    // raccolta la lancia `npm run ingest` dalla macchina di chi usa il bot.
+    expect(shouldFallbackIngest([run("local", 0.5)], NOW)).toBe(false);
+    expect(shouldFallbackIngest([run("local", 3)], NOW)).toBe(true);
+  });
+
+  it("il promemoria della raccolta ferma legge anche le esecuzioni locali", () => {
+    const tick = run(NOTIFY_CRON, 0.25);
+    const locale = collectionCheck([tick, run("local", 1)], NOW);
+    expect(locale.ferma).toBe(false);
+    expect(locale.oreDaRaccolta).toBe(1);
+
+    const fermo = collectionCheck([tick, run("local", 4)], NOW);
+    expect(fermo.ferma).toBe(true);
+    expect(fermo.avvisare).toBe(true);
+  });
+
+  it("la diagnostica conta le raccolte locali come le altre", () => {
+    const locale = (): RunRow => run("local", 1, INGEST_REPORT_MARK);
+    expect(shouldReportIngest([locale(), locale()], "")).toBe(true);
+    expect(shouldReportIngest([locale(), locale(), locale()], "")).toBe(false);
+  });
+
+  it("ogni esecuzione si racconta con il suo nome", () => {
+    expect(runOrigin("actions")).toBe("GitHub");
+    expect(runOrigin("local")).toBe("questo PC");
+    expect(runOrigin(NOTIFY_CRON)).toBe("Worker");
   });
 });
 

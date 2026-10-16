@@ -113,6 +113,10 @@ export function createMemoryStore(): MemoryStore {
     if (query.deadlineAfter) {
       if (row.deadline === null || row.deadline < query.deadlineAfter) return false;
     }
+    // Come in SQL: senza validità dichiarata l'item non si giudica, e resta.
+    if (query.deadlineNotBefore && row.deadline !== null && row.deadline < query.deadlineNotBefore) {
+      return false;
+    }
     if (query.excludeIds && query.excludeIds.length > 0 && query.excludeIds.includes(row.id)) return false;
     if (query.excludeSources && query.excludeSources.includes(row.sourceId)) return false;
     if (query.excludeTags && query.excludeTags.length > 0 && row.tags.some((tag) => query.excludeTags!.includes(tag))) {

@@ -237,6 +237,28 @@ describe("memory store · queryItems", () => {
     expect(wide).toHaveLength(3);
   });
 
+  it("il filtro di validità toglie i coupon scaduti e lascia quelli senza data", async () => {
+    // Un coupon senza validità dichiarata non si giudica (e resta), uno con la
+    // validità passata non si può più spendere: è la differenza fra questo filtro
+    // e deadlineAfter, che invece chiede una data e scarterebbe i più.
+    await store.insertItem(
+      makeItem({ urlKey: "key-coupon-vivo", url: "https://coupon.example/novi", kind: "coupon", deadline: null }),
+    );
+    await store.insertItem(
+      makeItem({ urlKey: "key-coupon-domani", url: "https://coupon.example/lidl", kind: "coupon", deadline: "2026-10-17" }),
+    );
+    await store.insertItem(
+      makeItem({ urlKey: "key-coupon-morto", url: "https://coupon.example/vecchio", kind: "coupon", deadline: "2026-10-15" }),
+    );
+
+    const vivi = await store.queryItems({ kinds: ["coupon"], deadlineNotBefore: "2026-10-16", limit: 10 });
+    expect(vivi.map((row) => row.urlKey).sort()).toEqual(["key-coupon-domani", "key-coupon-vivo"]);
+    expect(await store.countItems({ kinds: ["coupon"], deadlineNotBefore: "2026-10-16" })).toBe(2);
+    // Il filtro non guarda il tipo: sui tre item del beforeEach (due concorsi con
+    // scadenza e uno senza) toglie soltanto il coupon scaduto.
+    expect(await store.queryItems({ deadlineNotBefore: "2026-10-16", limit: 10 })).toHaveLength(5);
+  });
+
   it("setStatus e updateItem cambiano lo stato e i campi arricchiti", async () => {
     await store.updateItem(1, { score: 88, status: "sent", deadline: "2026-12-15", tags: ["giftcard", "gratis"] });
     const item = await store.getItem(1);

@@ -990,6 +990,34 @@ describe("pipeline · coupon e rimborsi", () => {
     expect(statoDi("Buono sconto di oggi")).toBe("new");
     expect(statoDi("Concorso senza scadenza")).toBe("new");
   });
+
+  it("un coupon con la validità finita si archivia subito, senza i tre giorni dei concorsi", async () => {
+    // La grazia di tre giorni serve a un concorso chiuso: la sua pagina resta
+    // consultabile nello storico. Un buono sconto no — al negozio il codice non
+    // passa — quindi la validità dichiarata basta, il giorno dopo è fuori.
+    const store = createMemoryStore();
+    await store.upsertPrefs(prefs(200));
+    await store.insertItem(
+      newItem({ title: "Buono sconto scaduto ieri", kind: "coupon", deadline: "2026-10-15" }),
+    );
+    await store.insertItem(
+      // Lo stesso giorno, ma è un concorso: qui la grazia vale ancora.
+      newItem({ title: "Concorso chiuso ieri", kind: "contest", deadline: "2026-10-15" }),
+    );
+    await store.insertItem(
+      // Valido fino a oggi: un coupon si usa fino all'ultimo giorno.
+      newItem({ title: "Buono sconto valido oggi", kind: "coupon", deadline: "2026-10-16" }),
+    );
+
+    const quanti = await expireOldItems(store, NOW);
+
+    expect(quanti).toBe(1);
+    const tutti = await store.queryItems({ limit: 10 });
+    const statoDi = (titolo: string): string | undefined => tutti.find((row) => row.title === titolo)?.status;
+    expect(statoDi("Buono sconto scaduto ieri")).toBe("expired");
+    expect(statoDi("Concorso chiuso ieri")).toBe("new");
+    expect(statoDi("Buono sconto valido oggi")).toBe("new");
+  });
 });
 
 describe("pipeline · regolamento sulla pagina del concorso", () => {

@@ -1,9 +1,10 @@
 import { chatAccess } from "../src/config/env.ts";
 import { SOURCES, USER_AGENT } from "../src/config/sources.ts";
-import { d1HttpOptionsFromEnv, createD1HttpStore } from "../src/db/d1-http.ts";
+import { createD1HttpStore } from "../src/db/d1-http.ts";
 import { runIngest, type IngestSummary } from "../src/pipeline.ts";
 import { TelegramClient } from "../src/telegram/api.ts";
-import { INGEST_REPORT_MARK, INGEST_REPORT_SKIP, shouldReportIngest } from "../src/schedule.ts";
+import { INGEST_REPORT_MARK, INGEST_REPORT_SKIP, isExternalTrigger, shouldReportIngest } from "../src/schedule.ts";
+import { d1OptionsForLocalRun } from "./wrangler-auth.ts";
 import { plainIngestLines, sendIngestReport, type IngestReport } from "../src/telegram/report.ts";
 
 /**
@@ -20,29 +21,49 @@ import { plainIngestLines, sendIngestReport, type IngestReport } from "../src/te
  *  - nessun freno di CPU: su Actions non esiste il limite di 10 ms del piano
  *    Free, quindi il budget si alza di molto per non rimandare item buoni.
  *
- * Secret richiesti (variabili d'ambiente): CLOUDFLARE_ACCOUNT_ID,
- * CLOUDFLARE_API_TOKEN, D1_DATABASE_ID. Facoltativi: TELEGRAM_BOT_TOKEN e
+ * Credenziali (variabili d'ambiente): CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_API_TOKEN
+ * (permesso D1:Edit), D1_DATABASE_ID. Facoltativi: TELEGRAM_BOT_TOKEN e
  * ADMIN_CHAT_ID (o ALLOWED_CHAT_IDS) per l'avviso di fonte in errore e per il
  * report delle prime raccolte — quello che dice chi ha risposto e chi no, con
  * l'ora e il codice HTTP, senza aprire la pagina del job (src/telegram/report.ts).
  *
  * Uso locale:  npm run ingest
+ *
+ * Da un PC le credenziali si possono anche non dichiarare: se le variabili non
+ * ci sono, la raccolta usa il login di wrangler già presente sulla macchina
+ * (scripts/wrangler-auth.ts). Quella comodità vale per una raccolta a mano — il
+ * token di wrangler scade in poche ore; per una raccolta periodica serve un
+ * token API, che non scade.
+ *
+ * L'esecuzione si registra per quello che è: `actions` sotto GitHub,
+ * `local` quando la lancia un PC. Il Worker usa questo nome per decidere se la
+ * raccolta è viva (src/schedule.ts): non importa dove gira, importa che giri.
  */
 
-/** Su Actions il freno di CPU va alzato: è l'unico motivo per cui non è il Worker. */
-const ACTIONS_CPU_BUDGET_MS = 600_000;
 /**
- * Quanto tempo di parete può spendere la ricerca dei regolamenti in un giro su
- * Actions. Il default della pipeline (8 s) è tarato sul tick del Worker, che ha
+ * Chi sta eseguendo questa raccolta. La variabile è quella che GitHub imposta da
+ * sé nei job: nessun altro ambiente la definisce, quindi non serve un flag da
+ * passare a mano (e una raccolta a mano resta etichettata come tale invece di
+ * fingere di essere il workflow).
+ */
+const TRIGGER = process.env.GITHUB_ACTIONS ? "actions" : "local";
+
+/** Fuori dal Worker il freno di CPU va alzato: è l'unico motivo per cui non è il Worker. */
+const EXTERNAL_CPU_BUDGET_MS = 600_000;
+/**
+ * Quanto tempo di parete può spendere la ricerca dei regolamenti in una raccolta
+ * esterna. Il default della pipeline (8 s) è tarato sul tick del Worker, che ha
  * un tempo massimo di esecuzione; qui quel muro non c'è e le pagine dei concorsi
  * sono decine, quindi il tetto vero resta il numero di ricerche per giro
  * (MAX_RULES_LOOKUPS_PER_RUN).
  */
-const ACTIONS_RULES_LOOKUP_MS = 120_000;
+const EXTERNAL_RULES_LOOKUP_MS = 120_000;
 
 function note(summary: IngestSummary, diagnostica: string): string {
   return [
-    "actions",
+    // La prima parola è l'esecutore, e si legge in 🕒 Ultime raccolte: "actions"
+    // sotto GitHub, "local" per una raccolta lanciata da un PC (src/schedule.ts).
+    TRIGGER,
     `${summary.sourcesDue} fonti`,
     `${summary.duplicates} duplicati`,
     `${summary.filtered} fuori tema`,
@@ -111,7 +132,7 @@ async function alertDeadSources(summary: IngestSummary): Promise<number> {
 
 async function main(): Promise<void> {
   const now = new Date();
-  const store = createD1HttpStore(d1HttpOptionsFromEnv(process.env));
+  const store = createD1HttpStore(await d1OptionsForLocalRun(process.env));
   const enabled = SOURCES.filter((config) => config.enabled).length;
   const eventName = process.env.GITHUB_EVENT_NAME ?? "";
 
@@ -125,14 +146,15 @@ async function main(): Promise<void> {
     {
       allSources: true,
       maxSources: Math.max(enabled, 1),
-      cpuBudgetMs: ACTIONS_CPU_BUDGET_MS,
-      rulesLookupMs: ACTIONS_RULES_LOOKUP_MS,
+      cpuBudgetMs: EXTERNAL_CPU_BUDGET_MS,
+      rulesLookupMs: EXTERNAL_RULES_LOOKUP_MS,
     },
   );
   const avvisi = await alertDeadSources(summary);
 
   const manuale = eventName === "workflow_dispatch";
-  const precedenti = runs.filter((run) => run.trigger === "actions").length;
+  const precedenti = runs.filter((run) => isExternalTrigger(run.trigger)).length;
+  const dove = TRIGGER === "actions" ? "su GitHub" : "da questo PC";
   const report: IngestReport = {
     attempts: summary.attempts,
     itemsSeen: summary.itemsSeen,
@@ -140,7 +162,7 @@ async function main(): Promise<void> {
     deferred: summary.deferred,
     titolo: manuale
       ? "Raccolta lanciata a mano"
-      : precedenti === 0 ? "Prima raccolta su GitHub" : "Raccolta su GitHub",
+      : precedenti === 0 ? `Prima raccolta ${dove}` : `Raccolta ${dove}`,
   };
   // Il report in chat vale per le prime raccolte e per quelle chieste a mano;
   // negli altri giri lo stato delle fonti si legge in 📡 Fonti, che non fa
@@ -157,7 +179,7 @@ async function main(): Promise<void> {
 
   await store.recordRun({
     startedAt: now.toISOString(),
-    trigger: "actions",
+    trigger: TRIGGER,
     sourcesOk: summary.sourcesOk,
     sourcesFail: summary.sourcesFail,
     itemsNew: summary.itemsNew,

@@ -1790,6 +1790,29 @@ describe("coupon e rimborsi · la sezione", () => {
     expect((await store.getUiState(CHAT))?.section).toBe("coupon");
   });
 
+  it("un coupon con la validità finita non resta in elenco", async () => {
+    // NOW è il 20 novembre: il codice Lidl era valido fino al 22 ottobre. Un buono
+    // del genere non si può più spendere, e in 💶 Coupon sarebbe una riga da
+    // toccare per niente — mentre chi non dichiara una validità resta, perché
+    // "non lo so" non è una prova (il taglio lo fa COUPON_TTL_DAYS).
+    const store = createMemoryStore();
+    await store.upsertPrefs(prefs());
+    await seed(store, [
+      { title: "Buono sconto Crema Novi da stampare", kind: "coupon", deadline: null },
+      { title: "Riscatta Codice Lidl per sfoglie gratis", kind: "coupon", deadline: "2026-10-22" },
+    ]);
+    const { tg, calls } = makeTg();
+
+    await handleUpdate(command(1, "/coupon"), deps(store, tg));
+
+    const bottoni = lastKeyboard(calls)?.inline_keyboard.flat() ?? [];
+    expect(bottoni.some((bottone) => bottone.text.includes("Novi"))).toBe(true);
+    expect(bottoni.some((bottone) => bottone.text.includes("Lidl"))).toBe(false);
+    // Il numero sul bottone e in testa conta la stessa query: 1, non 2.
+    const testo = String(lastWith(calls, "sendMessage")?.payload.text ?? "");
+    expect(testo).toContain("1 coupon");
+  });
+
   it("il coupon si conta nel menù e nell'archivio, ma non fra i concorsi", async () => {
     const store = createMemoryStore();
     await store.upsertPrefs(prefs());

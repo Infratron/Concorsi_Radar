@@ -11,8 +11,9 @@ import { localHour } from "./telegram/format.ts";
 export const DIGEST_CRONS = ["5 6 * * *", "5 17 * * *"];
 /**
  * Cron dei 15 minuti: avvisi istantanei e pulizia dell'archivio. La raccolta
- * dei feed non è più qui — la fa GitHub Actions, dalla cui rete le fonti
- * bloccate verso Cloudflare rispondono 200.
+ * dei feed non è più qui — la fa la raccolta esterna (GitHub Actions, o
+ * `npm run ingest` da un PC), dalla cui rete le fonti bloccate verso Cloudflare
+ * rispondono 200.
  */
 export const NOTIFY_CRON = "*/15 * * * *";
 
@@ -33,8 +34,34 @@ export function jobFor(cron: string, now: Date, digestHours: number[]): "digest"
 }
 
 /**
- * La raccolta su GitHub Actions gira ogni 30 minuti: se tace per più di due ore
- * (secret scaduto, workflow disattivato per inattività, GitHub in tilt) il
+ * La raccolta "esterna" non è il tick del Worker: è la stessa pipeline lanciata
+ * dove la rete non è quella di Cloudflare, che diversi siti italiani bloccano
+ * con un 403. I due posti in cui gira oggi sono GitHub Actions (`actions`) e il
+ * PC di chi lancia `npm run ingest` (`local`); per il resto — ritardi, promemoria,
+ * diagnostica — contano allo stesso modo, perché quello che conta è che la
+ * raccolta sia VIVA, non da dove arriva.
+ */
+export const EXTERNAL_TRIGGERS = ["actions", "local"] as const;
+
+/** true se questa riga di `runs` è una raccolta esterna e non un tick del Worker. */
+export function isExternalTrigger(trigger: string): boolean {
+  return (EXTERNAL_TRIGGERS as readonly string[]).includes(trigger);
+}
+
+/**
+ * Da dove arriva un'esecuzione, come lo legge chi guarda 🕒 Ultime raccolte.
+ * I tick del Worker non sono una raccolta: si distinguono perché il loro trigger
+ * è l'espressione cron, non un nome.
+ */
+export function runOrigin(trigger: string): "GitHub" | "questo PC" | "Worker" {
+  if (trigger === "actions") return "GitHub";
+  if (trigger === "local") return "questo PC";
+  return "Worker";
+}
+
+/**
+ * La raccolta esterna gira ogni 30 minuti: se tace per più di due ore (secret
+ * scaduto, workflow disattivato per inattività, GitHub in tilt, PC spento) il
  * Worker torna a raccogliere quel poco che la sua rete raggiunge, invece di
  * lasciare il radar muto senza che nessuno se ne accorga. È una rete di
  * sicurezza, non la via normale: la rete di Cloudflare è bloccata da diverse
@@ -42,9 +69,9 @@ export function jobFor(cron: string, now: Date, digestHours: number[]): "digest"
  */
 export const FALLBACK_INGEST_AFTER_MS = 2 * 60 * 60 * 1000;
 
-/** true se nessuna esecuzione della raccolta (trigger "actions") è recente. */
+/** true se nessuna esecuzione della raccolta esterna è recente. */
 export function shouldFallbackIngest(runs: RunRow[], now: Date): boolean {
-  const ultima = runs.find((run) => run.trigger === "actions");
+  const ultima = runs.find((run) => isExternalTrigger(run.trigger));
   if (!ultima) return true;
   const at = Date.parse(ultima.startedAt);
   return !Number.isFinite(at) || now.getTime() - at > FALLBACK_INGEST_AFTER_MS;
@@ -53,9 +80,9 @@ export function shouldFallbackIngest(runs: RunRow[], now: Date): boolean {
 /**
  * Il promemoria quando la raccolta non gira: tre ore di silenzio e nessuno se ne
  * accorge, perché il radar continua a consegnare quello che ha già in archivio.
- * È il guasto più insidioso dei due: una fonte rotta si vede in /fonti, un job di
- * GitHub fermo no — l'unico segnale era la raccolta di riserva che partiva in
- * silenzio.
+ * È il guasto più insidioso dei due: una fonte rotta si vede in /fonti, la
+ * raccolta esterna ferma no (vale per il job di GitHub come per il PC) — l'unico
+ * segnale era la raccolta di riserva che partiva in silenzio.
  */
 export const COLLECTION_SILENCE_MS = 3 * 60 * 60 * 1000;
 /**
@@ -99,13 +126,13 @@ export const INGEST_REPORT_SKIP = "diagnostica: no";
 export function shouldReportIngest(runs: RunRow[], eventName: string): boolean {
   if (eventName === "workflow_dispatch") return true;
   const conDiagnostica = runs.filter(
-    (run) => run.trigger === "actions" && (run.note ?? "").includes(INGEST_REPORT_MARK),
+    (run) => isExternalTrigger(run.trigger) && (run.note ?? "").includes(INGEST_REPORT_MARK),
   ).length;
   return conDiagnostica < FIRST_INGEST_REPORTS;
 }
 
 export interface CollectionCheck {
-  /** Ore dall'ultima raccolta su GitHub; null se non compare nella finestra. */
+  /** Ore dall'ultima raccolta esterna; null se non compare nella finestra. */
   oreDaRaccolta: number | null;
   /** Ore dall'ultima esecuzione in assoluto: il tick del Worker più recente. */
   oreDalTick: number | null;
@@ -136,7 +163,7 @@ export function collectionCheck(runs: RunRow[], now: Date): CollectionCheck {
     return Number.isFinite(at) ? (now.getTime() - at) / 3_600_000 : null;
   };
 
-  const raccolta = runs.find((run) => run.trigger === "actions") ?? null;
+  const raccolta = runs.find((run) => isExternalTrigger(run.trigger)) ?? null;
   const tick = runs[0] ?? null;
   const ultima = runs[runs.length - 1] ?? null;
   const oreDaRaccolta = raccolta ? ore(raccolta.startedAt) : null;

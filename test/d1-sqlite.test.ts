@@ -120,6 +120,26 @@ describe("store D1 · SQL vero su SQLite", () => {
     expect((await store.queryItems({ kinds: [] }))).toHaveLength(3);
   });
 
+  it("il filtro di validità dei coupon è SQL, non un filtro fatto dopo", async () => {
+    // La differenza con deadlineAfter: quello chiede una scadenza dichiarata
+    // (`deadline IS NOT NULL`), questo tiene dentro anche chi non ne ha, perché
+    // quasi nessun coupon dichiara una data di fine. Il NULL è il caso da non
+    // sbagliare: senza l'OR la query scarterebbe quasi tutti i buoni.
+    await store.insertItem(item({ urlKey: "key-vivo", url: "https://a.example/vivo", kind: "coupon" }));
+    await store.insertItem(
+      item({ urlKey: "key-domani", url: "https://b.example/domani", kind: "coupon", deadline: "2026-10-17" }),
+    );
+    await store.insertItem(
+      item({ urlKey: "key-morto", url: "https://c.example/morto", kind: "coupon", deadline: "2026-10-15" }),
+    );
+
+    const vivi = await store.queryItems({ kinds: ["coupon"], deadlineNotBefore: "2026-10-16" });
+    expect(vivi.map((row) => row.urlKey).sort()).toEqual(["key-domani", "key-vivo"]);
+    expect(await store.countItems({ kinds: ["coupon"], deadlineNotBefore: "2026-10-16" })).toBe(2);
+    // Il coupon scaduto è ancora in archivio: il filtro lo nasconde, non lo cancella.
+    expect(await store.countItems({ kinds: ["coupon"] })).toBe(3);
+  });
+
   it("una patch può riclassificare una riga già in archivio", async () => {
     await store.insertItem(item());
     await store.updateItem(1, { kind: "news" });

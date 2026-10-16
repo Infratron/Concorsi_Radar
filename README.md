@@ -276,8 +276,23 @@ gh secret set D1_DATABASE_ID
 
 Poi Actions → **Raccolta concorsi** → *Run workflow* per il primo giro: la pagina
 del job mostra il riepilogo (fonti ok, item nuovi, duplicati) e i giri successivi
-partono da soli. `npm run ingest` è lo stesso script da riga di comando, con le
-tre variabili esportate a mano: utile per provarlo prima di affidarlo ad Actions.
+partono da soli.
+
+`npm run ingest` è lo stesso script da riga di comando, con le tre variabili
+esportate a mano: utile per provarlo prima di affidarlo ad Actions. Da un PC che
+ha già fatto `npx wrangler login` funziona anche **senza dichiarare nessun
+segreto** — se le variabili non ci sono, usano il login di wrangler: token dal suo
+file di configurazione, id del database da `wrangler.toml` (non è un segreto, è
+nel repository) e id dell'account chiesto all'API
+([scripts/wrangler-auth.ts](scripts/wrangler-auth.ts)). Quella comodità vale per
+un giro a mano: il token di wrangler scade in poche ore e lo rinnova wrangler
+quando lo usa, mentre un token API non scade. E il posto della raccolta
+periodica resta **GitHub**: dal runner le fonti che rispondono 403 alla rete di
+Cloudflare rispondono 200, e il PC di chi sviluppa non fa parte
+dell'installazione. Un giro lanciato da un PC si registra come `local` invece che
+`actions`, e in 🕒 Ultime raccolte si legge "questo PC": per il Worker i due
+esecutori contano allo stesso modo — quello che decide se la raccolta è viva è
+che giri, non da dove.
 
 Se il job diventa rosso, i log dicono quale fonte o quale credenziale non va:
 `Variabili d'ambiente mancanti: …` è un secret assente (o scritto con un nome
@@ -591,6 +606,17 @@ Tre differenze dalle altre sezioni, tutte volute:
 - **niente notifiche**: avvisi immediati e digest guardano i soli concorsi. Un
   buono sconto resta valido per settimane, non c'è niente di urgente da
   svegliarti per dire;
+- **la validità dichiarata è un filtro, non una decorazione**: quando il buono
+  nomina una data di fine ("valido fino al 15 ottobre", "entro il 22/10") quella
+  data finisce sulla riga, e da lì decide due cose. La prima: **esce
+  dall'elenco quel giorno stesso** — la query di 💶 Coupon chiede le offerte non
+  ancora scadute, e il numero sul bottone conta la stessa query, quindi elenco e
+  totale non possono raccontare due cose diverse. La seconda: la pulizia
+  periodica lo archivia **senza i tre giorni di grazia** che valgono per un
+  concorso chiuso. La differenza è voluta — una pagina di concorso letta in
+  ritardo resta consultabile nei 🏆 Vinti e in ⌛ Scaduti, un buono sconto
+  scaduto no: al negozio il codice non passa. Chi non dichiara nessuna validità
+  resta in elenco, perché "non lo so" non è una prova;
 - **vita di sessanta giorni**: un coupon non dichiara quasi mai una scadenza, e
   che sia finito lo scopri quando al negozio il codice non passa. La regola
   quindi è la **data di pubblicazione**

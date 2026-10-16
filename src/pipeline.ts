@@ -563,13 +563,30 @@ export async function runIngest(
 
 /**
  * Pulizia periodica: marca 'expired' i concorsi scaduti da più di 3 giorni e i
- * coupon che non sono più spendibili (COUPON_TTL_DAYS, src/enrich/freshness.ts —
- * la stessa regola che li tiene fuori all'ingresso).
+ * coupon che non sono più spendibili — o perché la loro validità dichiarata è
+ * passata, o perché è passata la loro vita corta (COUPON_TTL_DAYS,
+ * src/enrich/freshness.ts — la stessa regola che li tiene fuori all'ingresso).
+ * Una riga archiviata esce dagli elenchi (le sezioni chiedono gli stati attivi)
+ * ma resta in archivio: il conteggio in testa dice quanti ne ha visti.
  */
 export async function expireOldItems(store: Store, now: Date): Promise<number> {
   const cutoff = new Date(now.getTime() - 3 * 86_400_000).toISOString().slice(0, 10);
   const stale = await store.queryItems({ deadlineBefore: cutoff, statuses: ["new", "sent"], limit: 100 });
   for (const item of stale) await store.setStatus(item.id, "expired");
+
+  // I coupon con una validità dichiarata che è passata si archiviano SUBITO,
+  // senza i tre giorni di grazia dei concorsi: una pagina di concorso letta in
+  // ritardo resta consultabile nello storico, un buono sconto scaduto no — al
+  // negozio il codice non passa. `deadline` è un giorno di calendario, quindi un
+  // coupon valido fino a oggi è ancora spendibile e si archivia da domani.
+  const ieri = new Date(now.getTime() - 86_400_000).toISOString().slice(0, 10);
+  const couponScaduti = await store.queryItems({
+    kinds: ["coupon"],
+    deadlineBefore: ieri,
+    statuses: ["new", "sent"],
+    limit: 100,
+  });
+  for (const item of couponScaduti) await store.setStatus(item.id, "expired");
   // I coupon si contano dall'ingresso in archivio (`until`), non da una scadenza
   // che non hanno: la stessa query che li mostra in 💶 Coupon li fa invecchiare.
   const couponCutoff = new Date(now.getTime() - COUPON_TTL_DAYS * 86_400_000).toISOString();
@@ -580,5 +597,5 @@ export async function expireOldItems(store: Store, now: Date): Promise<number> {
     limit: 100,
   });
   for (const item of coupons) await store.setStatus(item.id, "expired");
-  return stale.length + coupons.length;
+  return stale.length + couponScaduti.length + coupons.length;
 }

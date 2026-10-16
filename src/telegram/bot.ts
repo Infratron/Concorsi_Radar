@@ -302,7 +302,15 @@ function baseSectionQuery(section: string, now: Date, lastCheckAt: string | null
   // 💶 Coupon: l'ordine è quello di arrivo (il default dello store), non il
   // punteggio: fra buoni sconto "quale vale la pena" non vuol dire niente, mentre
   // "quale è arrivato adesso" sì — un coupon vecchio è un coupon scaduto.
-  if (section === "coupon") return { kinds: COUPON, statuses: ATTIVI };
+  //
+  // La validità è un filtro, non una decorazione: passata la data dichiarata il
+  // buono non si può più spendere, quindi esce dall'elenco (e dal numero sul
+  // bottone, che conta la stessa query). Chi non dichiara una validità resta:
+  // "non lo so" non è una prova, e la vita corta dei coupon la misura comunque
+  // la pulizia periodica (COUPON_TTL_DAYS in src/enrich/freshness.ts).
+  if (section === "coupon") {
+    return { kinds: COUPON, statuses: ATTIVI, deadlineNotBefore: localDateString(now) };
+  }
   // I concorsi delle marche seguite: stessa forma delle altre sezioni di
   // suggerimento (attivi, solo concorsi, dal punteggio più alto), il filtro sulle
   // marche lo mette sectionQuery.

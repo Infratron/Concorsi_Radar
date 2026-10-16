@@ -7,6 +7,7 @@ import type { InlineKeyboardMarkup } from "./api.ts";
 import { escapeHtml, formatDate, formatItemCard, sourceLabel } from "./format.ts";
 import { esitoUltimoTentativo } from "./report.ts";
 import { truncate } from "../lib/text.ts";
+import { runOrigin } from "../schedule.ts";
 import {
   BRANDS_PAGE_SIZE,
   PAGE_SIZE,
@@ -521,7 +522,7 @@ function sourcesScreen(data: ScreenData): Screen {
   if (data.runs.length > 0) {
     righe.push("", "🕒 <b>Ultime raccolte</b>");
     for (const run of data.runs.slice(0, 4)) {
-      const origine = run.trigger === "actions" ? "GitHub" : "Worker";
+      const origine = runOrigin(run.trigger);
       righe.push(
         `• ${origine} ${oreMinuti(run.startedAt)} · ${run.sourcesOk} ok / ${run.sourcesFail} errori · ${run.itemsNew} nuovi`,
       );

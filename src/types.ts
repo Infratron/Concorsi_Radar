@@ -288,6 +288,16 @@ export interface ItemQuery {
   /** deadline >= questa data (YYYY-MM-DD): serve a mostrare solo le scadenze future. */
   deadlineAfter?: string;
   /**
+   * Solo item la cui validità non è finita: `deadline` assente OPPURE >= a
+   * questa data (YYYY-MM-DD). È il filtro di 💶 Coupon, e la differenza con
+   * `deadlineAfter` è tutta lì: quello chiede una scadenza dichiarata e lascia
+   * fuori i coupon che non ne hanno (quasi tutti), questo li tiene dentro e
+   * toglie solo quelli la cui validità è passata. Un concorso chiuso resta
+   * leggibile nei 🏆 Vinti e in ⌛ Scaduti; un buono sconto scaduto non si può
+   * più spendere, e in elenco sarebbe una riga che non serve a niente.
+   */
+  deadlineNotBefore?: string;
+  /**
    * Solo item SENZA scadenza. Sono quelli nati da un elenco (sitemap, pagina
    * HTML): senza data di chiusura l'unico modo per sapere se sono ancora
    * concorsi attivi è il cancello di src/enrich/freshness.ts, e la pulizia ne

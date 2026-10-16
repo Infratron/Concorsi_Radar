@@ -366,6 +366,12 @@ function buildWhere(query: ItemQuery): { sql: string; params: unknown[] } {
     where.push("deadline IS NOT NULL AND deadline >= ?");
     params.push(query.deadlineAfter);
   }
+  if (query.deadlineNotBefore) {
+    // L'OR è il punto: chi non dichiara una validità non si può giudicare, e
+    // resta in elenco (vedi ItemQuery.deadlineNotBefore).
+    where.push("(deadline IS NULL OR deadline >= ?)");
+    params.push(query.deadlineNotBefore);
+  }
   if (query.excludeIds && query.excludeIds.length > 0) {
     where.push(`id NOT IN (${query.excludeIds.map(() => "?").join(", ")})`);
     params.push(...query.excludeIds);
