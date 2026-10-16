@@ -54,13 +54,33 @@ const LISTING_SEGMENTS = new Set([
  */
 const TAXONOMY_START = /^(a|ad|al|alla|ai|alle|di|da|dal|dalla|in|con|su|per|senza|tra|fra|oltre|entro|come|dai|dagli)-/;
 
+function words(input: string): string[] {
+  return input.split(/[-_]/).filter((word) => word.length > 0);
+}
+
+/**
+ * Il figlio che ripete per intero il nome della cartella è una PAGINA della
+ * cartella, non una categoria che le somiglia. Caso reale: Scontrino Felice
+ * pubblica /premio-certo/premio-certo-apropos, che ripete la cartella e poi dice
+ * la marca — è una promo vera, e senza questo controllo tutto il settore finiva
+ * in news (misurato il 16/10/2026: 21 item su 24).
+ */
+function repeatsFolder(parent: string, name: string): boolean {
+  const cartella = words(parent.toLowerCase());
+  const figlio = words(name.toLowerCase());
+  if (cartella.length === 0 || figlio.length <= cartella.length) return false;
+  return cartella.every((word, index) => figlio[index] === word);
+}
+
 /**
  * "concorsi-a-premi" + "concorsi-fotografici" → prima parola della cartella:
- * "concorsi". Un figlio che comincia così è una categoria di quella cartella.
+ * "concorsi". Un figlio che comincia così E prende un'altra strada è una
+ * categoria di quella cartella; uno che la ripete parola per parola è una sua
+ * pagina.
  */
 function isTaxonomyName(parent: string, name: string): boolean {
   const root = (parent.split(/[-_]/)[0] ?? "").toLowerCase();
-  if (root.length >= 5 && name.startsWith(root)) return true;
+  if (root.length >= 5 && name.startsWith(root) && !repeatsFolder(parent, name)) return true;
   return TAXONOMY_START.test(name);
 }
 
@@ -68,13 +88,27 @@ function isTaxonomyName(parent: string, name: string): boolean {
 const CONTEST_FOLDER = /(concors|premi|promo|offer|iniziativ|operazion|raccolt)/i;
 
 /**
- * Rassegne: titoli che promettono un elenco ("tutti i concorsi", "i migliori
- * concorsi del mese", "10 concorsi a premi"). Il link porterebbe a una pagina
- * che parla di più concorsi, cioè proprio quello che non deve stare nella
- * sezione concorsi.
+ * Rassegne: titoli che promettono un elenco.
+ *
+ * Sono divisi in due gruppi, perché "tutti i premi" vale solo come apertura.
+ * Il 16/10/2026 la prova dal vivo su Scontrino Felice ha mostrato il costo
+ * dell'altra lettura: "Raccolta bollini Bennet Guzzini: scopri tutti i premi"
+ * finiva in news — sono i premi da richiedere di una raccolta punti vera, cioè
+ * esattamente il contrario di una rassegna. Le formule ambigue quindi contano
+ * solo in testa al titolo ("Tutti i concorsi a premi di ottobre"), dove dicono
+ * che la pagina È l'elenco.
+ */
+const LIST_TITLE_START =
+  /^(tutti i concorsi|tutti i premi|i migliori concorsi|migliori concorsi|nuovi concorsi|concorsi del mese|concorsi della settimana|concorsi in scadenza|concorsi a premi 20\d{2})\b/i;
+
+/**
+ * Parole che un elenco lo dicono e basta, in qualunque punto del titolo: dentro
+ * una pagina di concorso non compaiono. L'unico caso reale in archivio è la
+ * pagina che raccoglie le iniziative con rimborso, "elenco completo delle
+ * iniziative con rimborso attive".
  */
 const LIST_TITLE =
-  /\b(tutti i concorsi|tutti i premi|i migliori concorsi|migliori concorsi|concorsi del mese|concorsi della settimana|concorsi in scadenza|elenco (?:completo )?(?:dei |delle |di )?(concorsi|premi|iniziative|promozioni|offerte|raccolte)|lista (?:completa )?(?:dei |delle |di )?(concorsi|premi|iniziative|promozioni|offerte|raccolte)|rassegna (?:dei |delle |di )?(concorsi|premi|iniziative)|guida ai concorsi|calendario dei concorsi|nuovi concorsi|concorsi a premi 20\d{2})\b/i;
+  /\b(elenco (?:completo )?(?:dei |delle |di )?(concorsi|premi|iniziative|promozioni|offerte|raccolte)|lista (?:completa )?(?:dei |delle |di )?(concorsi|premi|iniziative|promozioni|offerte|raccolte)|rassegna (?:dei |delle |di )?(concorsi|premi|iniziative)|guida ai concorsi|calendario dei concorsi)\b/i;
 
 /** Quanti concorsi promette il titolo: "12 concorsi a premi da provare". */
 const LIST_TITLE_COUNT = /\b\d{1,3}\s+concorsi\b/i;
@@ -124,8 +158,11 @@ export function classifyKind(input: KindInput): ItemKind {
   // 4. Permalink con la data: è la forma di un articolo, non di una pagina di concorso.
   if (DATE_PERMALINK.test(input.url)) return "news";
 
-  // 5. Il titolo promette un elenco di concorsi.
-  if (LIST_TITLE.test(input.title) || LIST_TITLE_COUNT.test(input.title)) return "news";
+  // 5. Il titolo promette un elenco di concorsi: o lo dice con una formula che
+  //    apre il titolo, o con una parola da elenco, o contando i concorsi.
+  if (LIST_TITLE_START.test(input.title) || LIST_TITLE.test(input.title) || LIST_TITLE_COUNT.test(input.title)) {
+    return "news";
+  }
 
   return "contest";
 }

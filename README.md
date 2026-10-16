@@ -83,7 +83,12 @@ Decisioni di progetto che contano:
   promette dieci concorsi e non ne fa vincere nessuno. Gli articoli non
   producono notifiche: si leggono quando si vuole. Misurato il 16/10/2026 su una
   lettura delle sole fonti di cronaca: **30 articoli e 10 concorsi** — senza la
-  divisione, quei 30 finivano nella sezione dei concorsi.
+  divisione, quei 30 finivano nella sezione dei concorsi. La riga è sottile, e la
+  prova dal vivo del 16/10/2026 su Scontrino Felice l'ha mostrata: le sue pagine
+  `/premio-certo/premio-certo-<marca>` ripetono il nome della cartella (una
+  pagina, non una categoria) e "scopri tutti i premi" è il premio di una
+  raccolta punti, non il titolo di una rassegna — **24 promo vere su 24
+  finivano in News**, ora zero.
 - **Google News è la fonte più fresca** (batte gli aggregatori di ore), ma porta
   anche rumore: le sue notizie passano un filtro di pertinenza prima di entrare e
   restano comunque in 📰 News, perché il link è la pagina del giornale.

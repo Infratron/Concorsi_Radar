@@ -84,6 +84,34 @@ describe("concorso o articolo", () => {
     ).toBe("news");
   });
 
+  it("NON sposta in news la pagina che ripete la cartella", () => {
+    // Misurato il 16/10/2026 sulla prova dal vivo di Scontrino Felice: la sezione
+    // "premio certo" pubblica /premio-certo/premio-certo-<marca>, e la regola
+    // sulle tassonomie mandava in news tutte e 21 le promo della sezione — che
+    // sono premi da richiedere, non rassegne.
+    expect(kind("https://scontrinofelice.it/premio-certo/premio-certo-apropos", "Apropos: ricevi un buono Amazon da 10 euro")).toBe(
+      "contest",
+    );
+    expect(
+      kind("https://scontrinofelice.it/premio-certo/premio-certo-bioritmon", "Bioritmon: richiedi voucher benessere e gift card"),
+    ).toBe("contest");
+  });
+
+  it("NON legge una frase da elenco dentro un titolo di promo", () => {
+    // "tutti i premi" è una formula da rassegna solo se apre il titolo: dopo
+    // "scopri" è il premio di una raccolta punti, che è un concorso a tutti gli
+    // effetti.
+    expect(
+      kind("https://scontrinofelice.it/raccolte-punti/raccolta-bollini-bennet", "Raccolta bollini Bennet Guzzini: scopri tutti i premi"),
+    ).toBe("contest");
+    expect(
+      kind(
+        "https://scontrinofelice.it/raccolte-punti/raccolta-punti-italmark",
+        "Raccolta punti Italmark Friends: scopri tutti i premi da collezionare",
+      ),
+    ).toBe("contest");
+  });
+
   it("riconosce i permalink con la data", () => {
     expect(kind("https://www.ilgiornale.it/2026/05/19/concorso-nutella-vinci", "Concorso Nutella: vinci")).toBe("news");
   });
