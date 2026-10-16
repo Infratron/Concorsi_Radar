@@ -369,14 +369,22 @@ articolo non ti sveglia per niente.
 Gli elenchi sono **bottone per concorso** (`⭐85 ⏳3gg · Concorso Barilla…`):
 toccandone uno si apre la scheda, e da lì `⬅️ Torna all'elenco`. Il numero è il
 punteggio 0-100 (premio, sforzo, urgenza, freschezza, più i tuoi feedback), ed è
-il criterio con cui ogni elenco è ordinato: in cima c'è quello che vale di più
-adesso. Nella scheda ci sono le decisioni ⭐ Watchlist, 🚫 Non mi interessa, 🏆
+il criterio con cui gli elenchi dei concorsi sono ordinati: in cima c'è quello che
+vale di più adesso (📰 News fa eccezione: lì l'ordine è l'ultimo arrivato, che è
+l'informazione giusta per un articolo). Nella scheda ci sono le decisioni ⭐ Watchlist, 🚫 Non mi interessa, 🏆
 Vinto (quella già presa resta visibile e inerte), 🔗 Apri e 📄 Regolamento quando
 l'URL è nel testo.
 
 Ogni elenco è **a pagine di sei**, con `⬅️ Prec` / `Succ ➡️` e il numero di
 pagina in mezzo: la pagina che vedi la legge il database con LIMIT/OFFSET, quindi
 si sfoglia tutto l'archivio, non solo le prime righe.
+
+Sotto l'elenco dei concorsi c'è **una riga sola** per le stelle — `⭐ Tutte`,
+`⭐ 70+`, `⭐ 80+` — con il pallino sulla soglia attiva: serve a tenere la testa
+della classifica senza aprire nessun menù, e non compare dove non ha senso (📰
+News, ⭐ Watchlist, 🗂 Storico, 🔍 Cerca). Se un elenco resta vuoto con i filtri
+accesi il bot lo dice (`🎛 Hai N filtri attivi`) e mette lì il bottone per
+allargare: "non c'è niente" e "hai spento tu le fonti" sono due cose diverse.
 
 ### 🎛 Cosa vedi: i filtri sono tuoi
 
@@ -392,6 +400,8 @@ elettronica, casa, food, moda, bambini (sono i tag che le regole assegnano
 leggendo premio e testo);
 - **categorie di fonti**: online, punto vendita, scontrino, gift card — spegnere
 una categoria spegne tutte le fonti che la dichiarano;
+- **⭐ stelle minime**: `Tutte`, `70+` o `80+`. È lo stesso filtro della riga in
+fondo agli elenchi, e come quello vale anche per le notifiche;
 - **🎁 solo senza acquisto**, che lascia fuori chi chiede uno scontrino, un codice
 sulla confezione o un minimo di spesa;
 - **📡 Scegli le fonti**: l'elenco delle fonti accese, una per riga e a pagine,
@@ -520,9 +530,41 @@ perché i feed portano il titolo vero ("Concorso Lievital: vinci Forni e
 Scaldavivande") mentre la sitemap porta lo slug ("Concorso Lievital"): 25 item per
 sezione, che è tutto quello che il sito tiene in vetrina.
 
-**I brand.** Gli aggregatori non coprono i concorsi che un'azienda pubblica solo
-sul proprio sito: l'unico modo è guardare le **sitemap e le pagine promozionali**
-dei marchi. Le fonti qui sotto sono state provate una per una con i parser veri
+**I brand, andando alla fonte.** Gli aggregatori non coprono i concorsi che
+un'azienda pubblica solo sul proprio sito: l'unico modo è guardare le **sitemap e
+le pagine promozionali** dei marchi.
+
+Il 16/10/2026 ne ho sondati **cinquantuno** uno per uno (barilla, mulino bianco,
+findus, nutella, kinder, algida, perugina, san pellegrino, galbani, parmalat,
+granarolo, bauli, maina, rio mare, amadori, de'longhi, nespresso, mediaworld,
+unieuro, decathlon, douglas, nivea, pampers, chicco, enel, q8, toyota, kia,
+samsung, philips, costa, msc, autogrill, vodafone, iliad, bennet, eurospin, lidl,
+carrefour, coop, despar, cisalfa, zalando, sephora, kiko, beretta, citterio,
+aiofood, yomo…), leggendo robots.txt e sitemap come fa la raccolta. Il risultato:
+**ventitré non hanno una sitemap leggibile** (Barilla, Mulino Bianco, Kinder,
+Nutella, Findus, Granarolo, UniEuro, Eurospin…) o non espongono i concorsi in un
+file XML, **sedici avevano URL che sembrano concorsi** ma per la maggior parte
+erano falsi positivi (le pagine "premium" di Vodafone e Cisalfa, i listini di
+Toyota ed Enel, i prodotti "Premium" di Carrefour), e **sei avevano pagine di
+concorso vere**. Di quelle sei, tre portavano solo la pagina della sezione
+(Galbani, Parmalat, Rio Mare) e una solo campagne senza nessuna parola di
+concorso nello slug (Nivea). Sono entrate le due che con i parser veri hanno
+prodotto concorsi veri: **[AIA](src/config/sources.ts)** (`/concorsi/…`, 1
+concorso attivo) e **Pampers** (`/concorsi-a-premi-e-promozioni/…`, 1).
+
+Poca roba, ed è il punto: le marche pubblicano i concorsi in una pagina sola o
+dietro JavaScript, e le sitemap servono a trovare quella pagina. Il valore non è
+la quantità, è che **quei concorsi gli aggregatori non li hanno** — AIA e Pampers
+non comparivano in nessuna delle nostre altre fonti. La stessa prova ha fatto
+emergere un buco nel cancello di freschezza: le pagine che annunciano i vincitori
+(\"I Vincitori 2013\") entravano in archivio come concorsi, perché la parola
+\"vincitori\" contava solo dentro una frase di chiusura. Ora un titolo che
+*comincia* con \"vincitori\" vale come chiusura, e \"incontra il vincitore di
+X Factor\" resta un concorso vivo.
+
+**Il resto dei marchi.** Gli aggregatori non coprono i concorsi che un'azienda
+pubblica solo sul proprio sito, e le fonti qui sotto sono state provate una per
+una con i parser veri (16/10/2026). Le fonti qui sotto sono state provate una per una con i parser veri
 (16/10/2026) e sono entrate in configurazione solo quelle che restituivano
 pagine di concorso: le altre (Barilla, Mulino Bianco, Perugina, McDonald's,
 Findus, Algida, Heineken, Trenitalia, TIM, WindTre, Esselunga…) rispondono 403,
@@ -659,7 +701,7 @@ npm run dry-run                                        # cosa verrebbe inviato, 
 npm run ingest                                         # raccolta vera, come su Actions
 npm run prune                                          # cosa non è più un concorso attivo (elenco)
 npm run prune -- --apply                               # e lo toglie dall'archivio
-npm test                                               # 312 test
+npm test                                               # 319 test
 npm run typecheck
 ```
 

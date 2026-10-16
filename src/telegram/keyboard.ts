@@ -1,6 +1,6 @@
 import type { ItemRow, Prefs } from "../types.ts";
 import { truncate } from "../lib/text.ts";
-import { CATEGORY_LABELS, TAG_FILTERS, categoriesToOffer, type FilterSource } from "../filters.ts";
+import { CATEGORY_LABELS, STAR_CHOICES, TAG_FILTERS, categoriesToOffer, starLabel, type FilterSource } from "../filters.ts";
 import type { InlineKeyboardButton, InlineKeyboardMarkup } from "./api.ts";
 import { daysLeft } from "./format.ts";
 
@@ -109,6 +109,7 @@ export function filtriKeyboard(prefs: Prefs, info: { sources: number; spenti: nu
       ? button("🎁 Solo senza acquisto: sì", "cfg:free:off")
       : button("🎁 Solo senza acquisto: no", "cfg:free:on"),
   ]);
+  righe.push(starKeyboard(filtro.minScore));
   righe.push([button(`📡 Scegli le fonti (${info.sources - info.spenti}/${info.sources})`, "s:filtri-fonti")]);
   return { inline_keyboard: [...righe, ...navRows()] };
 }
@@ -162,6 +163,18 @@ export function storicoKeyboard(counts: {
 }
 
 /**
+ * La riga delle stelle: un tocco per dire "solo quelli che valgono", senza
+ * aprire nessun menù. Sta sopra la navigazione, è una riga sola, e il pallino
+ * dice quale soglia è attiva: l'elenco è già ordinato dal punteggio più alto,
+ * quindi alzare la soglia vuol dire tenere la testa della classifica.
+ */
+export function starKeyboard(attiva: number): InlineKeyboardButton[] {
+  return STAR_CHOICES.map((soglia) =>
+    button(attiva === soglia ? `• ${starLabel(soglia)}` : starLabel(soglia), `cfg:star:${soglia}`),
+  );
+}
+
+/**
  * Elenco: un bottone per concorso (così si tocca direttamente quello che
  * interessa) più la navigazione. `nav` compare solo quando c'è più di una pagina.
  */
@@ -169,6 +182,8 @@ export function listKeyboard(
   items: ItemRow[],
   now: Date,
   pagina: { index: number; total: number },
+  /** Soglia attiva, oppure null dove le stelle non hanno senso (news, storico). */
+  stelleMinime: number | null = null,
 ): InlineKeyboardMarkup {
   const rows: InlineKeyboardButton[][] = items.map((item) => [
     button(itemButtonLabel(item, now), `open:${item.id}`),
@@ -181,6 +196,7 @@ export function listKeyboard(
       pagina.index < pagina.total - 1 ? button("Succ ➡️", `page:${pagina.index + 1}`) : done("➡️"),
     ]);
   }
+  if (stelleMinime !== null) rows.push(starKeyboard(stelleMinime));
   rows.push([button("🔄 Aggiorna", "refresh"), button("🏠 Menù", "home")]);
   return { inline_keyboard: rows };
 }
@@ -280,6 +296,17 @@ export function settingsKeyboard(prefs: Prefs): InlineKeyboardMarkup {
 /** Schermate senza scelte: solo il ritorno (fonti, prompt della ricerca, errori). */
 export function backKeyboard(): InlineKeyboardMarkup {
   return { inline_keyboard: [[button("🔄 Aggiorna", "refresh"), button("🏠 Menù", "home")]] };
+}
+
+/**
+ * Elenco vuoto. Se la chat ha dei filtri attivi la strada per tornare indietro
+ * deve stare lì: "non c'è niente" e "hai spento tu le fonti" sono due cose
+ * diverse, e senza questo bottone la seconda sembra la prima.
+ */
+export function emptyKeyboard(conFiltri: boolean): InlineKeyboardMarkup {
+  const rows: InlineKeyboardButton[][] = [];
+  if (conFiltri) rows.push([button("🎛 Cosa vedi", "s:filtri")]);
+  return { inline_keyboard: [...rows, ...navRows()] };
 }
 
 /** Testo leggibile della sezione, per l'intestazione delle schermate. */

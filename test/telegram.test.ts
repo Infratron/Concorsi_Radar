@@ -1024,6 +1024,83 @@ describe("filtri personali · due chat, due feed", () => {
     expect(cambiato?.text.startsWith("🚫")).toBe(true);
   });
 
+  it("la riga delle stelle sta in elenco e filtra dove serve", async () => {
+    const store = createMemoryStore();
+    await dueChat(store);
+    await seed(store, [
+      { title: "Concorso scarso", score: 40 },
+      { title: "Concorso buono", score: 72 },
+      { title: "Concorso ottimo", score: 88 },
+    ]);
+    const { tg, calls } = makeTg();
+    await handleUpdate(cmd(CHAT, 1, "/start"), entrambe(store, tg));
+    await handleUpdate(tapIn(CHAT, 2, "s:oggi", 100), entrambe(store, tg));
+
+    const aperti = (): string[] =>
+      bottoni(calls, CHAT).flat().filter((b) => b.callback_data?.startsWith("open:")).map((b) => b.text);
+    // La riga è una sola, in fondo all'elenco, e dice quale soglia è attiva.
+    const riga = bottoni(calls, CHAT).find((riga) => riga.some((b) => b.callback_data?.startsWith("cfg:star:")));
+    expect(riga?.map((b) => b.callback_data)).toEqual(["cfg:star:0", "cfg:star:70", "cfg:star:80"]);
+    expect(riga?.[0]?.text.startsWith("•")).toBe(true);
+    // E l'elenco è ordinato dal punteggio più alto: il primo è il migliore.
+    expect(aperti()[0]).toContain("ottimo");
+
+    await handleUpdate(tapIn(CHAT, 3, "cfg:star:80", 100), entrambe(store, tg));
+    expect((await store.getPrefs(CHAT))?.filters.minScore).toBe(80);
+    expect(schermata(calls, CHAT)).toContain("Ultime 24 ore"); // resta dove sei
+    expect(schermata(calls, CHAT)).toContain("1 concorso");
+    expect(aperti()).toHaveLength(1);
+    expect(aperti()[0]).toContain("ottimo");
+    expect((await store.getPrefs(AMICA))?.filters.minScore).toBe(0);
+
+    // Nella sezione news la riga non c'è: il punteggio di un articolo non è una stella.
+    await seed(store, [{ title: "Articolo che parla di concorsi", kind: "news", score: 50 }]);
+    await handleUpdate(tapIn(CHAT, 4, "s:news", 100), entrambe(store, tg));
+    expect(bottoni(calls, CHAT).flat().some((b) => b.callback_data?.startsWith("cfg:star:"))).toBe(false);
+
+    // E dalla schermata dei filtri si può rimettere su "tutte".
+    await handleUpdate(tapIn(CHAT, 5, "cfg:star:0", 100), entrambe(store, tg));
+    expect((await store.getPrefs(CHAT))?.filters.minScore).toBe(0);
+  });
+
+  it("l'elenco dei concorsi parte dal punteggio più alto, non dall'ultimo arrivato", async () => {
+    const store = createMemoryStore();
+    await dueChat(store);
+    await seed(store, [
+      { title: "Arrivato per ultimo e scarso", score: 30, firstSeenAt: "2026-11-20T11:00:00.000Z" },
+      { title: "Arrivato prima e ottimo", score: 90, firstSeenAt: "2026-11-20T08:00:00.000Z" },
+    ]);
+    const { tg, calls } = makeTg();
+    await handleUpdate(cmd(CHAT, 1, "/start"), entrambe(store, tg));
+    await handleUpdate(tapIn(CHAT, 2, "s:oggi", 100), entrambe(store, tg));
+
+    const aperti = bottoni(calls, CHAT).flat().filter((b) => b.callback_data?.startsWith("open:")).map((b) => b.text);
+    expect(aperti[0]).toContain("ottimo");
+    expect(aperti[1]).toContain("scarso");
+  });
+
+  it("un elenco vuoto con i filtri attivi dice che può essere per quello", async () => {
+    const store = createMemoryStore();
+    await dueChat(store);
+    await seed(store, [{ title: "Concorso scarso", score: 40 }]);
+    const { tg, calls } = makeTg();
+    await handleUpdate(cmd(CHAT, 1, "/start"), entrambe(store, tg));
+    await handleUpdate(tapIn(CHAT, 2, "s:oggi", 100), entrambe(store, tg));
+    await handleUpdate(tapIn(CHAT, 3, "cfg:star:80", 100), entrambe(store, tg));
+
+    expect(schermata(calls, CHAT)).toContain("filtri attivi");
+    expect(bottoni(calls, CHAT).flat().some((b) => b.callback_data === "s:filtri")).toBe(true);
+
+    // Senza filtri, un elenco vuoto è solo un elenco vuoto: nessun invito a
+    // toccare filtri che non esistono.
+    const vuoto = createMemoryStore();
+    await dueChat(vuoto);
+    await handleUpdate(cmd(CHAT, 4, "/start"), entrambe(vuoto, tg));
+    await handleUpdate(tapIn(CHAT, 5, "s:oggi", 100), entrambe(vuoto, tg));
+    expect(schermata(calls, CHAT)).not.toContain("filtri attivi");
+    expect(bottoni(calls, CHAT).flat().some((b) => b.callback_data === "s:filtri")).toBe(false);
+  });
+
   it("♻️ rimette tutto come prima", async () => {
     const store = createMemoryStore();
     await dueChat(store);

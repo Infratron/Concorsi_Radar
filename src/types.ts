@@ -242,6 +242,13 @@ export interface ChatFilters {
   mutedTags: string[];
   /** true = solo concorsi senza obbligo di acquisto. */
   freeOnly: boolean;
+  /**
+   * Stelle minime (0 = tutte). È il punteggio 0-100 che l'elenco mostra accanto
+   * al titolo: alzandolo si tiene la testa della classifica e si lascia fuori la
+   * coda. Gli elenchi sono già ordinati dal punteggio più alto, quindi il primo
+   * risultato è sempre il concorso che vale di più.
+   */
+  minScore: number;
 }
 
 /** Stato dell'interfaccia in chat: il bot tiene UN messaggio e lo modifica. */

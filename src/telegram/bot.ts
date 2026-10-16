@@ -153,13 +153,17 @@ function filterChangeFor(key: ConfigKey, value: string): FilterChange | null {
     return filterableSources().some((source) => source.id === value) ? { kind: "source", value } : null;
   }
   if (key === "free") return { kind: "free", value: value === "on" };
+  if (key === "star") {
+    const soglia = Number.parseInt(value, 10);
+    return Number.isFinite(soglia) ? { kind: "star", value: soglia } : null;
+  }
   if (key === "reset") return { kind: "reset" };
   return null;
 }
 
 /** Applica una preferenza scelta dalle impostazioni. Valori fuori elenco: ignorati. */
 function withConfig(prefs: Prefs, key: ConfigKey, value: string): Prefs {
-  if (key === "cat" || key === "tag" || key === "src" || key === "free" || key === "reset") {
+  if (key === "cat" || key === "tag" || key === "src" || key === "free" || key === "star" || key === "reset") {
     const change = filterChangeFor(key, value);
     return change === null ? prefs : { ...prefs, filters: withFilterChange(prefs.filters, change) };
   }
@@ -240,18 +244,34 @@ const ARTICOLI: ItemKind[] = ["news"];
 
 function baseSectionQuery(section: string, now: Date, lastCheckAt: string | null): ItemQuery {
   if (section === "news") return { kinds: ARTICOLI, statuses: ATTIVI };
+  // Le tre sezioni dei concorsi si leggono dal punteggio più alto: la prima cosa
+  // che si vede è quella che vale di più, e la riga delle stelle in fondo serve
+  // proprio a tenere la testa della classifica. L'ordine per data di arrivo
+  // (il default dello store) resta per 📰 News, dove "l'ultimo articolo" è
+  // l'informazione giusta.
   if (section === "nuovi") {
     return {
       since: lastCheckAt ?? new Date(now.getTime() - WEEK_MS).toISOString(),
       statuses: ATTIVI,
       kinds: CONCORSI,
+      orderBy: "score",
     };
   }
   if (section === "oggi") {
-    return { since: new Date(now.getTime() - 86_400_000).toISOString(), statuses: ATTIVI, kinds: CONCORSI };
+    return {
+      since: new Date(now.getTime() - 86_400_000).toISOString(),
+      statuses: ATTIVI,
+      kinds: CONCORSI,
+      orderBy: "score",
+    };
   }
   if (section === "settimana") {
-    return { since: new Date(now.getTime() - WEEK_MS).toISOString(), statuses: ATTIVI, kinds: CONCORSI };
+    return {
+      since: new Date(now.getTime() - WEEK_MS).toISOString(),
+      statuses: ATTIVI,
+      kinds: CONCORSI,
+      orderBy: "score",
+    };
   }
   if (section === "scadenze") {
     // Solo scadenze future: un concorso già chiuso non serve in questa sezione.

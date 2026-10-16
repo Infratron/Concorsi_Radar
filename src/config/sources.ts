@@ -294,6 +294,41 @@ export const SOURCES: SourceConfig[] = [
     includePattern: "concors|vinci|gioca",
     maxItems: 20,
   },
+  // Poche marche espongono i concorsi in una sitemap leggibile: il 16/10/2026 ne
+  // ho sondate cinquanta (barilla, mulino bianco, nutella, kinder, findus,
+  // perugina, san pellegrino, granarolo, bauli, maina, de'longhi, mediaworld,
+  // unieuro, decathlon, samsung, coop, eurospin, bennet, lidl, carrefour…) e solo
+  // sei avevano URL di concorso nel file XML. Di quelle sei, tre non portavano
+  // niente oltre alla pagina della sezione (Galbani, Parmalat, Rio Mare) e una
+  // solo pagine di campagna senza segnale di concorso (Nivea). Restano queste,
+  // che con i parser veri hanno prodotto concorsi veri.
+  {
+    id: "sitemap-aia",
+    name: "AIA · concorsi",
+    kind: "sitemap",
+    url: "https://www.aiafood.com/sitemap.xml",
+    category: "punto_vendita",
+    tags: ["brand", "aia", "sitemap"],
+    cadenceMin: 120,
+    enabled: true,
+    // Solo le pagine figlie: "/it/concorsi/" è la sezione che le raccoglie.
+    includePattern: "/concorsi/[a-z0-9]",
+    maxItems: 20,
+  },
+  {
+    id: "sitemap-pampers",
+    name: "Pampers · concorsi e promozioni",
+    kind: "sitemap",
+    url: "https://www.pampers.it/sitemap.xml",
+    category: "punto_vendita",
+    tags: ["brand", "pampers", "sitemap"],
+    cadenceMin: 120,
+    enabled: true,
+    // La sezione ha anche faq, form dei box e le pagine dei vincitori: le prime
+    // due non sono concorsi, le terze le scarta il cancello di freschezza.
+    includePattern: "concorsi-a-premi-e-promozioni/(?!i-vincitori|faq|box",
+    maxItems: 20,
+  },
   {
     id: "cocacola-offerte",
     name: "Coca-Cola · offerte e concorsi",

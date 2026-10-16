@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { SOURCES } from "../src/config/sources.ts";
 import {
   CATEGORY_LABELS,
+  STAR_CHOICES,
   TAG_FILTERS,
   activeFilterCount,
   categoriesToOffer,
@@ -12,6 +13,7 @@ import {
   isSeeingAll,
   mutedSourceIds,
   parseFilters,
+  starLabel,
   withFilterChange,
 } from "../src/filters.ts";
 
@@ -100,6 +102,31 @@ describe("filtri · tipi di concorso", () => {
   });
 });
 
+describe("filtri · stelle minime", () => {
+  it("alza la soglia della query, senza mai abbassarla", () => {
+    const query = filtersFor({ ...defaultFilters(), minScore: 70 }, { minScore: 80 });
+    expect(query.minScore).toBe(80);
+    expect(filtersFor({ ...defaultFilters(), minScore: 70 }, {}).minScore).toBe(70);
+    expect(filtersFor(defaultFilters(), { minScore: 60 }).minScore).toBe(60);
+  });
+
+  it("conta come filtro attivo e si spegne tornando a tutte", () => {
+    const alzata = withFilterChange(defaultFilters(), { kind: "star", value: 70 });
+    expect(alzata.minScore).toBe(70);
+    expect(activeFilterCount(alzata)).toBe(1);
+    expect(isSeeingAll(alzata)).toBe(false);
+    expect(withFilterChange(alzata, { kind: "star", value: 0 }).minScore).toBe(0);
+    expect(isSeeingAll(withFilterChange(alzata, { kind: "star", value: 0 }))).toBe(true);
+  });
+
+  it("accetta solo le soglie offerte: un valore inventato diventa \"tutte\"", () => {
+    expect(withFilterChange(defaultFilters(), { kind: "star", value: 95 }).minScore).toBe(0);
+    expect(STAR_CHOICES).toEqual([0, 70, 80]);
+    expect(starLabel(0)).toContain("Tutte");
+    expect(starLabel(70)).toBe("⭐ 70+");
+  });
+});
+
 describe("filtri · traduzione in query", () => {
   it("solo-gratis diventa un vincolo sull'acquisto, non sull'elenco dei tag", () => {
     const filters = { ...defaultFilters(), freeOnly: true };
@@ -130,7 +157,13 @@ describe("filtri · traduzione in query", () => {
 
 describe("filtri · lettura dal database", () => {
   it("rilegge quello che ha scritto", () => {
-    const filters = { mutedSources: ["vincimi"], mutedCategories: ["giftcard" as const], mutedTags: ["food"], freeOnly: true };
+    const filters = {
+      mutedSources: ["vincimi"],
+      mutedCategories: ["giftcard" as const],
+      mutedTags: ["food"],
+      freeOnly: true,
+      minScore: 75,
+    };
     expect(parseFilters(JSON.stringify(filters))).toEqual(filters);
   });
 
@@ -139,6 +172,13 @@ describe("filtri · lettura dal database", () => {
     expect(parseFilters(null)).toEqual(defaultFilters());
     expect(parseFilters("[]")).toEqual(defaultFilters());
     expect(parseFilters(JSON.stringify({ mutedTags: "food", freeOnly: "sì" }))).toEqual(defaultFilters());
+  });
+
+  it("una soglia di stelle assurda torna a zero", () => {
+    expect(parseFilters(JSON.stringify({ minScore: 500 })).minScore).toBe(0);
+    expect(parseFilters(JSON.stringify({ minScore: -10 })).minScore).toBe(0);
+    expect(parseFilters(JSON.stringify({ minScore: "80" })).minScore).toBe(0);
+    expect(parseFilters(JSON.stringify({ minScore: 80 })).minScore).toBe(80);
   });
 
   it("scarta categorie inesistenti e doppioni", () => {

@@ -58,6 +58,11 @@ describe("cancello · concorso ancora attivo", () => {
   it("riconosce le parole di un concorso già finito", () => {
     expect(staleReason(item({ summary: "Ecco i vincitori del concorso." }), NOW)).toBe("concorso già chiuso");
     expect(staleReason(item({ title: "Concorso concluso, grazie a tutti" }), NOW)).toBe("concorso già chiuso");
+    // Le sitemap dei brand sono piene di pagine che annunciano i vincitori: il
+    // titolo è lo slug e comincia proprio con quella parola (misurato il
+    // 16/10/2026 su Pampers: "I Vincitori 2013" entrava in archivio).
+    expect(staleReason(item({ title: "I Vincitori 2013", fromListing: true }), NOW)).toBe("concorso già chiuso");
+    expect(staleReason(item({ title: "Vincitori", fromListing: true }), NOW)).toBe("concorso già chiuso");
     // Al futuro invece il concorso è vivo: "si concluderà" non è "concluso".
     expect(staleReason(item({ summary: "Il concorso si concluderà il 30 novembre 2026." }), NOW)).toBeNull();
   });

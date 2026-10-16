@@ -20,11 +20,22 @@ export const DEFAULT_FILTERS: ChatFilters = {
   mutedCategories: [],
   mutedTags: [],
   freeOnly: false,
+  minScore: 0,
 };
 
 /** Copia nuova dei filtri di default: nessuno può mutare la costante. */
 export function defaultFilters(): ChatFilters {
-  return { mutedSources: [], mutedCategories: [], mutedTags: [], freeOnly: false };
+  return { mutedSources: [], mutedCategories: [], mutedTags: [], freeOnly: false, minScore: 0 };
+}
+
+/**
+ * Le soglie di stelle offerte in elenco: poche e tonde, perché un filtro da
+ * toccare mentre si scorre deve stare in una riga sola. 0 = tutte.
+ */
+export const STAR_CHOICES = [0, 70, 80];
+
+export function starLabel(soglia: number): string {
+  return soglia === 0 ? "⭐ Tutte" : `⭐ ${soglia}+`;
 }
 
 /** Ordine in cui i filtri si mostrano: dal più ampio al più specifico. */
@@ -102,7 +113,8 @@ export function activeFilterCount(filters: ChatFilters): number {
     filters.mutedSources.length +
     filters.mutedCategories.length +
     filters.mutedTags.length +
-    (filters.freeOnly ? 1 : 0)
+    (filters.freeOnly ? 1 : 0) +
+    (filters.minScore > 0 ? 1 : 0)
   );
 }
 
@@ -112,7 +124,8 @@ export function isSeeingAll(filters: ChatFilters): boolean {
     filters.mutedSources.length === 0 &&
     filters.mutedCategories.length === 0 &&
     filters.mutedTags.length === 0 &&
-    !filters.freeOnly
+    !filters.freeOnly &&
+    filters.minScore === 0
   );
 }
 
@@ -135,6 +148,9 @@ export function filtersFor(filters: ChatFilters, query: ItemQuery = {}): ItemQue
     risultato.excludeTags = [...(query.excludeTags ?? []), ...filters.mutedTags];
   }
   if (filters.freeOnly) risultato.withoutPurchase = true;
+  // Le stelle minime si sommano a quelle che la query già chiedeva (una soglia
+  // più alta vince: nessuna sezione chiede mai meno di quello che hai scelto).
+  if (filters.minScore > 0) risultato.minScore = Math.max(query.minScore ?? 0, filters.minScore);
   return risultato;
 }
 
@@ -144,6 +160,7 @@ export type FilterChange =
   | { kind: "category"; value: Category }
   | { kind: "tag"; value: string }
   | { kind: "free"; value: boolean }
+  | { kind: "star"; value: number }
   | { kind: "reset" };
 
 function toggled<T>(list: T[], value: T): T[] {
@@ -161,6 +178,8 @@ export function withFilterChange(filters: ChatFilters, change: FilterChange): Ch
       return { ...filters, mutedTags: toggled(filters.mutedTags, change.value) };
     case "free":
       return { ...filters, freeOnly: change.value };
+    case "star":
+      return { ...filters, minScore: STAR_CHOICES.includes(change.value) ? change.value : 0 };
     case "reset":
       return defaultFilters();
   }
@@ -179,6 +198,8 @@ export function filterChangeLabel(filters: ChatFilters, change: FilterChange, na
       return filters.mutedTags.includes(change.value) ? `🚫 ${tagLabel(change.value)}` : `✅ ${tagLabel(change.value)}`;
     case "free":
       return change.value ? "🎁 Solo senza acquisto" : "🎁 Anche con acquisto";
+    case "star":
+      return change.value === 0 ? "⭐ Tutti i punteggi" : `⭐ Solo da ${change.value} in su`;
     case "reset":
       return "♻️ Vedi di nuovo tutto";
   }
@@ -213,10 +234,12 @@ export function parseFilters(raw: unknown): ChatFilters {
   const categorie = stringList(record.mutedCategories).filter((category): category is Category =>
     CATEGORY_ORDER.includes(category as Category),
   );
+  const stelle = typeof record.minScore === "number" && Number.isFinite(record.minScore) ? Math.trunc(record.minScore) : 0;
   return {
     mutedSources: stringList(record.mutedSources),
     mutedCategories: categorie,
     mutedTags: stringList(record.mutedTags),
     freeOnly: record.freeOnly === true,
+    minScore: stelle >= 0 && stelle <= 100 ? stelle : 0,
   };
 }

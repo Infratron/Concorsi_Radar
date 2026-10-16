@@ -6,6 +6,7 @@ import {
   PAGE_SIZE,
   backKeyboard,
   cardKeyboard,
+  emptyKeyboard,
   filtriKeyboard,
   filtriFontiKeyboard,
   itemButtonLabel,
@@ -36,9 +37,21 @@ export interface Screen {
  * Cosa cambia un tocco nelle impostazioni: le quattro preferenze di sempre più i
  * filtri ("cosa vedi") di QUESTA chat.
  */
-export type ConfigKey = "score" | "quiet" | "digest" | "notify" | "cat" | "tag" | "src" | "free" | "reset";
+export type ConfigKey =
+  | "score"
+  | "quiet"
+  | "digest"
+  | "notify"
+  | "cat"
+  | "tag"
+  | "src"
+  | "free"
+  | "star"
+  | "reset";
 
-const CONFIG_KEYS: readonly ConfigKey[] = ["score", "quiet", "digest", "notify", "cat", "tag", "src", "free", "reset"];
+const CONFIG_KEYS: readonly ConfigKey[] = [
+  "score", "quiet", "digest", "notify", "cat", "tag", "src", "free", "star", "reset",
+];
 
 /** Cosa vuole fare l'utente: i bottoni e i comandi si traducono tutti qui. */
 export type Intent =
@@ -256,10 +269,19 @@ function listScreen(state: UiState, data: ScreenData, now: Date): Screen {
       scaduti: "Nessun concorso chiuso in archivio: qui finiscono quelli la cui scadenza è passata.",
       ignorati: "Non hai scartato niente: quello che tocchi 🚫 finisce qui, e da qui puoi riprenderlo.",
     };
-    return {
-      text: `📭 <b>${escapeHtml(title)}</b>\n\n${vuoti[state.section] ?? "Nessun concorso qui. Tocca 🔄 Aggiorna più tardi."}`,
-      keyboard: backKeyboard(),
-    };
+    const filtrata = data.counts.filtri > 0;
+    const righeVuote = [
+      `📭 <b>${escapeHtml(title)}</b>`,
+      "",
+      vuoti[state.section] ?? "Nessun concorso qui. Tocca 🔄 Aggiorna più tardi.",
+    ];
+    // Un elenco vuoto può voler dire due cose opposte: non c'è niente, oppure i
+    // filtri hanno lasciato fuori tutto. Dirlo è la differenza fra "aspetto" e
+    // "ho sbagliato un tasto".
+    if (filtrata) {
+      righeVuote.push("", `🎛 Hai <b>${data.counts.filtri}</b> filtri attivi: può essere per quello.`);
+    }
+    return { text: righeVuote.join("\n"), keyboard: emptyKeyboard(filtrata) };
   }
 
   const nome = data.total === 1 ? singolare : plurale;
@@ -276,8 +298,20 @@ function listScreen(state: UiState, data: ScreenData, now: Date): Screen {
   ];
   return {
     text: righe.join("\n"),
-    keyboard: listKeyboard(data.items, now, { index: page, total: pagine }),
+    keyboard: listKeyboard(data.items, now, { index: page, total: pagine }, stellePer(data, state.section)),
   };
+}
+
+/**
+ * Le sezioni dove la soglia delle stelle si mostra: sono quelle che leggono
+ * l'archivio per suggerire qualcosa. News ha un punteggio che vuol dire altro,
+ * e Watchlist, Storico e Cerca sono scelte esplicite: lì una riga in più sarebbe
+ * solo un tasto che non serve.
+ */
+const SEZIONI_STELLE = new Set(["nuovi", "oggi", "settimana", "scadenze", "scaduti"]);
+
+function stellePer(data: ScreenData, section: string): number | null {
+  return SEZIONI_STELLE.has(section) ? data.prefs.filters.minScore : null;
 }
 
 function cardScreen(state: UiState, data: ScreenData, now: Date): Screen {
@@ -356,6 +390,10 @@ function filtriScreen(data: ScreenData): Screen {
     "🎛 <b>Cosa vedi</b>",
     "",
     "✅ mostra · 🚫 nasconde. Vale <b>solo per te</b>: l'altra persona ha i suoi filtri, e anche gli avvisi seguono questi.",
+    "",
+    ...(filtro.minScore > 0
+      ? [`⭐ Stelle minime: <b>${filtro.minScore}</b>/100 — vedi solo la testa della classifica.`]
+      : ["⭐ Stelle minime: <b>nessuna</b> — gli elenchi sono comunque ordinati dal punteggio più alto."]),
     "",
   ];
   if (isSeeingAll(filtro)) {

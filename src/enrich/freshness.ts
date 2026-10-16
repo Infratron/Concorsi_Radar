@@ -46,9 +46,15 @@ const YEAR = /\b(20\d{2})\b/g;
  * Il confronto ignora le maiuscole: i titoli dei feed cominciano spesso con la
  * frase in maiuscolo ("I vincitori sono stati contattati") e senza il flag `i`
  * quelle chiusure non si vedevano affatto.
+ *
+ * Un titolo che COMINCIA con "vincitori" è invece la pagina che annuncia chi ha
+ * vinto, e vale come chiusura: le sitemap dei brand ne sono piene (misurato il
+ * 16/10/2026 su Pampers: "I Vincitori 2013", "I Vincitori 2012", "I Vincitori
+ * 2011" entravano in archivio come concorsi). L'ancora all'inizio è quello che
+ * tiene fuori "incontra il vincitore di X Factor", dove il vincitore è il premio.
  */
 const CLOSED_TEXT =
-  /\b((?:elenco|lista|proclamazione)\s+de[il]\s+vincitor[ei]|vincitor[ei]\s+de[il]\s+(?:concors\w*|premi\w*|estrazion\w*|edizion\w*)|i\s+vincitor[ei]\s+sono|vincitor[ei]\s+proclamat[ei]|graduatoria|verbale|estrazione avvenuta|estratto a sorte|sono stati estratti|premi assegnati|conclus[oi]|conclus[ae]|terminat[oi]|terminat[ae]|scadut[oi]|scadut[ae]|non pi[uù] attivo|si [eè] chius[oa]|edizione (?:passata|precedente|scorsa)|in archivio)\b/i;
+  /^(?:i |gli |le |la )?(?:vincitor[ei]|vincitric[ei])\b|\b((?:elenco|lista|proclamazione)\s+de[il]\s+vincitor[ei]|vincitor[ei]\s+de[il]\s+(?:concors\w*|premi\w*|estrazion\w*|edizion\w*)|i\s+vincitor[ei]\s+sono|vincitor[ei]\s+proclamat[ei]|graduatoria|verbale|estrazione avvenuta|estratto a sorte|sono stati estratti|premi assegnati|conclus[oi]|conclus[ae]|terminat[oi]|terminat[ae]|scadut[oi]|scadut[ae]|non pi[uù] attivo|si [eè] chius[oa]|edizione (?:passata|precedente|scorsa)|in archivio)\b/i;
 
 /**
  * Un anno citato vale come "edizione chiusa" solo se è plausibile come anno di
