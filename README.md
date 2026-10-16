@@ -14,7 +14,7 @@ ma le fonti e i concorsi sono condivisi.
 ## 1. Come funziona
 
 ```
-Cron ogni 15 minuti ──► ingestione a rotazione (entro il budget di CPU di 6 ms)
+GitHub Actions ogni 30 min ──► raccolta (stessa pipeline, nessun limite di CPU)
                          ├─ fetch con ETag/Last-Modified e retry
                          ├─ parsing RSS/Atom, sitemap, Google News, liste HTML
                          ├─ deduplica: stesso concorso da più aggregatori → un solo item
@@ -22,8 +22,12 @@ Cron ogni 15 minuti ──► ingestione a rotazione (entro il budget di CPU di 
                          │   (regole deterministiche; Workers AI solo sui casi dubbi)
                          └─ punteggio 0-100 + pesi appresi dai tuoi bottoni
                                    │
-Cron 06:05 e 17:05 UTC ──► digest  ──► Telegram
-nuovo item sopra soglia ──► avviso immediato con bottoni ✅ 🚫 🏆
+                                   ▼  D1 (via API HTTP di Cloudflare)
+Cron Worker */15 ──► item sopra soglia ──► avviso immediato ✅ 🚫 🏆
+                      archivio dei concorsi scaduti
+                      e, se la raccolta su Actions tace da 2 ore,
+                      raccolta di riserva (solo le fonti raggiungibili)
+Cron 06:05 e 17:05 UTC ──► digest ──► Telegram
 Telegram ──webhook──► comandi e feedback
 ```
 
@@ -32,10 +36,24 @@ Decisioni di progetto che contano:
 - **La deduplica è il cuore.** Lo stesso concorso compare su 4-5 aggregatori con
   titoli diversi: senza deduplica il bot diventa esattamente lo spam che non
   vuoi. Vedi la sezione 6.
-- **Il cron ruota le fonti**: mai tutte insieme. Sul piano gratuito di Workers
-  il vincolo vero sono i 10 ms di CPU per invocazione, non il numero di richieste
-  (100.000 al giorno): a decidere quanto si fa in un giro è il budget di CPU, con
-  un tetto di sicurezza sul numero di fonti. Numeri e metodi nella sezione 9.
+- **La raccolta gira fuori da Cloudflare.** Non è una preferenza: dalla rete di
+  Workers diverse fonti italiane rispondono 403 o 503, mentre le stesse richieste,
+  con la stessa User-Agent, da un runner GitHub ricevono 200 (misurato il
+  16/10/2026: 6 fonti su 8 bloccate). La pipeline è la stessa
+  ([src/pipeline.ts](src/pipeline.ts)); cambia solo il trasporto del database,
+  che da binding D1 diventa l'API HTTP di D1 ([src/db/d1-http.ts](src/db/d1-http.ts)).
+- **Fuori da Workers non c'è il budget di CPU**, quindi la raccolta legge tutte le
+  fonti abilitate a ogni giro (`allSources`). La rotazione a slot resta nella
+  pipeline ed è quella che userebbe un tick dentro il Worker, ma con una cadenza
+  fissa di 30 minuti cadrebbe sempre nello stesso slot e metà fonti non verrebbe
+  mai letta: da qui la modalità completa. Numeri e metodi nella sezione 9.
+- **Il radar non si spegne se GitHub si ferma.** Ogni tick da 15 minuti il Worker
+  guarda se la raccolta su Actions ha girato di recente: se non lo fa da più di
+  due ore (secret scaduto, workflow disattivato dopo 60 giorni di inattività del
+  repository, GitHub in tilt) ricomincia a raccogliere da sé, con la rotazione e il
+  freno di CPU di prima. Raggiunge poche fonti — è la rete di Cloudflare a essere
+  bloccata — ma sono più di zero, e la nota in `/health` dice che è scattata
+  (`raccolta di riserva: …`). Quando Actions gira, il Worker non scarica nulla.
 - **Google News è la fonte più fresca** (batte gli aggregatori di ore), ma porta
   anche rumore: le sue notizie passano un filtro di pertinenza prima di entrare.
 - **Al primo giro in assoluto nessun avviso immediato**: si riempirebbe
@@ -43,10 +61,14 @@ Decisioni di progetto che contano:
 
 ## 2. Requisiti
 
-- Node 20+ (testato su Node 24) e npm
+- Node 22.13+ e npm (il progetto è testato su Node 24, fissato in
+  [.node-version](.node-version)): da 22.6 Node esegue direttamente i file
+  TypeScript, da 22.13 `node:sqlite` non richiede più un flag — e i test lo usano
+  per eseguire l'SQL vero su un database in memoria
 - Un account Cloudflare (gratuito)
 - Un bot creato con [@BotFather](https://t.me/BotFather)
-- Un account GitHub, solo se volete il deploy continuo (opzionale)
+- Un account GitHub con il repository del progetto (privato va benissimo): serve
+  sia al deploy continuo sia alla raccolta, che gira su Actions
 
 ## 3. Configurazione dell'ambiente
 
@@ -120,6 +142,11 @@ npm run deploy                    # stampa l'URL del Worker, es. https://concors
 curl "https://concorsi-radar.<tuo>.workers.dev/setup?secret=IL_TUO_WEBHOOK_SECRET"
 ```
 
+Poi la raccolta: i tre secret su GitHub, come spiegato in
+[«Raccolta su GitHub Actions»](#raccolta-su-github-actions). Finché non ci sono,
+il Worker resta senza feed nuovi (gli avvisi e i digest funzionano, ma trovano
+l'archivio fermo).
+
 Nota sull'ordine: i segreti si aggiungono a un Worker che esiste già. Se non hai
 mai pubblicato, fai prima `npm run deploy` (o la prima build, se usi il deploy
 continuo) e poi i quattro `secrets:*`. Finché i segreti mancano, `/status`
@@ -136,7 +163,7 @@ npm run db:init:local
 npm run db:seed:local
 npm run dev:cron                  # wrangler dev --local --test-scheduled
 curl "http://127.0.0.1:8787/status"                                   # variabili mancanti
-curl "http://127.0.0.1:8787/__scheduled?cron=*/15+*+*+*+*"            # esegue l'ingestione vera
+curl "http://127.0.0.1:8787/__scheduled?cron=*/15+*+*+*+*"            # tick di avvisi e pulizia
 curl "http://127.0.0.1:8787/health?secret=IL_TUO_WEBHOOK_SECRET"
 ```
 
@@ -151,6 +178,44 @@ vere e stampa i messaggi esatti che il bot manderebbe.
 ```bash
 npm run dry-run -- --fonti 8
 ```
+
+### Raccolta su GitHub Actions
+
+La raccolta dei feed gira su GitHub ([.github/workflows/ingest.yml](.github/workflows/ingest.yml)),
+ogni 30 minuti, con `scripts/ingest.ts`: stessa pipeline del Worker, ma il
+database è raggiunto via API HTTP di D1. Servono tre *repository secret*
+(Settings → Secrets and variables → Actions → New repository secret):
+
+| Secret | Dove prenderlo |
+|---|---|
+| `CLOUDFLARE_ACCOUNT_ID` | dashboard Cloudflare: l'id dell'account è nel primo pezzo dell'URL (`dash.cloudflare.com/<ACCOUNT_ID>/...`) |
+| `CLOUDFLARE_API_TOKEN` | dashboard → My Profile → API Tokens → Create Token → template **D1 / Edit**, limitato al tuo account e a questo database |
+| `D1_DATABASE_ID` | lo stesso `database_id` che sta in `wrangler.toml` |
+
+Facoltativi, per l'avviso di fonte in errore su Telegram (senza, resta solo
+visibile in `/fonti`): `TELEGRAM_BOT_TOKEN` e `ADMIN_CHAT_ID`.
+
+Con la [gh CLI](https://cli.github.com) si impostano dalla cartella del progetto
+(dalla UI è identico):
+
+```bash
+gh secret set CLOUDFLARE_ACCOUNT_ID     # incolla il valore quando lo chiede
+gh secret set CLOUDFLARE_API_TOKEN
+gh secret set D1_DATABASE_ID
+```
+
+Poi Actions → **Raccolta concorsi** → *Run workflow* per il primo giro: la pagina
+del job mostra il riepilogo (fonti ok, item nuovi, duplicati) e i giri successivi
+partono da soli. `npm run ingest` è lo stesso script da riga di comando, con le
+tre variabili esportate a mano: utile per provarlo prima di affidarlo ad Actions.
+
+Se il job diventa rosso, i log dicono quale fonte o quale credenziale non va. Un
+giro in cui **nessuna** fonte risponde fa fallire il job di proposito: è la spia
+di un problema vero (token scaduto, permesso D1 sbagliato, rete).
+
+> Minuti Actions: il piano gratuito ne include 2.000 al mese per i repository
+> privati. Un giro dura ~1 minuto e ne partono 1.440 al mese, quindi ci si sta
+> dentro con margine (e su un repository pubblico i minuti non si contano).
 
 ### Deploy continuo da GitHub (ogni push = bot aggiornato)
 
@@ -182,9 +247,16 @@ scegli il repository e imposta:
 | Deploy command | `npx wrangler deploy` |
 | Preview builds | **disattivate** (vedi sotto) |
 
-Il *build command* è la rete di sicurezza: se il typecheck o uno dei 153 test
+Il *build command* è la rete di sicurezza: se il typecheck o uno dei 172 test
 fallisce, la build si ferma e **il deploy non parte**. `npm ci` serve a rendere
 l'installazione riproducibile dal `package-lock.json`.
+
+**Versione di Node della build**: i test eseguono l'SQL vero su `node:sqlite`, che
+senza flag esiste da Node **22.13**. La versione è fissata in
+[.node-version](.node-version) (24, la stessa dello workflow di raccolta); se la
+build di Cloudflare usasse una versione più vecchia, imposta `NODE_VERSION=24`
+tra le variabili di build. Il codice del Worker, invece, gira su workerd e non
+dipende da Node.
 
 Cosa **non** cambia a ogni deploy: i segreti (un deploy non li cancella), il
 database D1 e i suoi dati, il webhook Telegram già registrato. Non serve
@@ -305,12 +377,18 @@ automatico, quindi non vengono bloccati da robots (decisione documentata in
 
 | Risorsa | Uso previsto | Limite Free |
 |---|---|---|
-| Cron | ~98 esecuzioni/giorno | 5 trigger per account |
+| Cron Worker | ~98 esecuzioni/giorno | 5 trigger per account |
+| CPU Worker | < 1 ms per tick quando la raccolta è su Actions (nessuna rete) | **10 ms per invocazione** |
+| GitHub Actions | 48 giri/giorno · ~1.440 minuti/mese | 2.000 minuti/mese (repo privati) |
 | Richieste Worker | ~100/giorno | 100.000/giorno |
-| CPU | 3-7 ms per invocazione (misurati in workerd) | **10 ms per invocazione** |
-| D1 | qualche decina di scritture/giorno | 5M righe lette · 100k scritte |
-| Workers AI | ≤ 40 chiamate/giorno | 10.000 Neurons/giorno |
+| D1 | qualche centinaio di righe/giorno | 5M righe lette · 100k scritte |
+| Workers AI | ≤ 40 chiamate/giorno | 10.000 Neurons/giorno (solo nel Worker, che non raccoglie) |
 | Telegram | 2 digest + pochi avvisi | gratuito |
+
+La raccolta sulle Actions ha un tetto di CPU suo (`ACTIONS_CPU_BUDGET_MS` nello
+script): è altissimo apposta, perché lì il limite di 10 ms non esiste. Le misure
+qui sotto restano la documentazione del percorso dentro il Worker (e il motivo
+per cui la raccolta è uscita da lì).
 
 ### I 10 ms di CPU reggono il parsing dei feed?
 
@@ -358,20 +436,21 @@ Come è tenuto sotto controllo:
   invocazione dopo un deploy paga la compilazione del codice: il bench scalda
   prima di misurare, la produzione no.
 
-### L'alternativa
+### Le alternative
 
 - **Workers Paid, 5 $/mese**: 30 secondi di CPU per invocazione (e 30M
-  CPU-ms/mese). Toglie il vincolo dalla radice: si alza
-  `MAX_SOURCES_PER_RUN` a tutte le fonti e `CPU_BUDGET_MS` a qualche secondo, si
-  legge tutto a ogni tick da 15 minuti e si può usare Workers AI per arricchire i
-  casi dubbi. Raccomandato se vuoi la freschezza massima senza pensare al budget.
-- **Restare gratis senza perdere freschezza**: spostare la raccolta fuori da
-  Workers (un cron di GitHub Actions che scarica i feed con Node, nessun limite di
-  CPU, e scrive su D1 via API), lasciando al Worker solo digest e chat. Non
-  implementato: è la via gratis, ma aggiunge un secondo sistema da mantenere.
-- **Scegliere le fonti**: con questo budget si controllano 4 fonti per tick, quindi
-  6 fonti attive sono tutte passate ogni ~30 minuti e 12 in ~45. Disattiva quelle
-  che non ti servono (`enabled: false`) o allunga la `cadenceMin` di quelle pigre.
+  CPU-ms/mese): si potrebbe rimettere la raccolta nel Worker
+  (`jobFor` e il cron da 15 minuti), alzare `CPU_BUDGET_MS` a qualche secondo e
+  usare Workers AI per arricchire i casi dubbi. Ma non risolve **il problema
+  vero**: le fonti che rispondono 403/503 alla rete di Cloudflare lo farebbero
+  anche con il piano a pagamento. Per quello serve un IP che le fonti accettino.
+- **Raccolta su GitHub Actions** (quella implementata): nessun limite di CPU,
+  tutte le fonti a ogni giro, IP che le fonti accettano. Il prezzo è un secondo
+  sistema da mantenere e i minuti Actions (sezione 4).
+- **Scegliere le fonti**: con la raccolta su Actions non c'è più un tetto, quindi
+  disattiva solo ciò che non ti interessa (`enabled: false`) o allunga la
+  `cadenceMin` di quelle pigre; il tetto per fonte resta utile per non farsi
+  sommergere da un singolo sito (`maxItems`).
 
 **Non verificato**: la contabilità CPU di Cloudflare stessa sul Worker
 pubblicato. Le misure qui sopra sono cronometro interno, dentro il runtime vero;
@@ -382,20 +461,33 @@ per leggere il numero della piattaforma serve `npx wrangler tail` su un deploy.
 ```bash
 curl "https://<worker>/health?secret=WEBHOOK_SECRET"   # esecuzioni e stato fonti
 npm run dry-run                                        # cosa verrebbe inviato, senza inviare
-npm test                                               # 153 test
+npm run ingest                                         # raccolta vera, come su Actions
+npm test                                               # 172 test
 npm run typecheck
 ```
 
 In chat: `/health` per le ultime esecuzioni, `/fonti` per lo stato delle fonti.
-La tabella `runs` in D1 conserva la nota di ogni esecuzione (fonti dovute,
-duplicati, fuori tema, avvisi inviati).
+La tabella `runs` in D1 conserva la nota di ogni esecuzione: quelle con
+`trigger = actions` sono la raccolta su GitHub, le altre i tick del Worker.
 
 ## 11. Limiti noti
 
-- **Nessuna consegna Telegram reale è stata provata**: senza il vostro token non
-  si può. Il percorso di invio è coperto da test con client finto
+- **La consegna Telegram reale va ancora vista una volta a bot avviato**: il
+  percorso di invio è coperto dai test con client finto
   ([test/telegram.test.ts](test/telegram.test.ts)) e il resto del Worker è stato
-  eseguito davvero in workerd con D1 locale.
+  eseguito davvero in workerd con D1 locale, ma il primo messaggio vero lo
+  produce solo una `/start` dall'account.
+- **Actions non è un cron esatto**: i giri programmati possono partire con
+  qualche minuto di ritardo nei momenti di carico, e GitHub **disattiva** i
+  workflow programmati di un repository senza attività da 60 giorni (basta
+  riattivarli dal pulsante *Enable workflow*). Per un radar di concorsi va bene;
+  se ti serve puntualità, l'alternativa è Workers Paid con la raccolta dentro il
+  Worker.
+- **La raccolta dipende dai tre secret su GitHub**: senza, il job fallisce subito
+  e per due ore il radar resta completamente fermo; poi il Worker riparte con la
+  raccolta di riserva (2 fonti su 12 da qui, contro 12 su 12 da Actions). Non è un
+  caso che venga notato tardi: la nota in `/health` e i log del job lo dicono, e
+  ogni raccolta riuscita riporta il `failStreak` delle fonti a zero.
 - **Google News** restituisce URL di redirect `news.google.com/rss/articles/...`:
   funzionano ma risultano meno leggibili in anteprima.
 - **Concorsi fisici/cartacei** restano invisibili se nessuno li pubblica online;
@@ -418,10 +510,12 @@ duplicati, fuori tema, avvisi inviati).
 ```
 wrangler.toml              Worker, binding D1, Workers AI, tre cron
 .dev.vars.example          template delle variabili (copialo in .dev.vars)
+.github/workflows/
+  ingest.yml               raccolta ogni 30 minuti su GitHub Actions
 src/
   index.ts                 entry point: webhook, /setup, /health, /bench, scheduled()
-  schedule.ts              cron → digest o ingestione, finestra digest
-  pipeline.ts              rotazione fonti, deduplica, arricchimento, punteggio
+  schedule.ts              cron → digest oppure avvisi e pulizia, finestra digest
+  pipeline.ts              scelta delle fonti, deduplica, arricchimento, punteggio
   dedupe.ts                preparazione item e decisione di duplicato
   types.ts                 tipi condivisi
   config/sources.ts        fonti dichiarative + cap di sicurezza
@@ -431,12 +525,21 @@ src/
   lib/robots.ts            parsing e matching di robots.txt
   ingest/                  rss.ts, sitemap.ts, httplist.ts, index.ts
   enrich/                  rules.ts, score.ts, ai.ts
-  db/                      schema.sql, store.ts, d1.ts, memory.ts
+  db/                      schema.sql, store.ts, d1.ts, d1-http.ts, memory.ts
   telegram/                api.ts, format.ts, keyboard.ts, bot.ts, digest.ts
   debug/bench.ts           misura della CPU per invocazione (Node e workerd)
 scripts/
+  ingest.ts                la raccolta: stessa pipeline, store su API HTTP di D1
   dry-run.ts               prova generale senza inviare nulla
   bench-cpu.ts             stessa misura su Node, con le fonti vere
   seed-sources.ts          genera l'SQL di sincronizzazione delle fonti
-test/                      9 file, 153 test (vitest, nessuna rete)
+test/                      11 file, 172 test (vitest, nessuna rete)
 ```
+
+Il tratto che tiene insieme tutto: **una sola copia dell'SQL**. `src/db/d1.ts`
+scrive le query e le esegue su un "esecutore" astratto; il Worker gli passa il
+binding D1 (`env.DB`), la raccolta su Actions gli passa l'API HTTP
+(`src/db/d1-http.ts`). I due trasporti sono coperti dai test che eseguono le
+query vere su SQLite ([test/d1-sqlite.test.ts](test/d1-sqlite.test.ts)) e
+l'adapter HTTP con un finto API che esegue l'SQL
+([test/d1-http.test.ts](test/d1-http.test.ts)).

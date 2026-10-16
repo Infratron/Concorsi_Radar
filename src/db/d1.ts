@@ -15,7 +15,26 @@ import { DUP_CANDIDATE_MAX_HAMMING, hammingHex } from "../lib/text.ts";
 /**
  * Implementazione dello Store su Cloudflare D1 (produzione).
  * Tutti i valori passano da parametri BOUND: nessuna interpolazione di stringhe.
+ *
+ * Lo SQL qui è l'unica copia che esiste: `createD1Store` accetta un `D1Like`, cioè
+ * il minimo che usiamo del binding D1. Il binding vero (`env.DB`) lo soddisfa
+ * strutturalmente, e lo stesso vale per l'adattatore via API HTTP usato dalla
+ * raccolta su GitHub Actions (src/db/d1-http.ts). Così il Worker e il job di
+ * raccolta eseguono letteralmente le stesse query.
  */
+
+/** Statement D1: solo i metodi che usiamo davvero. */
+export interface D1LikeStatement {
+  bind(...params: unknown[]): D1LikeStatement;
+  first<T = unknown>(): Promise<T | null>;
+  all<T = unknown>(): Promise<{ results?: T[] }>;
+  run(): Promise<{ meta?: { changes?: number } }>;
+}
+
+/** Il binding D1 visto dal nostro codice: prepare non fa altro che questo. */
+export interface D1Like {
+  prepare(sql: string): D1LikeStatement;
+}
 
 /** Righe come escono da D1 (snake_case, booleani come 0/1, array come JSON). */
 interface ItemDbRow {
@@ -204,7 +223,7 @@ const ORDER_BY: Record<string, string> = {
   deadline: "deadline IS NULL ASC, deadline ASC, score DESC",
 };
 
-export function createD1Store(db: D1Database): Store {
+export function createD1Store(db: D1Like): Store {
   return {
     async getSources(): Promise<SourceRow[]> {
       const result = await db.prepare("SELECT * FROM sources ORDER BY name ASC").all<SourceDbRow>();

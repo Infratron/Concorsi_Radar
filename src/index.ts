@@ -1,12 +1,12 @@
 import type { Env } from "./types.ts";
 import { chatAccess, missingBindings, type ChatAccess } from "./config/env.ts";
 import { createD1Store } from "./db/d1.ts";
-import { resolveSource, runIngest, type IngestSummary } from "./pipeline.ts";
+import { expireOldItems, resolveSource, runIngest, type IngestSummary } from "./pipeline.ts";
 import type { TelegramUpdate } from "./telegram/api.ts";
 import { TelegramClient } from "./telegram/api.ts";
 import { handleUpdate } from "./telegram/bot.ts";
 import { sendDigests, sendInstantAlerts } from "./telegram/digest.ts";
-import { jobFor } from "./schedule.ts";
+import { jobFor, shouldFallbackIngest } from "./schedule.ts";
 import { USER_AGENT } from "./config/sources.ts";
 import { benchDedupeLookup, benchSource, downloadBodies, summarise } from "./debug/bench.ts";
 import { jsonResponse } from "./lib/http.ts";
@@ -16,7 +16,13 @@ import { jsonResponse } from "./lib/http.ts";
  *  - POST /telegram  → webhook (protetto dall'header segreto di Telegram)
  *  - GET  /setup     → registra webhook e menu comandi (protetto dal secret)
  *  - GET  /health    → stato di esecuzioni e fonti (protetto dal secret)
- *  - scheduled()     → ingestione a rotazione oppure digest, in base al cron
+ *  - scheduled()     → digest programmati oppure avvisi e pulizia, in base al cron
+ *
+ * La raccolta dei feed non gira più qui: la rete di Cloudflare viene bloccata da
+ * diverse fonti italiane (403/503), quindi la fa GitHub Actions con la stessa
+ * pipeline (scripts/ingest.ts). Il Worker legge lo stesso database D1 e, se la
+ * raccolta su Actions tace da troppo tempo, la sostituisce con quel poco che la
+ * sua rete raggiunge (vedi shouldFallbackIngest in src/schedule.ts).
  */
 
 /** Confronto a tempo costante per i secret nell'URL. */
@@ -52,34 +58,43 @@ async function runCron(env: Env, cron: string, now: Date): Promise<void> {
     return;
   }
 
-  const summary: IngestSummary = await runIngest(deps, now);
-  let instant = 0;
-  // Al primo giro in assoluto l'archivio si riempie di concorsi vecchi: avvisare
-  // subito sarebbe rumore, ci pensa il digest a presentarli.
-  if (summary.itemsNew > 0 && !summary.archiveWasEmpty) {
-    instant = (await sendInstantAlerts({ store, tg, now })).sent;
-  }
+  // Tick dei 15 minuti: di norma non scarica nulla (lo fa la raccolta su Actions,
+  // con tutte le fonti). Serve a consegnare subito ciò che la raccolta ha appena
+  // trovato e a mettere via i concorsi scaduti.
+  const note: string[] = [];
+  let sourcesOk = 0;
+  let sourcesFail = 0;
+  let itemsNew = 0;
+  let skipInstant = false;
 
-  // Gli avvisi di sistema vanno all'admin, non a tutti: sono problemi tecnici.
-  if (adminChatId !== null) {
-    for (const sourceId of summary.deadSources) {
-      await tg.sendMessage(adminChatId, `⚠️ <b>Fonte in errore</b>: ${sourceId} ha fallito 3 volte di fila. Controlla /fonti.`);
+  if (shouldFallbackIngest(await store.recentRuns(20), now)) {
+    // Raccolta di riserva: la rete di Cloudflare raggiunge poche fonti, ma
+    // meglio poche che nessuna. Il freno di CPU resta quello prudente del piano
+    // Free (budget 6 ms), quindi la rotazione continua a valere qui.
+    const summary: IngestSummary = await runIngest(deps, now);
+    sourcesOk = summary.sourcesOk;
+    sourcesFail = summary.sourcesFail;
+    itemsNew = summary.itemsNew;
+    note.push(`raccolta di riserva: ${summary.itemsNew} nuovi, ${summary.sourcesOk}/${summary.sourcesDue} fonti ok`);
+    note.push(...summary.notes.slice(0, 2));
+    // Come al primo giro in assoluto: niente avvisi immediati su un archivio che
+    // si sta riempiendo di concorsi vecchi.
+    skipInstant = summary.archiveWasEmpty;
+    if (adminChatId !== null) {
+      for (const sourceId of summary.deadSources) {
+        await tg.sendMessage(adminChatId, `⚠️ <b>Fonte in errore</b>: ${sourceId} ha fallito 3 volte di fila. Controlla /fonti.`);
+      }
     }
   }
 
+  const instant = skipInstant ? 0 : (await sendInstantAlerts({ store, tg, now })).sent;
+  const expired = await expireOldItems(store, now);
+  note.push(`avvisi: ${instant} istantanei`, `${expired} scaduti archiviati`);
+
   await store.recordRun({
     startedAt: now.toISOString(), trigger: cron,
-    sourcesOk: summary.sourcesOk, sourcesFail: summary.sourcesFail,
-    itemsNew: summary.itemsNew, ms: summary.ms,
-    note: [
-      `${summary.sourcesDue} fonti dovute`, `${summary.duplicates} duplicati`,
-      `${summary.filtered} fuori tema`, `${instant} istantanei`,
-      `cpu ~${summary.cpuMs} ms`, summary.deferred > 0 ? `${summary.deferred} rimandati` : null,
-      summary.archiveWasEmpty ? "primo giro: nessun istantaneo" : null,
-      ...summary.notes.slice(0, 3),
-    ]
-      .filter((part): part is string => part !== null)
-      .join(" | "),
+    sourcesOk, sourcesFail, itemsNew, ms: Date.now() - started,
+    note: note.join(" | "),
   });
 }
 

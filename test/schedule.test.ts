@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { DIGEST_CRONS, INGEST_CRON, isDigestWindow, jobFor } from "../src/schedule.ts";
+import { DIGEST_CRONS, FALLBACK_INGEST_AFTER_MS, NOTIFY_CRON, isDigestWindow, jobFor, shouldFallbackIngest } from "../src/schedule.ts";
+import type { RunRow } from "../src/types.ts";
 
 /**
  * Il cron è in UTC, gli utenti ragionano in ora italiana: qui blocchiamo la
@@ -13,14 +14,46 @@ describe("jobFor", () => {
     }
   });
 
-  it("il cron dei quindici minuti lancia sempre l'ingestione", () => {
-    expect(jobFor(INGEST_CRON, new Date("2026-10-16T06:05:00.000Z"), [8, 19])).toBe("ingest");
-    expect(jobFor(INGEST_CRON, new Date("2026-10-16T17:05:00.000Z"), [8, 19])).toBe("ingest");
+  it("il cron dei quindici minuti fa sempre gli avvisi, anche a un'ora da digest", () => {
+    // La raccolta la fa GitHub Actions: nel Worker questo tick non ingerisce più.
+    expect(jobFor(NOTIFY_CRON, new Date("2026-10-16T06:05:00.000Z"), [8, 19])).toBe("notify");
+    expect(jobFor(NOTIFY_CRON, new Date("2026-10-16T17:05:00.000Z"), [8, 19])).toBe("notify");
   });
 
   it("un cron personalizzato ricade nel digest solo nella finestra oraria", () => {
     expect(jobFor("0 * * * *", new Date("2026-10-16T06:05:00.000Z"), [8, 19])).toBe("digest");
-    expect(jobFor("0 * * * *", new Date("2026-10-16T12:00:00.000Z"), [8, 19])).toBe("ingest");
+    expect(jobFor("0 * * * *", new Date("2026-10-16T12:00:00.000Z"), [8, 19])).toBe("notify");
+  });
+});
+
+describe("shouldFallbackIngest", () => {
+  function run(trigger: string, startedAt: string): RunRow {
+    return { startedAt, trigger, sourcesOk: 0, sourcesFail: 0, itemsNew: 0, ms: 0, note: null };
+  }
+  const NOW = new Date("2026-10-16T12:00:00.000Z");
+
+  it("senza nessuna esecuzione della raccolta su Actions, il Worker raccoglie", () => {
+    expect(shouldFallbackIngest([], NOW)).toBe(true);
+    // I tick del Worker non contano come raccolta: solo "actions" lo è.
+    expect(shouldFallbackIngest([run("*/15 * * * *", "2026-10-16T11:59:00.000Z")], NOW)).toBe(true);
+  });
+
+  it("con una raccolta recente il Worker non tocca i feed", () => {
+    expect(shouldFallbackIngest([run("actions", "2026-10-16T11:30:00.000Z")], NOW)).toBe(false);
+    expect(shouldFallbackIngest([run("actions", "2026-10-16T11:59:00.000Z")], NOW)).toBe(false);
+  });
+
+  it("torna a raccogliere se la raccolta tace da più di due ore", () => {
+    const limite = new Date(NOW.getTime() - FALLBACK_INGEST_AFTER_MS - 60_000).toISOString();
+    expect(shouldFallbackIngest([run("actions", limite)], NOW)).toBe(true);
+  });
+
+  it("usa l'ultima raccolta, non la prima che trova", () => {
+    const runs = [
+      run("actions", "2026-10-16T11:45:00.000Z"),
+      run("actions", "2026-10-16T06:00:00.000Z"),
+    ];
+    expect(shouldFallbackIngest(runs, NOW)).toBe(false);
   });
 });
 

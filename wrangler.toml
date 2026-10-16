@@ -19,8 +19,11 @@ database_name = "concorsi-radar"
 database_id = "2c47a097-ad0e-4872-b868-9d9b3efe0dbb"
 
 # 3 trigger (limite Free = 5 per account):
-#  - ingestione a rotazione ogni 15 minuti
+#  - avvisi istantanei e pulizia ogni 15 minuti
 #  - due digest: 06:05 UTC (= 08:05 CEST / 07:05 CET) e 17:05 UTC (= 19:05 CEST / 18:05 CET)
+# La raccolta dei feed non è più un cron del Worker: la rete di Cloudflare viene
+# bloccata da diverse fonti italiane (403/503), quindi la fa GitHub Actions
+# (.github/workflows/ingest.yml) sulla stessa pipeline e sullo stesso D1.
 [triggers]
 crons = ["*/15 * * * *", "5 6 * * *", "5 17 * * *"]
 

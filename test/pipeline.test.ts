@@ -453,3 +453,90 @@ describe("pipeline · rotazione del carico", () => {
     expect(dueSources([spenta], NOW, 5)).toEqual([]);
   });
 });
+
+describe("pipeline · raccolta completa (GitHub Actions)", () => {
+  /**
+   * Il caso di Actions: una cadenza fissa. Con `dueSources` un giro ogni 30
+   * minuti cade sempre nello stesso slot, quindi metà fonti non verrebbe mai
+   * letta. Questi test fissano sia il motivo sia la modalità `allSources`.
+   */
+  const PREMI = [
+    "un buono spesa",
+    "una bicicletta elettrica",
+    "un weekend in montagna",
+    "una macchina fotografica",
+    "un robot da cucina",
+  ];
+
+  function fonteLarga(index: number): SourceRow {
+    const row = source(`largo-${index}`, `Fonte larga ${index}`, `https://l${index}.example/feed`);
+    row.cadenceMin = 30;
+    return row;
+  }
+
+  const LARGHE = PREMI.map((_, index) => fonteLarga(index));
+  const PAGINE_LARGHE: Record<string, string> = Object.fromEntries(
+    LARGHE.map((row, index) => [
+      row.url,
+      rssFeed([
+        {
+          title: `Concorso largo ${index}: vinci ${PREMI[index]}`,
+          link: `https://l${index}.example/item`,
+          description: "Concorso gratuito senza obbligo di acquisto.",
+        },
+      ]),
+    ]),
+  );
+
+  it("a cadenza fissa la rotazione ripropone sempre le stesse fonti", () => {
+    const ids = (rows: SourceRow[]): string[] => rows.map((row) => row.id).sort();
+    const primo = ids(dueSources(LARGHE, NOW, 10));
+    const dopoTrenta = ids(dueSources(LARGHE, new Date(NOW.getTime() + 30 * 60 * 1000), 10));
+
+    expect(primo.length).toBeGreaterThan(0);
+    expect(primo.length).toBeLessThan(LARGHE.length);
+    expect(dopoTrenta).toEqual(primo);
+  });
+
+  it("con allSources legge tutte le fonti abilitate in una sola esecuzione", async () => {
+    const store = createMemoryStore();
+    store.seedSources([...LARGHE]);
+
+    const summary = await runIngest(
+      { store, fetcher: fetcherFor(PAGINE_LARGHE), ai: null },
+      NOW,
+      { allSources: true, includeSynthesized: false, cpuBudgetMs: 1000 },
+    );
+
+    expect(summary.sourcesDue).toBe(LARGHE.length);
+    expect(summary.sourcesOk).toBe(LARGHE.length);
+    expect(summary.sourcesFail).toBe(0);
+    expect(summary.deferred).toBe(0);
+
+    const dopo = await store.getSources();
+    expect(dopo.filter((row) => row.lastRunAt !== null)).toHaveLength(LARGHE.length);
+  });
+
+  it("con allSources il tetto resta e parte dalla fonte più trascurata", async () => {
+    const store = createMemoryStore();
+    store.seedSources([...LARGHE]);
+    const vecchia = new Date(NOW.getTime() - 3_600_000).toISOString();
+    for (const row of LARGHE) {
+      await store.recordSourceRun(row.id, {
+        ok: true, httpStatus: 200, etag: null, lastModified: null, error: null,
+        now: row.id === "largo-0" ? vecchia : NOW.toISOString(),
+      });
+    }
+
+    const summary = await runIngest(
+      { store, fetcher: fetcherFor(PAGINE_LARGHE), ai: null },
+      NOW,
+      { allSources: true, maxSources: 1, includeSynthesized: false, cpuBudgetMs: 1000 },
+    );
+
+    expect(summary.sourcesDue).toBe(1);
+    expect(summary.itemsSeen).toBe(1);
+    const letta = (await store.getSources()).find((row) => row.lastRunAt === NOW.toISOString());
+    expect(letta?.id).toBe("largo-0");
+  });
+});

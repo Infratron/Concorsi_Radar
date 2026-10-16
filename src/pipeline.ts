@@ -44,6 +44,14 @@ export interface IngestOptions {
    * deploy usa sempre il default, tarato sui 10 ms del piano Free.
    */
   cpuBudgetMs?: number;
+  /**
+   * Ignora la rotazione a slot e prende tutte le fonti abilitate, dalla più
+   * trascurata. Serve alla raccolta che gira su GitHub Actions: lì non c'è il
+   * limite di CPU del piano Free, e una cadenza fissa (es. ogni 30 minuti)
+   * cadrebbe sempre nello stesso slot di `dueSources`, lasciando metà delle
+   * fonti invisibili per sempre.
+   */
+  allSources?: boolean;
 }
 
 export interface IngestSummary {
@@ -164,7 +172,13 @@ export async function runIngest(
     notes.push(`${synthesized.length} fonti non presenti in D1: esegui npm run db:seed per conservarne lo stato`);
   }
 
-  const due = dueSources([...rows, ...synthesized].map(resolveSource), now, options.maxSources ?? MAX_SOURCES_PER_RUN);
+  const pool = [...rows, ...synthesized].map(resolveSource);
+  const due = options.allSources
+    ? pool
+        .filter((source) => source.enabled)
+        .sort((a, b) => (a.lastRunAt ?? "").localeCompare(b.lastRunAt ?? ""))
+        .slice(0, Math.max(1, options.maxSources ?? pool.length))
+    : dueSources(pool, now, options.maxSources ?? MAX_SOURCES_PER_RUN);
   const weights = await mergedWeights(deps.store);
 
   let sourcesOk = 0;

@@ -1,0 +1,53 @@
+# Raccolta dei concorsi su runner GitHub.
+#
+# Perché non nel Worker: la rete di Cloudflare viene bloccata da diverse fonti
+# italiane (403/503) mentre dagli stessi URL, con la stessa User-Agent, un runner
+# GitHub riceve 200. Il Worker resta per i digest, gli avvisi istantanei e i
+# comandi Telegram: legge lo stesso database D1.
+#
+# Secret del repository (Settings → Secrets and variables → Actions):
+#   CLOUDFLARE_ACCOUNT_ID   id account Cloudflare
+#   CLOUDFLARE_API_TOKEN    token con permesso D1:Edit
+#   D1_DATABASE_ID          id del database (lo stesso di wrangler.toml)
+# facoltativi, per l'avviso di fonte in errore su Telegram:
+#   TELEGRAM_BOT_TOKEN, ADMIN_CHAT_ID
+name: Raccolta concorsi
+
+on:
+  schedule:
+    # Ogni 30 minuti. Le esecuzioni programmate possono ritardare di qualche
+    # minuto nei momenti di carico di GitHub: per un radar va bene.
+    - cron: "*/30 * * * *"
+  # Utile per provare subito dopo aver cambiato le fonti.
+  workflow_dispatch:
+
+# Un giro alla volta: due esecuzioni in parallelo si contenderebbero gli stessi
+# etag e gli stessi item nuovi.
+concurrency:
+  group: ingest
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  ingest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      # Nessuna dipendenza da installare: lo script usa solo Node (fetch, node:)
+      # e i moduli TypeScript del repository.
+      - name: Raccolta
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          D1_DATABASE_ID: ${{ secrets.D1_DATABASE_ID }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          ADMIN_CHAT_ID: ${{ secrets.ADMIN_CHAT_ID }}
+        run: npm run ingest
