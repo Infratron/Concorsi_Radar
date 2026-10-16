@@ -145,6 +145,28 @@ describe("store D1 · SQL vero su SQLite", () => {
     expect((await store.getItem(1))?.status).toBe("saved");
   });
 
+  it("cancella item e consegne collegate, senza toccare le altre righe", async () => {
+    const { db, store: s } = freshStore();
+    await s.insertItem(item({ urlKey: "k1" }));
+    await s.insertItem(item({ urlKey: "k2", url: "https://b.example/secondo" }));
+    await s.recordDelivery(111, 1, "saved", "2026-10-16T09:00:00.000Z");
+    await s.recordDelivery(111, 2, "digest", "2026-10-16T09:00:00.000Z");
+
+    expect(await s.deleteItems([1])).toBe(1);
+    expect(await s.getItem(1)).toBeNull();
+    expect(await s.isDelivered(111, 1, "saved")).toBe(false);
+    expect((await s.queryItems({ limit: 10 })).map((row) => row.id)).toEqual([2]);
+
+    // Nessuna consegna orfana, e quella dell'altro item resta intatta.
+    const orfane = db.prepare("SELECT COUNT(*) AS n FROM deliveries WHERE item_id = 1").get() as { n: number };
+    expect(orfane.n).toBe(0);
+    expect(await s.isDelivered(111, 2, "digest")).toBe(true);
+
+    expect(await s.deleteItems([4242])).toBe(0);
+    expect(await s.deleteItems([])).toBe(0);
+    expect(await s.queryItems({ limit: 10 })).toHaveLength(1);
+  });
+
   it("gestisce preferenze, pesi con tetto e chat attive", async () => {
     await store.upsertPrefs({
       chatId: 111, active: true, weights: { giftcard: 1 }, minScoreInstant: 70, quietHours: "23-7", digestHours: [8, 19],

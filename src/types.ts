@@ -164,6 +164,13 @@ export interface ItemQuery {
   deadlineBefore?: string;
   /** deadline >= questa data (YYYY-MM-DD): serve a mostrare solo le scadenze future. */
   deadlineAfter?: string;
+  /**
+   * Solo item SENZA scadenza. Sono quelli nati da un elenco (sitemap, pagina
+   * HTML): senza data di chiusura l'unico modo per sapere se sono ancora
+   * concorsi attivi è il cancello di src/enrich/freshness.ts, e la pulizia ne
+   * guarda solo questa fetta invece di tutto l'archivio.
+   */
+  withoutDeadline?: boolean;
   /** Esclude gli item i cui id compaiono qui. */
   excludeIds?: number[];
   limit?: number;

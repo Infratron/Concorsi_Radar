@@ -63,6 +63,13 @@ Decisioni di progetto che contano:
   Vedi la sezione 5; il perché tecnico sta in
   [src/telegram/screens.ts](src/telegram/screens.ts) e
   [src/telegram/bot.ts](src/telegram/bot.ts).
+- **Solo concorsi ancora attivi.** Ogni item passa un cancello prima di entrare
+  in archivio ([src/enrich/freshness.ts](src/enrich/freshness.ts)): fuori le
+  pagine di un'edizione passata, quelle che dicono "vincitori" o "concluso", le
+  pagine ferme da più di sei mesi e — dalle fonti di elenco, dove il titolo è lo
+  slug — le pagine di catalogo, le tassonomie e le pagine indice. Le stesse
+  regole valgono per il digest e per la pulizia dell'archivio (`npm run prune`),
+  e la nota di ogni raccolta dice quanti item ha scartato e perché.
 - **Google News è la fonte più fresca** (batte gli aggregatori di ore), ma porta
   anche rumore: le sue notizie passano un filtro di pertinenza prima di entrare.
 - **Al primo giro in assoluto nessun avviso immediato**: si riempirebbe
@@ -258,7 +265,7 @@ scegli il repository e imposta:
 | Deploy command | `npx wrangler deploy` |
 | Preview builds | **disattivate** (vedi sotto) |
 
-Il *build command* è la rete di sicurezza: se il typecheck o uno dei 220 test
+Il *build command* è la rete di sicurezza: se il typecheck o uno dei 243 test
 fallisce, la build si ferma e **il deploy non parte**. `npm ci` serve a rendere
 l'installazione riproducibile dal `package-lock.json`.
 
@@ -424,22 +431,31 @@ Findus, Algida, Heineken, Trenitalia, TIM, WindTre, Esselunga…) rispondono 403
 non hanno un elenco pubblico o lo costruiscono via JavaScript, quindi non sono
 monitorabili in modo affidabile — restano coperte dalle query Google News.
 
-| Fonte | Tipo | Cosa ha dato nella prova |
+La colonna dice cosa **entra** dopo il cancello di freschezza, che è la differenza
+tra "una pagina del sito" e "un concorso": senza di lui una sitemap di brand porta
+anche i cataloghi di tazze e borse e le promozioni chiuse anni fa.
+
+| Fonte | Tipo | Cosa entra (misura del 16/10/2026) |
 |---|---|---|
-| Ferrero · promozioni | sitemap | 20 pagine (`/promozioni/...`: Nutella, Kinder, Rocher) |
-| Lavazza · promozioni | sitemap | 15 pagine |
-| Conad · collezioni e concorsi | sitemap | 20 pagine |
-| Burger King · regolamenti | sitemap | 15 pagine |
-| Eni Più Insieme · concorsi | sitemap | 6 concorsi |
-| PAYBACK · regolamenti | sitemap | 5 regolamenti (piattaforma usata da molti brand) |
+| Ferrero · promozioni | sitemap | 2 su 20 pagine (`vinciwonka2026`, `vincimomentiinsieme2026`); le altre sono raccolte punti e gadget senza la parola del concorso nello slug |
+| Lavazza · concorsi | sitemap | 1 pagina (regolamento); con il pattern largo erano 20 kit di prodotto |
+| Conad · carte e premi | sitemap | 2 promozioni vere (`vincibici`, `giro-d-italia-vincigiro`); il catalogo di tazze, borse e peluche resta fuori |
+| Burger King · regolamenti | sitemap | 0: le due pagine che ha sono del 2024 e 2025 |
+| Eni Più Insieme · concorsi | sitemap | 6 su 6 (i concorsi hanno nomi di premio, la sezione `/concorsi-premi/` è il segnale) |
+| PAYBACK · regolamenti | sitemap | 0: 5 regolamenti dal 2018 al 2021 |
 | Sammontana · gusta e vinci | sitemap | 3 pagine |
-| Coca-Cola · offerte e concorsi | pagina HTML | 5 campagne attive |
+| Coca-Cola · offerte e concorsi | pagina HTML | 3 campagne su 5 (le altre due non sono concorsi) |
+| Premi e Concorsi · sitemap | sitemap | 0: pubblica solo tassonomie ("Concorsi Fotografici"…), i concorsi arrivano dal suo feed RSS |
 | Google News · brand | query | Nutella, Kinder, Coca-Cola, Mulino Bianco, supermercati |
 | Google News · instant win | query | concorsi con codici sotto il tappo, "in palio" |
 
 Misura della prima raccolta completa con tutte le fonti (22 su 22, 16/10/2026):
 **267 item letti, 213 nuovi, 32 duplicati, 22 fuori tema, 0 errori**, in 9 secondi.
-Prima di queste fonti la stessa raccolta ne trovava 99.
+Prima di queste fonti la stessa raccolta ne trovava 99. Il cancello di freschezza è
+arrivato dopo: sulle fonti di elenco scarta la maggior parte di quello che legge
+(Conad 18 su 20, Ferrero 18 su 20, Burger King 18 su 18), e i 54 falsi positivi che
+erano già in archivio — tassonomie di Premi e Concorsi, catalogo Conad, kit Lavazza,
+la promo Conad del 2024 — sono stati tolti con `npm run prune -- --apply`.
 
 **Aggiungere una fonte**: aggiungi una voce in `SOURCES` (basta `id`, `name`,
 `kind`, `url`, `category`, `tags`, `cadenceMin`), poi `npm run db:seed` e
@@ -543,7 +559,9 @@ per leggere il numero della piattaforma serve `npx wrangler tail` su un deploy.
 curl "https://<worker>/health?secret=WEBHOOK_SECRET"   # esecuzioni e stato fonti
 npm run dry-run                                        # cosa verrebbe inviato, senza inviare
 npm run ingest                                         # raccolta vera, come su Actions
-npm test                                               # 220 test
+npm run prune                                          # cosa non è più un concorso attivo (elenco)
+npm run prune -- --apply                               # e lo toglie dall'archivio
+npm test                                               # 243 test
 npm run typecheck
 ```
 
@@ -554,6 +572,12 @@ La tabella `runs` in D1 conserva la nota di ogni esecuzione: quelle con
 
 ## 11. Limiti noti
 
+- **Il cancello di freschezza privilegia la precisione.** Un concorso vivo il cui
+  URL non contiene nessuna parola di concorso, senza testo e senza data, resta
+  fuori: è il prezzo per non riempire il digest di pagine di catalogo (un caso
+  vero: le promozioni Ferrero chiamate `panenutellaottobre2026`). E una tassonomia
+  il cui nome non segue quello della sua cartella può ancora passare: ne è
+  rimasta una, "A Partecipazione Gratuita" sotto `/concorsi-a-premi/`.
 - **La consegna Telegram reale va ancora vista una volta a bot avviato**: il
   percorso di invio è coperto dai test con client finto
   ([test/telegram.test.ts](test/telegram.test.ts)) e il resto del Worker è stato
@@ -619,10 +643,12 @@ src/
   debug/bench.ts           misura della CPU per invocazione (Node e workerd)
 scripts/
   ingest.ts                la raccolta: stessa pipeline, store su API HTTP di D1
+  prune-stale.ts           toglie dall'archivio i falsi positivi (prova a vuoto,
+                           poi --apply): stesso cancello della raccolta
   dry-run.ts               prova generale senza inviare nulla
   bench-cpu.ts             stessa misura su Node, con le fonti vere
   seed-sources.ts          genera l'SQL di sincronizzazione delle fonti
-test/                      12 file, 220 test (vitest, nessuna rete)
+test/                      14 file, 243 test (vitest, nessuna rete)
 ```
 
 Il tratto che tiene insieme tutto: **una sola copia dell'SQL**. `src/db/d1.ts`

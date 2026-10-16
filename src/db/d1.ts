@@ -274,6 +274,9 @@ function buildWhere(query: ItemQuery): { sql: string; params: unknown[] } {
     where.push("(LOWER(title) LIKE ? OR LOWER(summary) LIKE ?)");
     params.push(`%${keyword}%`, `%${keyword}%`);
   }
+  if (query.withoutDeadline === true) {
+    where.push("deadline IS NULL");
+  }
   if (query.deadlineBefore) {
     where.push("deadline IS NOT NULL AND deadline <= ?");
     params.push(query.deadlineBefore);
@@ -420,6 +423,18 @@ export function createD1Store(db: D1Like): Store {
 
     async touchItem(id: number, at: string): Promise<void> {
       await db.prepare("UPDATE items SET last_seen_at = ? WHERE id = ?").bind(at, id).run();
+    },
+
+    async deleteItems(ids: number[]): Promise<number> {
+      if (ids.length === 0) return 0;
+      // Ids bound, mai interpolati: la lista di placeholder è l'unica cosa che
+      // si costruisce da `ids.length`.
+      const placeholders = ids.map(() => "?").join(", ");
+      // Prima le consegne, poi l'item: nessuna riga orfana in `deliveries` che
+      // farebbe saltare una futura rispedizione dello stesso concorso.
+      await db.prepare(`DELETE FROM deliveries WHERE item_id IN (${placeholders})`).bind(...ids).run();
+      const deleted = await db.prepare(`DELETE FROM items WHERE id IN (${placeholders})`).bind(...ids).run();
+      return deleted.meta?.changes ?? ids.length;
     },
 
     async getPrefs(chatId: number): Promise<Prefs | null> {

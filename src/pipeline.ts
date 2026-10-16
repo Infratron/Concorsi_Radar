@@ -3,6 +3,7 @@ import type { Store } from "./db/store.ts";
 import { CPU_BUDGET_MS, MAX_SOURCES_PER_RUN, SOURCES, USER_AGENT } from "./config/sources.ts";
 import { ingestSource } from "./ingest/index.ts";
 import { enrichWithRules, looksLikeContest } from "./enrich/rules.ts";
+import { indexPageUrls, staleReason } from "./enrich/freshness.ts";
 import { MAX_AI_CALLS_PER_RUN, enrichWithAi, mergeInsight, needsAi } from "./enrich/ai.ts";
 import { applyWeights, baseScore } from "./enrich/score.ts";
 import {
@@ -63,6 +64,12 @@ export interface IngestSummary {
   duplicates: number;
   /** Item scartati perché non parlano di concorsi (tipico delle fonti news). */
   filtered: number;
+  /**
+   * Item scartati perché non sono concorsi ANCORA ATTIVI: pagine di catalogo,
+   * edizione di un anno passato, pagina indice, promozione chiusa da mesi.
+   * Vedi src/enrich/freshness.ts.
+   */
+  stale: number;
   /** Fonti saltate o item rimandati perché il budget di CPU era esaurito. */
   deferred: number;
   /** CPU stimata dell'esecuzione (ms): è la metrica da tenere sotto i 10 ms Free. */
@@ -140,6 +147,14 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? `${error.name}: ${error.message}` : String(error);
 }
 
+/**
+ * Chiave con cui raggruppare i motivi nelle note: "pagina ferma da 471 giorni"
+ * e "pagina ferma da 300 giorni" sono lo stesso problema, non due.
+ */
+function motivoChiave(motivo: string): string {
+  return motivo.replace(/ \([^)]*\)$/, "").replace(/ da \d+ giorni$/, "");
+}
+
 export async function runIngest(
   deps: PipelineDeps,
   now: Date,
@@ -187,6 +202,7 @@ export async function runIngest(
   let itemsNew = 0;
   let duplicates = 0;
   let filtered = 0;
+  let stale = 0;
   let deferred = 0;
   let aiCalls = 0;
 
@@ -231,6 +247,14 @@ export async function runIngest(
     if (result.robotsDenied) notes.push(`${source.id}: robots.txt vieta la raccolta, saltata`);
 
     const nomeFonte = sourceNameTokens(source.name);
+    // Fonti di elenco (sitemap e pagine HTML): il titolo è ricavato dall'URL e non
+    // c'è testo di pagina, quindi due controlli che valgono solo per loro — una
+    // pagina che è la cartella di altre pagine raccolte è un elenco, non un
+    // concorso, e il cancello di freschezza può contare solo sulle parole
+    // dell'URL.
+    const elenco = source.kind === "sitemap" || source.kind === "html";
+    const indice = elenco ? indexPageUrls(result.items.map((item) => item.url)) : new Set<string>();
+    const motivi = new Map<string, number>();
     let saltati = 0;
     let primo = true;
     for (const raw of result.items) {
@@ -253,6 +277,13 @@ export async function runIngest(
       // senza questo filtro il digest si riempie di notizie fuori tema.
       if (source.kind === "news" && !looksLikeContest(`${raw.title} ${raw.summary}`)) {
         filtered++;
+        continue;
+      }
+      // Prima di ogni altra cosa (e prima di spendere query di deduplica): una
+      // pagina che è la cartella di altre pagine raccolte è un elenco.
+      if (indice.has(raw.url)) {
+        stale++;
+        motivi.set("pagina indice", (motivi.get("pagina indice") ?? 0) + 1);
         continue;
       }
       try {
@@ -284,6 +315,25 @@ export async function runIngest(
 
         const enrichStart = cpuStart();
         let insight = enrichWithRules(raw, source, now);
+        // Il cancello di "concorso ancora attivo" sta PRIMA dell'AI: una pagina
+        // chiusa anni fa non merita una chiamata al modello, e l'AI costa.
+        const motivo = staleReason(
+          {
+            title: raw.title,
+            url: raw.url,
+            summary: raw.summary,
+            publishedAt: raw.publishedAt,
+            deadline: insight.deadline,
+            fromListing: elenco,
+          },
+          now,
+        );
+        if (motivo !== null) {
+          stale++;
+          const chiave = motivoChiave(motivo);
+          motivi.set(chiave, (motivi.get(chiave) ?? 0) + 1);
+          continue;
+        }
         if (deps.ai && aiCalls < MAX_AI_CALLS_PER_RUN && needsAi(insight, raw)) {
           aiCalls++;
           const patch = await enrichWithAi({ title: raw.title, summary: raw.summary }, {
@@ -301,11 +351,22 @@ export async function runIngest(
       }
     }
     if (saltati > 0) notes.push(`${source.id}: ${saltati} item rimandati (budget CPU)`);
+    const nonAttivi = [...motivi.values()].reduce((total, quante) => total + quante, 0);
+    if (nonAttivi > 0) {
+      // Il motivo entra nella nota: una fonte di elenco che smette di portare
+      // item si capisce da qui, senza aprire la pagina a mano.
+      const riassunto = [...motivi.entries()]
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 2)
+        .map(([motivo, quante]) => `${quante} ${motivo}`)
+        .join(", ");
+      notes.push(`${source.id}: ${nonAttivi} scartati, non attivi (${riassunto})`);
+    }
   }
 
   return {
     sourcesDue: due.length, sourcesOk, sourcesFail, itemsSeen, itemsNew, duplicates,
-    filtered, deferred, archiveWasEmpty, cpuMs: Math.round(cpuProxyMs * 100) / 100,
+    filtered, stale, deferred, archiveWasEmpty, cpuMs: Math.round(cpuProxyMs * 100) / 100,
     ms: Date.now() - started, notes, deadSources,
   };
 }

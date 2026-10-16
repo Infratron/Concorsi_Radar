@@ -211,6 +211,40 @@ describe("memory store · queryItems", () => {
   });
 });
 
+describe("memory store · cancellazione degli item", () => {
+  let store: MemoryStore;
+  beforeEach(async () => {
+    store = createMemoryStore();
+    await store.insertItem(makeItem());
+    await store.insertItem(
+      makeItem({
+        urlKey: "key-bici",
+        url: "https://www.premieconcorsi.com/concorsi/bici/",
+        title: "Vinci una bicicletta elettrica",
+      }),
+    );
+    await store.recordDelivery(999, 1, "saved", "2026-10-16T09:00:00.000Z");
+    await store.recordDelivery(999, 2, "digest", "2026-10-16T09:00:00.000Z");
+  });
+
+  it("cancella l'item e le sue consegne, lasciando in piedi il resto", async () => {
+    expect(await store.deleteItems([1])).toBe(1);
+    expect(await store.getItem(1)).toBeNull();
+    expect(await store.isDelivered(999, 1, "saved")).toBe(false);
+    expect(await store.listDeliveredItems(999, "saved")).toEqual([]);
+    expect((await store.queryItems({ limit: 10 })).map((row) => row.id)).toEqual([2]);
+    // La consegna dell'altro item non si tocca.
+    expect(await store.isDelivered(999, 2, "digest")).toBe(true);
+  });
+
+  it("un id inesistente, o nessun id, non cancella niente", async () => {
+    expect(await store.deleteItems([4242])).toBe(0);
+    expect(await store.deleteItems([])).toBe(0);
+    expect(await store.queryItems({ limit: 10 })).toHaveLength(2);
+    expect(await store.isDelivered(999, 1, "saved")).toBe(true);
+  });
+});
+
 describe("memory store · prefs, consegne e peso dei tag", () => {
   let store: MemoryStore;
   beforeEach(() => {

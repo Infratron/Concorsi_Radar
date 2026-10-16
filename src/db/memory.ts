@@ -88,6 +88,7 @@ export function createMemoryStore(): MemoryStore {
       const haystack = `${row.title} ${row.summary}`.toLowerCase();
       if (!haystack.includes(keyword)) return false;
     }
+    if (query.withoutDeadline === true && row.deadline !== null) return false;
     if (query.deadlineBefore) {
       if (row.deadline === null || row.deadline > query.deadlineBefore) return false;
     }
@@ -193,6 +194,23 @@ export function createMemoryStore(): MemoryStore {
     async touchItem(id: number, at: string): Promise<void> {
       const row = items.find((candidate) => candidate.id === id);
       if (row) row.lastSeenAt = at;
+    },
+
+    async deleteItems(ids: number[]): Promise<number> {
+      if (ids.length === 0) return 0;
+      const targets = new Set(ids);
+      // Prima le consegne, poi l'item: stessa promessa dell'implementazione D1.
+      for (let index = deliveries.length - 1; index >= 0; index--) {
+        if (targets.has(deliveries[index].itemId)) deliveries.splice(index, 1);
+      }
+      let removed = 0;
+      for (let index = items.length - 1; index >= 0; index--) {
+        if (targets.has(items[index].id)) {
+          items.splice(index, 1);
+          removed += 1;
+        }
+      }
+      return removed;
     },
 
     async getPrefs(chatId: number): Promise<Prefs | null> {

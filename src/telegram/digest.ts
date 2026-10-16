@@ -3,6 +3,7 @@ import type { ItemRow, Prefs } from "../types.ts";
 import type { TelegramClient } from "./api.ts";
 import { daysLeft, formatDigest, formatItemCard, localHour, type DigestSection } from "./format.ts";
 import { digestKeyboard, instantKeyboard } from "./keyboard.ts";
+import { staleItemReason } from "../enrich/freshness.ts";
 
 /**
  * Digest programmati e avvisi istantanei.
@@ -76,10 +77,15 @@ function sectionsFor(items: ItemRow[], now: Date): DigestSection[] {
  * Le decisioni dell'utente (ignorato) vivono nella tabella deliveries per chat:
  * se uno dei due utenti ignora un concorso, l'altro lo riceve comunque.
  */
-async function undelivered(store: Store, chatId: number, candidates: ItemRow[]): Promise<ItemRow[]> {
+async function undelivered(store: Store, chatId: number, candidates: ItemRow[], now: Date): Promise<ItemRow[]> {
   const result: ItemRow[] = [];
   for (const item of candidates) {
     if (item.status === "expired") continue;
+    // Ultimo controllo prima di scrivere in chat: quello che è già in archivio
+    // passa comunque dal cancello. Un item senza scadenza che non regge il test
+    // di "concorso ancora attivo" non si annuncia, nemmeno se è stato inserito
+    // quando il cancello non c'era (o se la sua pagina è invecchiata dopo).
+    if (staleItemReason(item, now) !== null) continue;
     if (await store.isDelivered(chatId, item.id, "digest")) continue;
     if (await store.isDelivered(chatId, item.id, "instant")) continue;
     if (await store.isDelivered(chatId, item.id, "ignored")) continue;
@@ -112,7 +118,7 @@ export async function sendDigests(deps: NotifyDeps): Promise<{ chats: number; me
       limit: 60,
       orderBy: "score",
     });
-    const fresh = await undelivered(store, chatId, candidates);
+    const fresh = await undelivered(store, chatId, candidates, now);
     if (fresh.length === 0) continue;
 
     const included = fresh.slice(0, DIGEST_MAX_ITEMS);
@@ -165,6 +171,7 @@ export async function sendInstantAlerts(deps: NotifyDeps): Promise<{ sent: numbe
     for (const item of candidates) {
       if (sent >= INSTANT_MAX_PER_RUN) break;
       if (item.status === "expired") continue;
+      if (staleItemReason(item, now) !== null) continue;
       const seenAt = Date.parse(item.firstSeenAt);
       if (Number.isFinite(seenAt) && now.getTime() - seenAt > INSTANT_MAX_AGE_MS) continue;
       if (await store.isDelivered(chatId, item.id, "instant")) continue;

@@ -167,11 +167,20 @@ function toastFor(intent: Intent, prefs: Prefs): string | null {
   }
 }
 
-/** Query della sezione corrente, senza limit: il totale lo conta countItems. */
+/**
+ * Query della sezione corrente, senza limit: il totale lo conta countItems.
+ * Gli elenchi mostrano solo concorsi ancora in gioco: `expired` è lo stato che
+ * il sistema dà a chi ha chiuso, e in chat non serve più (resta in archivio, e
+ * il conteggio in testa dice quanti concorsi ci sono in tutto).
+ */
+const ATTIVI: ItemQuery["statuses"] = ["new", "sent"];
+
 function sectionQuery(section: string, now: Date, lastCheckAt: string | null): ItemQuery {
-  if (section === "nuovi") return { since: lastCheckAt ?? new Date(now.getTime() - WEEK_MS).toISOString() };
-  if (section === "oggi") return { since: new Date(now.getTime() - 86_400_000).toISOString() };
-  if (section === "settimana") return { since: new Date(now.getTime() - WEEK_MS).toISOString() };
+  if (section === "nuovi") {
+    return { since: lastCheckAt ?? new Date(now.getTime() - WEEK_MS).toISOString(), statuses: ATTIVI };
+  }
+  if (section === "oggi") return { since: new Date(now.getTime() - 86_400_000).toISOString(), statuses: ATTIVI };
+  if (section === "settimana") return { since: new Date(now.getTime() - WEEK_MS).toISOString(), statuses: ATTIVI };
   if (section === "scadenze") {
     // Solo scadenze future: un concorso già chiuso non serve in questa sezione.
     return {
@@ -181,7 +190,7 @@ function sectionQuery(section: string, now: Date, lastCheckAt: string | null): I
       orderBy: "deadline",
     };
   }
-  return { keyword: section.slice("cerca:".length), orderBy: "score" };
+  return { keyword: section.slice("cerca:".length), orderBy: "score", statuses: ATTIVI };
 }
 
 function isListSection(section: string): boolean {

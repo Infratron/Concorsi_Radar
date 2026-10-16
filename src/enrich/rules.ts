@@ -286,6 +286,19 @@ export function looksLikeContest(titleOrText: string): boolean {
   return CONTEST_SIGNAL.test(titleOrText);
 }
 
+/**
+ * Segnale di concorso per le fonti di elenco, dove il "testo" è lo slug di un
+ * URL: `vincibici` e `premia-te-e-lambiente` sono concorsi, `tazze-creeper` no.
+ * È volutamente più largo di CONTEST_SIGNAL ("vinc" invece di "vinci\b", "prem"
+ * invece di "premio\b") perché nell'URL le parole sono troncate e attaccate.
+ */
+const LISTING_SIGNAL =
+  /(concors|vinc|palio|premi\b|premia|premio|estrazion[ei]|gioca|partecipa|scontrin|instant ?win|gift ?card|omaggi)/i;
+
+export function looksLikeListingContest(urlOrTitle: string): boolean {
+  return LISTING_SIGNAL.test(urlOrTitle);
+}
+
 // --- API pubblica: comoda sui testi singoli, condivisa nel percorso caldo ---
 
 export function extractDeadline(text: string, now: Date): string | null {

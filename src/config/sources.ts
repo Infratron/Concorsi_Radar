@@ -139,7 +139,12 @@ export const SOURCES: SourceConfig[] = [
     tags: ["sitemap"],
     cadenceMin: 60,
     enabled: true,
-    includePattern: "/concorsi-a-premi/",
+    // Misurato il 16/10/2026: questa sitemap pubblica SOLO pagine di tassonomia
+    // ("Concorsi A Codice", "Concorsi Fotografici", …) e non le singole pagine
+    // di concorso, che arrivano dal feed RSS della stessa fonte. Le tassonomie
+    // sono elenchi, non concorsi: il pattern le esclude e resta in attesa di
+    // eventuali pagine vere.
+    includePattern: "concorsi-a-premi/(?!concorsi-|a-partecipazione|operazioni-|raccolte-punti)[a-z0-9-]+/?$",
     // 20 item = ~5 ms di CPU: una sitemap da 40 sfonderebbe da sola i 10 ms
     // del piano Free. La coda resta per i giri successivi.
     maxItems: 20,
@@ -177,14 +182,18 @@ export const SOURCES: SourceConfig[] = [
   },
   {
     id: "sitemap-lavazza",
-    name: "Lavazza · promozioni",
+    name: "Lavazza · concorsi",
     kind: "sitemap",
     url: "https://www.lavazza.it/sitemap.xml",
     category: "punto_vendita",
     tags: ["brand", "lavazza", "sitemap", "raccolta_punti"],
     cadenceMin: 60,
     enabled: true,
-    includePattern: "concors|promozion|regolament",
+    // Senza il filtro sul nome, /promozioni/ è un catalogo di kit e capsule:
+    // 20 pagine di prodotto a ogni giro, zero concorsi (misurato il 16/10/2026).
+    // Niente "premi" (matcherebbe "premium") né "estrazion" (per Lavazza è
+    // l'estrazione del caffè).
+    includePattern: "(concors|vinci|palio|gratta)",
     maxItems: 20,
   },
   {
@@ -213,14 +222,18 @@ export const SOURCES: SourceConfig[] = [
   },
   {
     id: "sitemap-conad",
-    name: "Conad · collezioni e concorsi",
+    name: "Conad · carte e premi",
     kind: "sitemap",
     url: "https://www.conad.it/sitemap.xml",
     category: "punto_vendita",
     tags: ["brand", "conad", "sitemap", "raccolta_punti"],
     cadenceMin: 60,
     enabled: true,
-    includePattern: "concors|collezion",
+    // "concors|collezion" raccoglieva centinaia di pagine di catalogo (tazze,
+    // borse, peluche): con un tetto di 20 item il catalogo consumava tutto lo
+    // spazio e i concorsi veri non entravano mai. Qui si prendono solo le pagine
+    // appese direttamente alla sezione, che sono le promozioni.
+    includePattern: "/collezioni-e-concorsi/[a-z0-9-]+/?$",
     maxItems: 20,
   },
   {
@@ -232,7 +245,8 @@ export const SOURCES: SourceConfig[] = [
     tags: ["brand", "burgerking", "sitemap"],
     cadenceMin: 120,
     enabled: true,
-    includePattern: "regolament|/promo",
+    // "/promo" è il listino offerte dei menu, non concorsi: fuori dal pattern.
+    includePattern: "regolament",
     maxItems: 20,
   },
   {

@@ -34,6 +34,7 @@ function note(summary: IngestSummary): string {
     `${summary.sourcesDue} fonti`,
     `${summary.duplicates} duplicati`,
     `${summary.filtered} fuori tema`,
+    `${summary.stale} non attivi`,
     ...summary.notes.slice(0, 3),
   ].join(" | ");
 }
@@ -47,7 +48,8 @@ async function writeJobSummary(summary: IngestSummary): Promise<void> {
     "## Concorsi Radar — raccolta",
     "",
     `Fonti: **${summary.sourcesOk} ok**, ${summary.sourcesFail} in errore su ${summary.sourcesDue} · item nuovi: **${summary.itemsNew}**` +
-      ` · duplicati: ${summary.duplicates} · fuori tema: ${summary.filtered} · rimandati: ${summary.deferred}`,
+      ` · duplicati: ${summary.duplicates} · fuori tema: ${summary.filtered}` +
+      ` · non attivi: ${summary.stale} · rimandati: ${summary.deferred}`,
     "",
   ];
   if (summary.notes.length > 0) {
@@ -106,7 +108,7 @@ async function main(): Promise<void> {
   console.log(
     `Raccolta: ${summary.sourcesOk} ok / ${summary.sourcesFail} errori su ${summary.sourcesDue} fonti · ` +
       `${summary.itemsSeen} item letti, ${summary.itemsNew} nuovi, ${summary.duplicates} duplicati, ` +
-      `${summary.filtered} fuori tema, ${summary.deferred} rimandati, ${summary.ms} ms`,
+      `${summary.filtered} fuori tema, ${summary.stale} non attivi, ${summary.deferred} rimandati, ${summary.ms} ms`,
   );
   for (const nota of summary.notes) console.log(`  ! ${nota}`);
   if (avvisi > 0) console.log(`  → ${avvisi} avvisi di fonte in errore inviati all'admin`);

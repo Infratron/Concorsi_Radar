@@ -540,3 +540,138 @@ describe("pipeline · raccolta completa (GitHub Actions)", () => {
     expect(letta?.id).toBe("largo-0");
   });
 });
+
+/** Sitemap minimale: è il formato con cui i brand pubblicano anche i cataloghi. */
+function sitemap(entries: { loc: string; lastmod?: string }[]): string {
+  const body = entries
+    .map((entry) => `<url><loc>${entry.loc}</loc>${entry.lastmod ? `<lastmod>${entry.lastmod}</lastmod>` : ""}</url>`)
+    .join("\n");
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${body}\n</urlset>`;
+}
+
+/** Riga già in archivio, per provare i filtri su item inseriti prima di loro. */
+function riga(partial: { sourceId: string; title: string; url: string; summary?: string; deadline?: string | null }) {
+  return {
+    sourceId: partial.sourceId,
+    url: partial.url,
+    urlKey: `key-${partial.url}`,
+    simhash: "0123456789abcdef",
+    title: partial.title,
+    summary: partial.summary ?? "",
+    publishedAt: null,
+    firstSeenAt: NOW.toISOString(),
+    lastSeenAt: NOW.toISOString(),
+    deadline: partial.deadline ?? null,
+    prize: null,
+    participation: null,
+    prizeValue: 0.3,
+    effort: 0.5,
+    requiresPurchase: false,
+    tags: [],
+    score: 40,
+    clusterId: null,
+    status: "new" as const,
+    aiUsed: false,
+  };
+}
+
+describe("pipeline · solo concorsi ancora attivi", () => {
+  it("da una sitemap entrano i concorsi vivi, non il catalogo", async () => {
+    const store = createMemoryStore();
+    const catalogo = source("brand-catalogo", "Brand · promozioni", "https://brand.example/sitemap.xml");
+    catalogo.kind = "sitemap";
+    catalogo.includePattern = "/promozioni/";
+    store.seedSources([catalogo]);
+    await store.upsertPrefs(prefs(200));
+
+    const summary = await runIngest(
+      {
+        store,
+        ai: null,
+        fetcher: fetcherFor({
+          "https://brand.example/sitemap.xml": sitemap([
+            // La pagina di sezione è la cartella delle altre: un elenco, non un concorso.
+            { loc: "https://brand.example/promozioni/", lastmod: "2026-10-01" },
+            // Catalogo: tazze, nessun segnale di concorso.
+            { loc: "https://brand.example/promozioni/tazze-creepers", lastmod: "2026-10-02" },
+            // Edizione chiusa due anni fa.
+            { loc: "https://brand.example/promozioni/vinci-natale-2024", lastmod: "2024-12-01" },
+            // Il concorso vero, appena pubblicato.
+            { loc: "https://brand.example/promozioni/vinci-natale-2026", lastmod: "2026-10-15" },
+          ]),
+        }),
+      },
+      NOW,
+      UNA_FONTE_DEL_TEST,
+    );
+
+    const items = await store.queryItems({ limit: 10 });
+    expect(items.map((row) => row.title)).toEqual(["Vinci Natale 2026"]);
+    expect(summary.itemsNew).toBe(1);
+    expect(summary.stale).toBe(3);
+    expect(summary.notes.some((nota) => nota.includes("non attivi"))).toBe(true);
+  });
+
+  it("una notizia di un'edizione passata non entra nemmeno da un feed", async () => {
+    const store = createMemoryStore();
+    store.seedSources([source("fonte-a", "Aggregatore A", "https://a.example/feed")]);
+    await store.upsertPrefs(prefs(200));
+
+    const summary = await runIngest(
+      {
+        store,
+        ai: null,
+        fetcher: fetcherFor({
+          "https://a.example/feed": rssFeed([
+            {
+              title: "Concorso Nutella 2024: vinci una bicicletta",
+              link: "https://a.example/nutella-2024",
+              description: "Partecipa con il codice sulle confezioni.",
+            },
+            {
+              title: "Concorso Findus: 1000 euro di buoni spesa",
+              link: "https://a.example/findus",
+              description: "Scade il 20 dicembre 2026.",
+            },
+          ]),
+        }),
+      },
+      NOW,
+      UNA_FONTE_DEL_TEST,
+    );
+
+    const items = await store.queryItems({ limit: 10 });
+    expect(items.map((row) => row.title)).toEqual(["Concorso Findus: 1000 euro di buoni spesa"]);
+    expect(summary.stale).toBe(1);
+  });
+
+  it("il digest non annuncia quello che il cancello scarta", async () => {
+    const store = createMemoryStore();
+    await store.upsertPrefs(prefs(10));
+    // Archivio "ereditato": una pagina di catalogo entrata quando il cancello non
+    // c'era ancora, e un concorso vero.
+    await store.insertItem(
+      riga({
+        sourceId: "sitemap-conad",
+        title: "Tazzine Creeper",
+        url: "https://www.conad.it/carte-e-premi/collezioni-e-concorsi/minecraft/tazze-creeper",
+      }),
+    );
+    await store.insertItem(
+      riga({
+        sourceId: "fonte-a",
+        title: "In palio una Fiat Panda con il concorso Barilla",
+        url: "https://a.example/barilla",
+        summary: "Concorso gratuito, scade il 30 novembre 2026.",
+        deadline: "2026-11-30",
+      }),
+    );
+
+    const { tg, sent } = stubTelegram();
+    await sendDigests({ store, tg, now: NOW });
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toContain("Fiat Panda");
+    expect(sent.join("\n")).not.toContain("Tazzine");
+  });
+});

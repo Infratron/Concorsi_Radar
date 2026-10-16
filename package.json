@@ -26,6 +26,7 @@
     "test:watch": "vitest",
     "dry-run": "node --experimental-strip-types scripts/dry-run.ts",
     "ingest": "node --experimental-strip-types scripts/ingest.ts",
+    "prune": "node --experimental-strip-types scripts/prune-stale.ts",
     "bench:cpu": "node --experimental-strip-types scripts/bench-cpu.ts"
   },
   "devDependencies": {

@@ -47,6 +47,13 @@ export interface Store {
   setStatus(id: number, status: ItemStatus): Promise<void>;
   /** Somma un "anche su" senza creare un nuovo item. */
   touchItem(id: number, at: string): Promise<void>;
+  /**
+   * Cancella item e relative consegne per chat. Serve alla pulizia dei falsi
+   * positivi (pagine di catalogo finite in archivio da una sitemap) e non ha
+   * nulla a che vedere con `expireOldItems`, che invece conserva la riga.
+   * Restituisce quante righe di `items` sono state davvero cancellate.
+   */
+  deleteItems(ids: number[]): Promise<number>;
 
   // --- preferenze / consegne ---
   getPrefs(chatId: number): Promise<Prefs | null>;
