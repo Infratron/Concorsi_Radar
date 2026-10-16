@@ -1295,6 +1295,27 @@ describe("vantaggio di tempistica · comando /vantaggio", () => {
     expect((await store.getUiState(CHAT))?.section).toBe("vantaggio");
   });
 
+  it("con viste da una sola parte dice che il confronto non esiste", async () => {
+    const store = createMemoryStore();
+    await store.upsertPrefs(prefs());
+    const ids = await seed(store, [
+      { title: "Concorso Conad", sourceId: "sitemap-conad" },
+      { title: "Concorso Barilla", sourceId: "premieconcorsi" },
+    ]);
+    // Il caso vero del primo giorno in produzione: la sitemap di un brand porta un
+    // concorso che nessun aggregatore ha ancora ripreso.
+    await store.recordSighting(vista(ids[0], "sitemap-conad", "2026-11-20T04:00:00.000Z"));
+    await store.recordSighting(vista(ids[1], "premieconcorsi", "2026-11-20T04:00:00.000Z"));
+    const { tg, calls } = makeTg();
+
+    await handleUpdate(command(1, "/vantaggio"), deps(store, tg));
+
+    const testo = String(lastWith(calls, "sendMessage")?.payload.text ?? "");
+    expect(testo).toContain("Nessun concorso visto sia da una fonte diretta sia da un aggregatore");
+    expect(testo).toContain("Solo da fonti dirette: <b>1</b>");
+    expect(testo).toContain("Solo dagli aggregatori: <b>1</b>");
+  });
+
   it("la scheda di un concorso porta il suo anticipo", async () => {
     const store = createMemoryStore();
     await store.upsertPrefs(prefs());
