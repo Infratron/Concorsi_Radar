@@ -972,6 +972,111 @@ fonti marcate `enabled: false` sono da validare a mano
 **Rimuoverne una**: imposta `enabled: false` e riesegui il seed, oppure
 disattivala dal database (lo stato in D1 comanda a runtime).
 
+### Checklist di chiusura: quando un cambiamento alle fonti è finito
+
+Vale per ogni modifica alle fonti: una voce nuova in `SOURCES`, un pattern
+stretto meglio, una `category` cambiata, una fonte spenta. Le quattro caselle
+sono in quest'ordine, e ognuna risponde a una domanda diversa — le prime due le
+puoi fare subito, la terza e la quarta dicono se il cambiamento è arrivato dove
+serve.
+
+**1. Il codice regge**
+
+- [ ] `npm run typecheck` (esce 0) e `npm test`: la suite **intera**, non il solo
+      file che hai toccato. Le fonti parlano con la classificazione, il cancello
+      di freschezza, la deduplica e il punteggio: una `category` o un
+      `includePattern` cambiati spostano righe da una sezione all'altra, e il test
+      che se ne accorge spesso è in un file che non hai aperto.
+
+**2. La fonte parla davvero (prova dal vivo, senza scrivere niente)**
+
+- [ ] `npm run dry-run -- --tutte`, con i **fetcher veri** del progetto e
+      robots.txt compreso. Il flag è il punto: senza, la prova usa la **rotazione
+      a slot** del Worker (`dueSources`), quindi legge solo le fonti che toccano a
+      questo quarto d'ora — una fonte nuova può non comparire affatto e sembrare
+      rotta mentre il suo slot è semplicemente un altro. `--tutte` è la stessa
+      selezione della raccolta esterna, e la prima riga stampata è la prova che
+      sta leggendo proprio quelle (32 il 16/10/2026). Nelle note guarda due cose:
+      il codice HTTP di ogni fonte e i motivi degli scarti (`N scartati, non
+      attivi (…)`).
+- [ ] Per una fonte **nuova** la domanda non è "risponde?" ma "cosa entra?": una
+      sitemap con tutti gli scarti a `nessun segnale di concorso` ha il pattern
+      troppo largo, un feed con tutti gli scarti a `offerta vecchia` è un
+      arretrato di mesi.
+- [ ] Un `🚫 robots.txt vieta la raccolta` non è un guasto: è il rispetto della
+      regola, e la fonte resta in elenco con quello stato.
+- [ ] Una fonte che risponde **200 da qui e 403 dalla rete di Cloudflare** resta
+      in elenco, ma i suoi item arrivano solo dalla raccolta esterna: `npm run
+      ingest` da un PC, o GitHub Actions quando i tre secret ci sono. Misurato il
+      16/10/2026: le testate `dimmicosacerchi` e `scontrinofelice` si comportano
+      così, e nel Worker quei 403 sono **attesi**, non un guasto da inseguire —
+      nell'elenco delle fonti si vedono come 🔴, e sono la ragione per cui la
+      raccolta non vive nel Worker.
+
+**3. L'archivio lo conferma (D1, in produzione)**
+
+```bash
+npm run db:seed   # lo stato in D1 comanda a runtime: senza il seed la fonte nuova non ha una riga sua
+```
+
+- [ ] La riga della fonte è **sana**. Due esiti sono sani, e non sono lo stesso
+      esito: `last_status = 200` con `last_items > 0` (la fonte ha risposto e ha
+      portato item) e `last_status = 304` con `last_items = 0` (il feed non è
+      cambiato dall'ultima lettura — è lo stato di regime, e uno zero lì non è un
+      guasto). Quello che non va bene è un 4xx/5xx (`403`, `404`, `429`) o
+      `fail_streak` sopra 0: a tre fallimenti di fila arriva l'avviso in chat.
+      `last_status` è l'ULTIMO tentativo, quindi un 200 di ieri non vale se
+      l'ultimo giro è andato male:
+
+```bash
+npx wrangler d1 execute concorsi-radar --remote --command \
+  "select id, enabled, last_status, last_error, last_items, fail_streak from sources where id = 'scontomaggio-coupon'"
+```
+
+- [ ] Gli item sono nella sezione giusta, e la prova è il **tipo**, non il
+      titolo: una fonte di coupon che produce `contest` sta dichiarando male la
+      categoria, una sitemap di brand che produce `news` sta portando contenitori
+      (che è la risposta giusta: i contenitori vanno in news).
+
+```bash
+npx wrangler d1 execute concorsi-radar --remote --command \
+  "select kind, count(*) as n from items where source_id = 'scontomaggio-coupon' group by kind"
+```
+
+- [ ] Il **numero** di righe non è una misura di salute della fonte: lo stesso
+      buono arriva da tre feed e la deduplica tiene la prima riga, quindi
+      `scontomaggio-coupon` in produzione ne ha **1** accanto ai 21 di
+      `scontrinofelice-cashback` (16/10/2026) senza che niente sia rotto. Il dato
+      che conta è il **tipo**, e `scontrinofelice-cashback` fa esattamente le tre
+      cose che deve: 21 `coupon`, 3 `contest` (i rimborsi che annunciano anche un
+      premio) e 1 `news`.
+
+- [ ] Il bilancio non si è spostato di lato: `select kind, status, count(*) as n
+      from items group by kind, status`. Se i coupon sono raddoppiati senza che tu
+      abbia acceso una fonte di coupon, la classificazione sta rubando concorsi.
+- [ ] Il giro ha lasciato la sua nota: `select trigger, substr(note,1,80) as nota,
+      started_at from runs order by started_at desc limit 3` — `actions` è la
+      raccolta su GitHub, `local` un giro lanciato a mano, un'espressione cron è
+      il tick del Worker. Un giro che non compare qui non ha scritto niente.
+
+**4. La chat lo mostra**
+
+- [ ] La sezione che hai toccato si apre e conta quello che ti aspetti: `/coupon`,
+      📡 **Fonti** per l'esito dell'ultimo tentativo di ogni fonte, 🌡
+      **Diagnostica** per quelle che rispondono senza portare niente. Un numero
+      che non corrisponde all'elenco è il sintomo di un filtro applicato a una
+      sola delle due query: la sezione e il suo contatore devono nascere dalla
+      **stessa** query (è così che un coupon scaduto sparisce dall'elenco e dal
+      totale nello stesso istante).
+
+Quando una casella non torna, la causa è quasi sempre una di queste: la fonte ha
+cambiato URL (404), il pattern di una sitemap è largo o stretto (leggi i motivi
+degli scarti), oppure manca la credenziale della raccolta esterna (`Variabili
+d'ambiente mancanti`, `D1 API 401/403`). Un cambiamento di **configurazione** non
+richiede migrazioni; un cambiamento di **schema** sì, e le righe di `ALTER TABLE`
+da eseguire — **prima** di pubblicare il codice che legge la colonna nuova —
+stanno in [src/db/schema.sql](src/db/schema.sql).
+
 Nota su `robots.txt`: viene rispettato per le fonti HTML e sitemap; i feed
 RSS/Atom e Google News sono endpoint di sindacazione pubblicati per il consumo
 automatico, quindi non vengono bloccati da robots (decisione documentata in
@@ -1090,7 +1195,7 @@ npm run dry-run                                        # cosa verrebbe inviato, 
 npm run ingest                                         # raccolta vera, come su Actions
 npm run prune                                          # cosa non è più un concorso attivo (elenco)
 npm run prune -- --apply                               # e lo toglie dall'archivio
-npm test                                               # 449 test
+npm test                                               # 518 test
 npm run typecheck
 ```
 

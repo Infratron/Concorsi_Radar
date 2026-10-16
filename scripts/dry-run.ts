@@ -10,13 +10,22 @@ import type { SourceRow, ItemRow } from "../src/types.ts";
  * deduplica, arricchimento e punteggio, e stampa esattamente i messaggi che
  * il bot manderebbe. Nessun token, nessun messaggio reale.
  *
- * Uso:  npm run dry-run              (tutte le fonti abilitate, una esecuzione)
- *       npm run dry-run -- --fonti 5 (limita il numero di fonti)
+ * Uso:  npm run dry-run               (4 fonti: la stessa rotazione del Worker)
+ *       npm run dry-run -- --fonti 5  (quante fonti, dalla più trascurata)
+ *       npm run dry-run -- --tutte    (tutte le fonti abilitate, in un giro solo)
+ *
+ * Perché `--tutte` serve: senza, la prova usa la rotazione a slot del Worker
+ * (src/pipeline.ts `dueSources`), quindi vede solo le fonti che toccano a QUESTO
+ * quarto d'ora — una fonte nuova può non comparire affatto, e sembrare rotta
+ * mentre semplicemente il suo slot è un altro. `--tutte` è la stessa selezione
+ * della raccolta esterna (`allSources`), ed è quello che serve per validare una
+ * fonte appena aggiunta: la lista stampata qui sotto è quella che verrà letta.
  */
 
 const args = process.argv.slice(2);
 const fontiIndex = args.indexOf("--fonti");
 const maxSources = fontiIndex >= 0 ? Number(args[fontiIndex + 1]) : 4;
+const tutte = args.includes("--tutte");
 
 function toSourceRow(config: (typeof SOURCES)[number]): SourceRow {
   return {
@@ -42,9 +51,18 @@ async function main(): Promise<void> {
   const abilitate = SOURCES.filter((config) => config.enabled).map(toSourceRow);
   store.seedSources(abilitate);
 
-  const limite = Number.isFinite(maxSources) ? maxSources : 4;
-  const due = dueSources(abilitate, now, limite);
-  console.log(`Fonti abilitate: ${abilitate.length} · fonti in questa esecuzione: ${due.length}`);
+  const limite = tutte
+    ? abilitate.length
+    : Number.isFinite(maxSources)
+      ? maxSources
+      : 4;
+  const due = tutte
+    ? [...abilitate].sort((a, b) => (a.lastRunAt ?? "").localeCompare(b.lastRunAt ?? ""))
+    : dueSources(abilitate, now, limite);
+  console.log(
+    `Fonti abilitate: ${abilitate.length} · fonti in questa esecuzione: ${due.length}` +
+      (tutte ? " (tutte, come la raccolta esterna)" : " (rotazione a slot)"),
+  );
   for (const item of due) console.log(`  - ${item.name} (${item.kind})`);
 
   const summary = await runIngest(
@@ -56,7 +74,8 @@ async function main(): Promise<void> {
     },
     now,
     // Stesso tetto usato qui sopra: altrimenti la lista mostrata non è quella letta.
-    { maxSources: limite },
+    // E con `--tutte` la selezione è quella della raccolta esterna, non la rotazione.
+    { maxSources: limite, ...(tutte ? { allSources: true } : {}) },
   );
 
   console.log(
