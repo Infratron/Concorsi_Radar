@@ -290,7 +290,7 @@ export async function runIngest(
         // Nel conteggio entra solo la parte sincrona: la query dei candidati è
         // I/O (su D1 filtra SQL), la decisione sui candidati invece è CPU nostra.
         const prepareStart = cpuStart();
-        const prepared = await prepareItem(raw, nomeFonte);
+        const prepared = await prepareItem(raw, nomeFonte, source.kind);
         cpuProxyMs += performance.now() - prepareStart;
         const candidates = await loadDuplicateCandidates(deps.store, prepared, now);
         const dedupeStart = cpuStart();

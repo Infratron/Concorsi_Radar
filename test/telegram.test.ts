@@ -12,10 +12,10 @@ import {
   localDateString,
   localHour,
 } from "../src/telegram/format.ts";
-import { cardKeyboard, listKeyboard, menuKeyboard, settingsKeyboard } from "../src/telegram/keyboard.ts";
+import { cardKeyboard, itemButtonLabel, listKeyboard, menuKeyboard, settingsKeyboard } from "../src/telegram/keyboard.ts";
 import { applyIntent, parseCallback } from "../src/telegram/screens.ts";
 import { handleUpdate } from "../src/telegram/bot.ts";
-import { isQuietHour, regolamentoUrl, sendDigests } from "../src/telegram/digest.ts";
+import { isQuietHour, regolamentoUrl, sendDigests, sendInstantAlerts } from "../src/telegram/digest.ts";
 
 /**
  * Test dell'interfaccia: menù a pulsanti su UN solo messaggio.
@@ -216,12 +216,18 @@ describe("format", () => {
 
 describe("bottoni · costruzione delle tastiere", () => {
   it("il menù porta a tutte le sezioni, con i conteggi", () => {
-    const keyboard = menuKeyboard({ nuovi: 3, oggi: 12, settimana: 40, scadenze: 2, salvati: 1 });
+    const keyboard = menuKeyboard({ nuovi: 3, oggi: 12, settimana: 40, scadenze: 2, salvati: 1, news: 7 });
     const bottoni = keyboard.inline_keyboard.flat();
     expect(bottoni.map((b) => b.callback_data)).toEqual([
-      "s:nuovi", "s:oggi", "s:settimana", "s:scadenze", "s:salvati", "s:cerca", "s:fonti", "s:impostazioni", "refresh",
+      "s:nuovi", "s:oggi", "s:settimana", "s:scadenze", "s:salvati", "s:news", "s:cerca", "s:fonti", "s:impostazioni", "refresh",
     ]);
     expect(bottoni[0]?.text).toBe("🆕 Nuovi (3)");
+    expect(bottoni[5]?.text).toBe("📰 News (7)");
+  });
+
+  it("un articolo si riconosce dal bottone: 📰 invece di ⭐", () => {
+    expect(itemButtonLabel(row({ kind: "news", title: "Tutti i concorsi del mese" }), NOW)).toContain("📰");
+    expect(itemButtonLabel(row({ kind: "contest", title: "Concorso Barilla" }), NOW)).toContain("⭐");
   });
 
   it("l'elenco ha un bottone per concorso e i numeri di pagina solo se servono", () => {
@@ -234,6 +240,13 @@ describe("bottoni · costruzione delle tastiere", () => {
     expect(due.inline_keyboard[3]?.map((b) => b.callback_data)).toEqual(["noop", "noop", "page:1"]);
     const seconda = listKeyboard(items, NOW, { index: 1, total: 2 });
     expect(seconda.inline_keyboard[3]?.map((b) => b.callback_data)).toEqual(["page:0", "noop", "noop"]);
+  });
+
+  it("la scheda di un articolo avverte che il link non è la pagina del concorso", () => {
+    const card = formatItemCard(row({ kind: "news", sourceId: "news-brand" }), NOW);
+    expect(card).toContain("📰");
+    expect(card).toContain("il link non è la pagina ufficiale");
+    expect(formatItemCard(row({ kind: "contest" }), NOW)).not.toContain("pagina ufficiale");
   });
 
   it("nella scheda il bottone della decisione già presa è inerte", () => {
@@ -639,6 +652,47 @@ describe("interfaccia · un solo messaggio per chat", () => {
     expect(apribili.sort()).toEqual(["open:1", "open:2"]);
   });
 
+  it("la sezione news tiene separate le notizie dai concorsi", async () => {
+    const store2 = createMemoryStore();
+    await store2.upsertPrefs(prefs());
+    await seed(store2, [
+      { title: "Concorso su cui si partecipa", kind: "contest" },
+      { title: "Articolo che parla del concorso", kind: "news", sourceId: "news-brand" },
+    ]);
+    const { tg, calls } = makeTg();
+    await handleUpdate(command(1, "/start"), deps(store2, tg));
+    // /start manda un messaggio nuovo: per rivedere il menù si tocca Aggiorna.
+    await handleUpdate(tap(2, "refresh", 100), deps(store2, tg));
+
+    // Il menù conta le due cose separatamente.
+    const menu = lastWith(calls, "editMessageText")?.payload.reply_markup as {
+      inline_keyboard: { text: string; callback_data?: string }[][];
+    };
+    expect(menu.inline_keyboard.flat().find((b) => b.callback_data === "s:news")?.text).toBe("📰 News (1)");
+    expect(menu.inline_keyboard.flat().find((b) => b.callback_data === "s:oggi")?.text).toBe("📋 Oggi (1)");
+
+    // La sezione dei concorsi non contiene il link all'articolo...
+    await handleUpdate(tap(3, "s:oggi", 100), deps(store2, tg));
+    const concorsi = lastWith(calls, "editMessageText")?.payload.text ?? "";
+    expect(concorsi).toContain("1 concorso");
+    const righeConcorsi = (lastWith(calls, "editMessageText")?.payload.reply_markup as {
+      inline_keyboard: { text: string }[][];
+    }).inline_keyboard;
+    expect(righeConcorsi[0]?.[0]?.text).toContain("Concorso su cui si partecipa");
+    expect(righeConcorsi.flat().some((b) => b.text.includes("Articolo che parla"))).toBe(false);
+
+    // ...e la sezione news contiene solo quello.
+    await handleUpdate(tap(4, "s:news", 100), deps(store2, tg));
+    const news = lastWith(calls, "editMessageText")?.payload.text ?? "";
+    expect(news).toContain("Articoli e news");
+    expect(news).toContain("1 articolo");
+    const righeNews = (lastWith(calls, "editMessageText")?.payload.reply_markup as {
+      inline_keyboard: { text: string }[][];
+    }).inline_keyboard;
+    expect(righeNews[0]?.[0]?.text).toContain("Articolo che parla del concorso");
+    expect(righeNews[0]?.[0]?.text).toContain("📰");
+  });
+
   it("la sezione fonti mostra fonti e ultime raccolte", async () => {
     const { tg, calls } = makeTg();
     store.seedSources([
@@ -717,6 +771,32 @@ describe("digest e avvisi", () => {
     const result = await sendDigests({ store, tg, now: NOW });
     expect(result).toEqual({ chats: 0, messages: 0 });
     expect(calls).toHaveLength(0);
+  });
+
+  it("un articolo non fa scattare un avviso immediato, anche se ha il punteggio più alto", async () => {
+    const store = createMemoryStore();
+    await store.upsertPrefs(prefs({ minScoreInstant: 60 }));
+    await seed(store, [{ title: "Articolo sui concorsi", kind: "news", score: 99, sourceId: "news-brand" }]);
+    const { tg, calls } = makeTg();
+
+    expect(await sendInstantAlerts({ store, tg, now: NOW })).toEqual({ sent: 0 });
+    expect(calls).toHaveLength(0);
+  });
+
+  it("gli articoli non finiscono nel digest: si leggono nella sezione news", async () => {
+    const store = createMemoryStore();
+    await store.upsertPrefs(prefs());
+    await seed(store, [{ title: "Concorso vero", kind: "contest", score: 95 }]);
+    await seed(store, [{ title: "Articolo sui concorsi", kind: "news", score: 99, sourceId: "news-brand" }]);
+    const { tg, calls } = makeTg();
+
+    await sendDigests({ store, tg, now: NOW });
+    const testo = calls
+      .filter((call) => call.method === "sendMessage")
+      .map((call) => String(call.payload.text))
+      .join("\n");
+    expect(testo).toContain("Concorso vero");
+    expect(testo).not.toContain("Articolo sui concorsi");
   });
 
   it("il digest porta i bottoni per aprire i concorsi, senza essere cancellato", async () => {

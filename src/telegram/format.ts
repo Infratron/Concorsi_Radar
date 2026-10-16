@@ -108,8 +108,12 @@ export function formatItemLine(item: ItemRow, now: Date): string {
 /** Scheda completa di un concorso, usata per gli avvisi istantanei. */
 export function formatItemCard(item: ItemRow, now: Date): string {
   const lines: string[] = [];
-  lines.push(`🎁 <b>${item.score}</b>/100${deadlineLabel(item, now)}${purchaseLabel(item)}`);
+  const articolo = item.kind === "news";
+  lines.push(`${articolo ? "📰" : "🎁"} <b>${item.score}</b>/100${deadlineLabel(item, now)}${purchaseLabel(item)}`);
   lines.push(`<b><a href="${escapeHtml(item.url)}">${escapeHtml(truncate(item.title, 160))}</a></b>`);
+  // Chi apre la scheda deve sapere se quel link è il concorso o un pezzo che ne
+  // parla: è la differenza che l'utente ha chiesto di rendere evidente.
+  if (articolo) lines.push("📰 Articolo sul concorso: il link non è la pagina ufficiale.");
   if (item.prize) lines.push(`🏆 Premio: ${escapeHtml(truncate(item.prize, 160))}`);
   if (item.participation) lines.push(`📝 Come partecipare: ${escapeHtml(truncate(item.participation, 160))}`);
   const tags = tagLabel(item);

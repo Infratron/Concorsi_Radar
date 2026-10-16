@@ -1,5 +1,5 @@
 import type { Store } from "../db/store.ts";
-import type { ItemRow, Prefs } from "../types.ts";
+import type { ItemKind, ItemRow, Prefs } from "../types.ts";
 import type { TelegramClient } from "./api.ts";
 import { daysLeft, formatDigest, formatItemCard, localHour, type DigestSection } from "./format.ts";
 import { digestKeyboard, instantKeyboard } from "./keyboard.ts";
@@ -9,7 +9,14 @@ import { staleItemReason } from "../enrich/freshness.ts";
  * Digest programmati e avvisi istantanei.
  * Regola d'oro: mai un messaggio vuoto, mai lo stesso concorso due volte,
  * mai più di un avviso istantaneo ogni 20 minuti.
+ *
+ * Qui passano SOLO i concorsi: un articolo che parla di un concorso non merita
+ * una notifica, perché non c'è niente da fare con quel link. Le notizie si
+ * leggono nella sezione 📰 News, quando si vuole.
  */
+
+/** Le notifiche riguardano solo le pagine su cui si partecipa. */
+const SOLO_CONCORSI: ItemKind[] = ["contest"];
 
 export interface NotifyDeps {
   store: Store;
@@ -115,6 +122,7 @@ export async function sendDigests(deps: NotifyDeps): Promise<{ chats: number; me
     // mentre "cosa ho già ricevuto" e "cosa ho scartato" sono per chat.
     const candidates = await store.queryItems({
       since,
+      kinds: SOLO_CONCORSI,
       limit: 60,
       orderBy: "score",
     });
@@ -164,6 +172,7 @@ export async function sendInstantAlerts(deps: NotifyDeps): Promise<{ sent: numbe
 
     const candidates = await store.queryItems({
       minScore: prefs.minScoreInstant,
+      kinds: SOLO_CONCORSI,
       orderBy: "score",
       limit: 5,
     });

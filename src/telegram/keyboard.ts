@@ -33,7 +33,11 @@ function done(text: string): InlineKeyboardButton {
 export function itemButtonLabel(item: ItemRow, now: Date): string {
   const left = daysLeft(item.deadline, now);
   const urgenza = left !== null && left >= 0 && left <= 7 ? ` ⏳${left}gg` : "";
-  return truncate(`⭐${item.score}${urgenza} · ${item.title}`, 52);
+  // 📰 invece di ⭐: in un elenco (e nella ricerca, dove i due tipi convivono) si
+  // vede subito che quello è un articolo che parla del concorso, non la pagina
+  // su cui si partecipa.
+  const segno = item.kind === "news" ? "📰" : "⭐";
+  return truncate(`${segno}${item.score}${urgenza} · ${item.title}`, 52);
 }
 
 /** Il menù principale: tutte le sezioni, con i conteggi addosso. */
@@ -43,14 +47,15 @@ export function menuKeyboard(counts: {
   settimana: number;
   scadenze: number;
   salvati: number;
+  news: number;
 }): InlineKeyboardMarkup {
   return {
     inline_keyboard: [
       [button(`🆕 Nuovi (${counts.nuovi})`, "s:nuovi"), button(`📋 Oggi (${counts.oggi})`, "s:oggi")],
       [button(`📅 7 giorni (${counts.settimana})`, "s:settimana"), button(`⏳ Scadenze (${counts.scadenze})`, "s:scadenze")],
-      [button(`⭐ Salvati (${counts.salvati})`, "s:salvati"), button("🔍 Cerca", "s:cerca")],
-      [button("📡 Fonti", "s:fonti"), button("⚙️ Impostazioni", "s:impostazioni")],
-      [button("🔄 Aggiorna", "refresh")],
+      [button(`⭐ Salvati (${counts.salvati})`, "s:salvati"), button(`📰 News (${counts.news})`, "s:news")],
+      [button("🔍 Cerca", "s:cerca"), button("📡 Fonti", "s:fonti")],
+      [button("⚙️ Impostazioni", "s:impostazioni"), button("🔄 Aggiorna", "refresh")],
     ],
   };
 }
@@ -189,6 +194,8 @@ export function sectionTitle(section: string): string {
       return "In scadenza";
     case "salvati":
       return "Salvati";
+    case "news":
+      return "Articoli e news";
     case "fonti":
       return "Fonti e raccolte";
     case "impostazioni":

@@ -48,6 +48,7 @@ export const SECTIONS = [
   "settimana",
   "scadenze",
   "salvati",
+  "news",
   "cerca",
   "fonti",
   "impostazioni",
@@ -138,6 +139,10 @@ export interface ScreenCounts {
   settimana: number;
   scadenze: number;
   salvati: number;
+  /** Articoli e pagine-contenitore in archivio (tutta la sezione news). */
+  news: number;
+  /** Concorsi in archivio, di qualunque stato: la metà "buona" dell'archivio. */
+  contest: number;
 }
 
 export interface ScreenData {
@@ -181,7 +186,12 @@ function headerLines(state: UiState, data: ScreenData, now: Date): string[] {
   if (state.section === "nuovi" && data.counts.nuovi > 0) {
     righe.push(`🆕 <b>${data.counts.nuovi} novità</b> dall'ultimo controllo`);
   }
-  righe.push(`🗂 <b>${data.archiveTotal}</b> concorsi in archivio · controllati ${oreMinuti(state.lastCheckAt)}`);
+  // L'archivio contiene due cose diverse: i concorsi su cui si partecipa e gli
+  // articoli che ne parlano. Dirle entrambe evita di far sembrare l'archivio
+  // grande quanto i concorsi.
+  righe.push(
+    `🗂 <b>${data.counts.contest}</b> concorsi · <b>${data.counts.news}</b> news in archivio · controllati ${oreMinuti(state.lastCheckAt)}`,
+  );
   return righe;
 }
 
@@ -192,23 +202,31 @@ function listScreen(state: UiState, data: ScreenData, now: Date): Screen {
   // non deve mostrare una pagina vuota: si riporta dentro e si ri-renderizza.
   const page = Math.min(Math.max(data.page, 0), pagine - 1);
 
+  // Sostantivo giusto per la sezione: nella news non si "tocca un concorso".
+  const articoli = state.section === "news";
   if (data.items.length === 0) {
     const vuoto =
       state.section === "salvati"
         ? "Non hai ancora salvato niente: apri un concorso e tocca ✅ Salva."
-        : "Nessun concorso qui. Tocca 🔄 Aggiorna più tardi.";
+        : articoli
+          ? "Nessun articolo qui: le news arrivano dalle fonti di cronaca, appena le trovano."
+          : "Nessun concorso qui. Tocca 🔄 Aggiorna più tardi.";
     return {
       text: `📭 <b>${escapeHtml(title)}</b>\n\n${vuoto}`,
       keyboard: backKeyboard(),
     };
   }
 
+  const nome =
+    data.total === 1 ? (articoli ? "articolo" : "concorso") : articoli ? "articoli" : "concorsi";
   const righe = [
-    `<b>${escapeHtml(title)}</b> · ${data.total} ${data.total === 1 ? "concorso" : "concorsi"}${
+    `<b>${escapeHtml(title)}</b> · ${data.total} ${nome}${
       pagine > 1 ? ` · pagina ${page + 1}/${pagine}` : ""
     }`,
     "",
-    "Tocca un concorso per aprirlo:",
+    articoli
+      ? "Qui ci sono gli articoli: il link porta al pezzo, non alla pagina del concorso."
+      : "Tocca un concorso per aprirlo:",
   ];
   return {
     text: righe.join("\n"),

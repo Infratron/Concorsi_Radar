@@ -41,6 +41,7 @@ export interface D1Like {
 interface ItemDbRow {
   id: number;
   source_id: string;
+  kind: string;
   url: string;
   url_key: string;
   simhash: string;
@@ -155,6 +156,8 @@ function rowToItem(row: ItemDbRow): ItemRow {
   return {
     id: row.id,
     sourceId: row.source_id,
+    // Un valore inatteso non deve mai arrivare all'interfaccia: resta un concorso.
+    kind: row.kind === "news" ? "news" : "contest",
     url: row.url,
     urlKey: row.url_key,
     simhash: row.simhash,
@@ -231,7 +234,7 @@ function rowToRun(row: RunDbRow): RunRow {
 
 /** Colonne di items, nell'ordine usato dagli INSERT. */
 const ITEM_COLUMNS = [
-  "source_id", "url", "url_key", "simhash", "title", "summary", "published_at",
+  "source_id", "kind", "url", "url_key", "simhash", "title", "summary", "published_at",
   "first_seen_at", "last_seen_at", "deadline", "prize", "participation", "prize_value",
   "effort", "requires_purchase", "tags", "score", "cluster_id", "status", "ai_used",
 ];
@@ -264,6 +267,10 @@ function buildWhere(query: ItemQuery): { sql: string; params: unknown[] } {
   if (query.statuses && query.statuses.length > 0) {
     where.push(`status IN (${query.statuses.map(() => "?").join(", ")})`);
     params.push(...query.statuses);
+  }
+  if (query.kinds && query.kinds.length > 0) {
+    where.push(`kind IN (${query.kinds.map(() => "?").join(", ")})`);
+    params.push(...query.kinds);
   }
   if (typeof query.minScore === "number") {
     where.push("score >= ?");
@@ -342,7 +349,7 @@ export function createD1Store(db: D1Like): Store {
     async insertItem(item: NewItem): Promise<{ item: ItemRow; created: boolean }> {
       const placeholders = ITEM_COLUMNS.map(() => "?").join(", ");
       const values: unknown[] = [
-        item.sourceId, item.url, item.urlKey, item.simhash, item.title, item.summary,
+        item.sourceId, item.kind ?? "contest", item.url, item.urlKey, item.simhash, item.title, item.summary,
         item.publishedAt, item.firstSeenAt, item.lastSeenAt, item.deadline, item.prize,
         item.participation, item.prizeValue, item.effort, item.requiresPurchase ? 1 : 0,
         JSON.stringify(item.tags), item.score, item.clusterId, item.status, item.aiUsed ? 1 : 0,
@@ -375,6 +382,7 @@ export function createD1Store(db: D1Like): Store {
       };
 
       if (patch.lastSeenAt !== undefined) push("last_seen_at", patch.lastSeenAt);
+      if (patch.kind !== undefined) push("kind", patch.kind);
       if (patch.deadline !== undefined) push("deadline", patch.deadline);
       if (patch.prize !== undefined) push("prize", patch.prize);
       if (patch.participation !== undefined) push("participation", patch.participation);

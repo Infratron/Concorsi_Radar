@@ -268,6 +268,9 @@ describe("pipeline · rumore delle fonti news", () => {
     const items = await store.queryItems({ limit: 10 });
     expect(items).toHaveLength(1);
     expect(items[0].title).toContain("Condor");
+    // Una notizia è un ARTICOLO: il link porta al giornale, non al concorso,
+    // quindi va nella sezione news e non tra i concorsi su cui si partecipa.
+    expect(items[0].kind).toBe("news");
   });
 
   it("non filtra gli aggregatori, che parlano di concorsi per mestiere", async () => {
@@ -289,7 +292,49 @@ describe("pipeline · rumore delle fonti news", () => {
       UNA_FONTE_DEL_TEST,
     );
 
-    expect(await store.queryItems({ limit: 10 })).toHaveLength(1);
+    const items = await store.queryItems({ limit: 10 });
+    expect(items).toHaveLength(1);
+    // Un aggregatore pubblica una pagina per concorso: quella pagina è il
+    // concorso, non un articolo che ne parla.
+    expect(items[0].kind).toBe("contest");
+  });
+});
+
+describe("pipeline · concorsi e contenitori", () => {
+  it("la tassonomia di una cartella di concorsi entra come articolo", async () => {
+    const store = createMemoryStore();
+    const listino = source("premieconcorsi", "Premi e Concorsi", "https://www.premieconcorsi.com/sitemap.xml");
+    listino.kind = "sitemap";
+    listino.includePattern = "concorsi-a-premi/";
+    store.seedSources([listino]);
+    await store.upsertPrefs(prefs(200));
+
+    await runIngest(
+      {
+        store,
+        ai: null,
+        fetcher: fetcherFor({
+          "https://www.premieconcorsi.com/sitemap.xml": sitemap([
+            // Il caso reale dell'archivio: in chat compariva come un concorso
+            // dal titolo "A Partecipazione Gratuita".
+            { loc: "https://www.premieconcorsi.com/concorsi-a-premi/a-partecipazione-gratuita", lastmod: "2026-10-15" },
+            // Il concorso vero, appeso alla stessa cartella.
+            { loc: "https://www.premieconcorsi.com/concorsi-a-premi/concorso-lievital", lastmod: "2026-10-15" },
+          ]),
+        }),
+      },
+      NOW,
+      UNA_FONTE_DEL_TEST,
+    );
+
+    const items = await store.queryItems({ limit: 10 });
+    const perTitolo = new Map(items.map((row) => [row.title, row.kind]));
+    expect(perTitolo.get("A Partecipazione Gratuita")).toBe("news");
+    expect(perTitolo.get("Concorso Lievital")).toBe("contest");
+
+    // E la chat li tiene separati: la sezione concorsi non mostra la tassonomia.
+    const concorsi = await store.queryItems({ kinds: ["contest"], limit: 10 });
+    expect(concorsi.map((row) => row.title)).toEqual(["Concorso Lievital"]);
   });
 });
 

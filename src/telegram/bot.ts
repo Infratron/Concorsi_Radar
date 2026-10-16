@@ -1,4 +1,4 @@
-import type { ItemQuery, ItemRow, Prefs, SourceRow, UiState } from "../types.ts";
+import type { ItemKind, ItemQuery, ItemRow, Prefs, SourceRow, UiState } from "../types.ts";
 import { truncate } from "../lib/text.ts";
 import type { TelegramUpdate } from "./api.ts";
 import type { NotifyDeps } from "./digest.ts";
@@ -90,6 +90,9 @@ function intentForCommand(command: string, args: string): Intent | null {
       return { kind: "section", section: "scadenze" };
     case "/salvati":
       return { kind: "section", section: "salvati" };
+    case "/news":
+    case "/articoli":
+      return { kind: "section", section: "news" };
     case "/cerca":
       return { kind: "section", section: "cerca" };
     case "/fonti":
@@ -174,22 +177,42 @@ function toastFor(intent: Intent, prefs: Prefs): string | null {
  * il conteggio in testa dice quanti concorsi ci sono in tutto).
  */
 const ATTIVI: ItemQuery["statuses"] = ["new", "sent"];
+/**
+ * La separazione che conta per l'utente: le sezioni dei concorsi mostrano SOLO
+ * le pagine su cui si partecipa, gli articoli che ne parlano stanno in news.
+ * Un aggregatore nella sezione concorsi vuol dire toccare un link e non
+ * partecipare a niente: è lo spam che si vuole evitare.
+ */
+const CONCORSI: ItemKind[] = ["contest"];
+const ARTICOLI: ItemKind[] = ["news"];
 
 function sectionQuery(section: string, now: Date, lastCheckAt: string | null): ItemQuery {
+  if (section === "news") return { kinds: ARTICOLI, statuses: ATTIVI };
   if (section === "nuovi") {
-    return { since: lastCheckAt ?? new Date(now.getTime() - WEEK_MS).toISOString(), statuses: ATTIVI };
+    return {
+      since: lastCheckAt ?? new Date(now.getTime() - WEEK_MS).toISOString(),
+      statuses: ATTIVI,
+      kinds: CONCORSI,
+    };
   }
-  if (section === "oggi") return { since: new Date(now.getTime() - 86_400_000).toISOString(), statuses: ATTIVI };
-  if (section === "settimana") return { since: new Date(now.getTime() - WEEK_MS).toISOString(), statuses: ATTIVI };
+  if (section === "oggi") {
+    return { since: new Date(now.getTime() - 86_400_000).toISOString(), statuses: ATTIVI, kinds: CONCORSI };
+  }
+  if (section === "settimana") {
+    return { since: new Date(now.getTime() - WEEK_MS).toISOString(), statuses: ATTIVI, kinds: CONCORSI };
+  }
   if (section === "scadenze") {
     // Solo scadenze future: un concorso già chiuso non serve in questa sezione.
     return {
       statuses: ["new", "sent"],
+      kinds: CONCORSI,
       deadlineAfter: localDateString(now),
       deadlineBefore: shiftDate(localDateString(now), 7),
       orderBy: "deadline",
     };
   }
+  // La ricerca guarda tutto — anche gli articoli, marcati 📰 nell'elenco:
+  // "cerca nutella" deve trovare sia il concorso sia il pezzo che ne parla.
   return { keyword: section.slice("cerca:".length), orderBy: "score", statuses: ATTIVI };
 }
 
@@ -200,6 +223,7 @@ function isListSection(section: string): boolean {
     section === "settimana" ||
     section === "scadenze" ||
     section === "salvati" ||
+    section === "news" ||
     section.startsWith("cerca:")
   );
 }
@@ -224,21 +248,22 @@ async function loadScreenData(
 ): Promise<ScreenData> {
   const { store } = deps;
   const settimanaFa = new Date(now.getTime() - WEEK_MS).toISOString();
-  const ventiquattroOreFa = new Date(now.getTime() - 86_400_000).toISOString();
   const sinceNuovi = state.lastCheckAt ?? settimanaFa;
   const scadenza = sectionQuery("scadenze", now, null);
   const salvati = await store.listDeliveredItems(chatId, "saved", 200);
 
   // I conteggi sono query SQL di conteggio: non caricano righe, quindi il menù
   // resta leggero anche con un archivio grande.
-  const [archiveTotal, nuovi, oggi, settimana, scadenze] = await Promise.all([
+  const [archiveTotal, contest, news, nuovi, oggi, settimana, scadenze] = await Promise.all([
     store.countItems({}),
-    store.countItems({ since: sinceNuovi }),
-    store.countItems({ since: ventiquattroOreFa }),
-    store.countItems({ since: settimanaFa }),
+    store.countItems({ kinds: CONCORSI }),
+    store.countItems({ kinds: ARTICOLI }),
+    store.countItems(sectionQuery("nuovi", now, sinceNuovi)),
+    store.countItems(sectionQuery("oggi", now, null)),
+    store.countItems(sectionQuery("settimana", now, null)),
     store.countItems(scadenza),
   ]);
-  const counts: ScreenCounts = { nuovi, oggi, settimana, scadenze, salvati: salvati.length };
+  const counts: ScreenCounts = { nuovi, oggi, settimana, scadenze, news, contest, salvati: salvati.length };
 
   const wantsList = state.openItemId === null && isListSection(state.section);
   let items: ItemRow[] = [];

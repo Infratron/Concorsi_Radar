@@ -19,6 +19,7 @@ function item(overrides: Partial<ItemRow> = {}): ItemRow {
   return {
     id: unique,
     sourceId: "premieconcorsi",
+    kind: "contest",
     url: `https://esempio.it/concorso/${unique}`,
     urlKey: `key-${unique}`,
     simhash: "0123456789abcdef",

@@ -3,6 +3,8 @@
 export type SourceKind = "rss" | "news" | "sitemap" | "html";
 export type Category = "online" | "punto_vendita" | "scontrino" | "giftcard" | "altro";
 export type ItemStatus = "new" | "sent" | "saved" | "ignored" | "won" | "expired";
+/** Un concorso a premi oppure un articolo/contenitore che ne parla. */
+export type ItemKind = "contest" | "news";
 
 /** Fonte dichiarativa, come scritta in src/config/sources.ts. */
 export interface SourceConfig {
@@ -91,6 +93,8 @@ export interface Insight {
 export interface ItemRow {
   id: number;
   sourceId: string;
+  /** Concorso vero o contenitore: decide in quale sezione della chat finisce. */
+  kind: ItemKind;
   url: string;
   urlKey: string;
   simhash: string;
@@ -115,6 +119,11 @@ export interface ItemRow {
 /** Item pronto per l'inserimento (senza i campi generati dal database). */
 export interface NewItem {
   sourceId: string;
+  /**
+   * Opzionale di proposito: chi lo omette ottiene un concorso, quindi i chiamanti
+   * che non si occupano di classificazione (test, strumenti) restano validi.
+   */
+  kind?: ItemKind;
   url: string;
   urlKey: string;
   simhash: string;
@@ -139,6 +148,8 @@ export interface NewItem {
 /** Patch parziale applicata a un item esistente (deduplica, arricchimento, stato). */
 export interface ItemPatch {
   lastSeenAt?: string;
+  /** Serve a riclassificare una riga già in archivio. */
+  kind?: ItemKind;
   deadline?: string | null;
   prize?: string | null;
   participation?: string | null;
@@ -158,6 +169,8 @@ export interface ItemQuery {
   since?: string;
   until?: string;
   statuses?: ItemStatus[];
+  /** Solo item di questo tipo; senza il campo si leggono tutti. */
+  kinds?: ItemKind[];
   minScore?: number;
   keyword?: string;
   /** deadline <= questa data (YYYY-MM-DD). */

@@ -70,8 +70,17 @@ Decisioni di progetto che contano:
   slug — le pagine di catalogo, le tassonomie e le pagine indice. Le stesse
   regole valgono per il digest e per la pulizia dell'archivio (`npm run prune`),
   e la nota di ogni raccolta dice quanti item ha scartato e perché.
+- **Concorsi e articoli sono due cose diverse, e in chat stanno in due posti.**
+  Ogni item entra in archivio con un tipo (`contest` o `news`) deciso in
+  [src/enrich/kind.ts](src/enrich/kind.ts) da URL, titolo e tipo di fonte: la
+  sezione dei concorsi contiene **solo pagine su cui si partecipa**, mentre la
+  notizia *sul* concorso, la pagina-elenco e la tassonomia finiscono in 📰 News.
+  È la differenza fra aprire un link e partecipare, e aprire un pezzo che
+  promette dieci concorsi e non ne fa vincere nessuno. Gli articoli non
+  producono notifiche: si leggono quando si vuole.
 - **Google News è la fonte più fresca** (batte gli aggregatori di ore), ma porta
-  anche rumore: le sue notizie passano un filtro di pertinenza prima di entrare.
+  anche rumore: le sue notizie passano un filtro di pertinenza prima di entrare e
+  restano comunque in 📰 News, perché il link è la pagina del giornale.
 - **Al primo giro in assoluto nessun avviso immediato**: si riempirebbe
   l'archivio di concorsi vecchi. Ci pensa il digest.
 
@@ -320,9 +329,9 @@ casi in chat resta un messaggio solo.
 
 [🆕 Nuovi (3)]        [📋 Oggi (12)]
 [📅 7 giorni (40)]    [⏳ Scadenze (2)]
-[⭐ Salvati (1)]      [🔍 Cerca]
-[📡 Fonti]            [⚙️ Impostazioni]
-[🔄 Aggiorna]
+[⭐ Salvati (1)]      [📰 News (7)]
+[🔍 Cerca]            [📡 Fonti]
+[⚙️ Impostazioni]     [🔄 Aggiorna]
 ```
 
 | Sezione | Cosa mostra |
@@ -331,10 +340,16 @@ casi in chat resta un messaggio solo.
 | 📋 Oggi / 📅 7 giorni | l'archivio recente, ordinato per punteggio |
 | ⏳ Scadenze | chi chiude entro 7 giorni e **non è già chiuso** |
 | ⭐ Salvati | i concorsi che hai salvato, con la scadenza più vicina in cima |
-| 🔍 Cerca | scrivi una parola: il bot cancella il tuo messaggio e mostra i risultati |
+| 📰 News | gli articoli e le pagine-elenco che parlano di concorsi: **non** sono concorsi, e il link porta al pezzo, non alla pagina ufficiale |
+| 🔍 Cerca | scrivi una parola: il bot cancella il tuo messaggio e mostra i risultati (concorsi e news insieme, gli articoli marcati 📰) |
 | 📡 Fonti | quali fonti rispondono, quando, e le ultime raccolte |
 | ⚙️ Impostazioni | soglia degli avvisi, fascia di silenzio, orari dei digest |
 | 🔄 Aggiorna | rilegge tutto e dice se è arrivato qualcosa di nuovo |
+
+Tutte le sezioni dei concorsi mostrano **solo i concorsi**: la pagina di un
+aggregatore o la notizia di un giornale non compaiono mai lì dentro. Le sezioni
+che *notificano* (avvisi immediati e digest) guardano la stessa fetta, quindi un
+articolo non ti sveglia per niente.
 
 Gli elenchi sono **bottone per concorso** (`⭐85 ⏳3gg · Concorso Barilla…`):
 toccandone uno si apre la scheda, e da lì `⬅️ Torna all'elenco`. Nella scheda ci
@@ -357,8 +372,8 @@ digest e nella scheda — non sposta i pesi due volte.
 
 I comandi funzionano ancora ma sono scorciatoie, non il modo normale: `/start`
 (che è anche l'iscrizione, ed è l'unico pubblicato nel menù "/" di Telegram),
-`/menu`, `/nuovi`, `/oggi`, `/settimana`, `/scadenze`, `/salvati`, `/cerca`,
-`/fonti`, `/impostazioni`, `/stop` e `/salva|/vinto|/ignora <id>`.
+`/menu`, `/nuovi`, `/oggi`, `/settimana`, `/scadenze`, `/salvati`, `/news`,
+`/cerca`, `/fonti`, `/impostazioni`, `/stop` e `/salva|/vinto|/ignora <id>`.
 
 ## 6. Deduplica: perché è fatta così
 
@@ -575,9 +590,15 @@ La tabella `runs` in D1 conserva la nota di ogni esecuzione: quelle con
 - **Il cancello di freschezza privilegia la precisione.** Un concorso vivo il cui
   URL non contiene nessuna parola di concorso, senza testo e senza data, resta
   fuori: è il prezzo per non riempire il digest di pagine di catalogo (un caso
-  vero: le promozioni Ferrero chiamate `panenutellaottobre2026`). E una tassonomia
-  il cui nome non segue quello della sua cartella può ancora passare: ne è
-  rimasta una, "A Partecipazione Gratuita" sotto `/concorsi-a-premi/`.
+  vero: le promozioni Ferrero chiamate `panenutellaottobre2026`).
+- **Anche la divisione concorsi/news è una stima fatta dall'URL.** Un articolo la
+  cui pagina non ha segnali da contenitore (titolo che promette un elenco, URL di
+  categoria, permalink con la data, fonte di cronaca) resta tra i concorsi, e
+  viceversa un concorso pubblicato sotto una sezione "news" del sito del brand
+  resta un concorso — è il caso voluto, non un errore. Nel dubbio il codice
+  preferisce **concorso**, perché nascondere un concorso vero costa più di un link
+  in più da scartare. L'unico modo per non sbagliare mai è leggere la pagina, e
+  ogni item letto costa CPU sui 10 ms del piano Free.
 - **La consegna Telegram reale va ancora vista una volta a bot avviato**: il
   percorso di invio è coperto dai test con client finto
   ([test/telegram.test.ts](test/telegram.test.ts)) e il resto del Worker è stato
@@ -634,10 +655,11 @@ src/
   config/sources.ts        fonti dichiarative + cap di sicurezza
   config/env.ts            allow-list chat, variabili mancanti
   lib/text.ts              normalizzazione, URL canonico, SimHash, deduplica titoli
+  lib/titles.ts            titoli leggibili (urlati, parole incollate, anno attaccato)
   lib/http.ts              fetch con ETag, retry, timeout
   lib/robots.ts            parsing e matching di robots.txt
   ingest/                  rss.ts, sitemap.ts, httplist.ts, index.ts
-  enrich/                  rules.ts, score.ts, ai.ts
+  enrich/                  rules.ts, score.ts, ai.ts, kind.ts (concorso o articolo), freshness.ts
   db/                      schema.sql, store.ts, d1.ts, d1-http.ts, memory.ts
   telegram/                api.ts, format.ts, keyboard.ts, screens.ts, bot.ts, digest.ts
   debug/bench.ts           misura della CPU per invocazione (Node e workerd)

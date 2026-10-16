@@ -75,6 +75,42 @@ describe("memory store · inserimento", () => {
   });
 });
 
+describe("memory store · concorso o articolo", () => {
+  let store: MemoryStore;
+  beforeEach(async () => {
+    store = createMemoryStore();
+    // Il primo item non dichiara niente: deve restare un concorso.
+    await store.insertItem(makeItem());
+    await store.insertItem(
+      makeItem({
+        url: "https://esempio.it/articolo",
+        urlKey: "key-articolo",
+        title: "Ecco i 10 concorsi del mese",
+        kind: "news",
+      }),
+    );
+  });
+
+  it("senza kind l'item è un concorso, con kind news è un articolo", async () => {
+    expect((await store.getItem(1))?.kind).toBe("contest");
+    expect((await store.getItem(2))?.kind).toBe("news");
+  });
+
+  it("filtra per tipo, e una lista vuota non filtra", async () => {
+    expect((await store.queryItems({ kinds: ["news"] })).map((row) => row.id)).toEqual([2]);
+    expect((await store.queryItems({ kinds: ["contest"] })).map((row) => row.id)).toEqual([1]);
+    expect((await store.queryItems({ kinds: ["contest", "news"] }))).toHaveLength(2);
+    expect((await store.queryItems({ kinds: [] }))).toHaveLength(2);
+    expect(await store.countItems({ kinds: ["news"] })).toBe(1);
+  });
+
+  it("una patch sposta una riga da una sezione all'altra", async () => {
+    await store.updateItem(1, { kind: "news" });
+    expect((await store.getItem(1))?.kind).toBe("news");
+    expect((await store.queryItems({ kinds: ["contest"] }))).toHaveLength(0);
+  });
+});
+
 describe("memory store · deduplica", () => {
   let store: MemoryStore;
   beforeEach(async () => {

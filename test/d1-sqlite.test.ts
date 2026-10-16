@@ -85,6 +85,32 @@ describe("store D1 · SQL vero su SQLite", () => {
     expect(second.item.title).toBe("Concorso Esselunga buoni spesa 1000 euro");
   });
 
+  it("il tipo viene dal default della colonna, e il filtro lo usa in SQL", async () => {
+    const concorso = await store.insertItem(item());
+    const articolo = await store.insertItem(
+      item({
+        url: "https://esempio.it/articolo",
+        urlKey: "key-articolo",
+        title: "Migliori concorsi di ottobre",
+        kind: "news",
+      }),
+    );
+    expect(concorso.item.kind).toBe("contest");
+    expect(articolo.item.kind).toBe("news");
+
+    expect((await store.queryItems({ kinds: ["news"] })).map((row) => row.id)).toEqual([articolo.item.id]);
+    expect((await store.queryItems({ kinds: ["contest"] })).map((row) => row.id)).toEqual([concorso.item.id]);
+    expect(await store.countItems({ kinds: ["news"] })).toBe(1);
+    expect((await store.queryItems({ kinds: [] }))).toHaveLength(2);
+  });
+
+  it("una patch può riclassificare una riga già in archivio", async () => {
+    await store.insertItem(item());
+    await store.updateItem(1, { kind: "news" });
+    expect((await store.getItem(1))?.kind).toBe("news");
+    expect((await store.queryItems({ kinds: ["contest"] }))).toHaveLength(0);
+  });
+
   it("propone il candidato con urlKey identico", async () => {
     await store.insertItem(item());
     const candidates = await store.findDuplicateCandidates("key-esselunga", "ffffffffffffffff", "2026-10-01T00:00:00.000Z");

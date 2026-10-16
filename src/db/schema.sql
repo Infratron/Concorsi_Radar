@@ -17,9 +17,14 @@ CREATE TABLE IF NOT EXISTS sources (
   fail_streak   INTEGER NOT NULL DEFAULT 0
 );
 
+-- `kind` distingue i concorsi veri dagli articoli e dalle pagine-contenitore che
+-- ne parlano: nello stesso archivio convivono i due, e la chat li mostra in
+-- sezioni diverse. Su un database già creato la colonna va aggiunta a mano:
+--   ALTER TABLE items ADD COLUMN kind TEXT NOT NULL DEFAULT 'contest';
 CREATE TABLE IF NOT EXISTS items (
   id                INTEGER PRIMARY KEY AUTOINCREMENT,
   source_id         TEXT NOT NULL,
+  kind              TEXT NOT NULL DEFAULT 'contest',
   url               TEXT NOT NULL,
   url_key           TEXT NOT NULL UNIQUE,
   simhash           TEXT NOT NULL,
@@ -41,6 +46,10 @@ CREATE TABLE IF NOT EXISTS items (
   ai_used           INTEGER NOT NULL DEFAULT 0
 );
 
+-- Le sezioni della chat leggono "i concorsi degli ultimi N giorni": l'indice
+-- composto serve proprio a quella coppia di filtri (un indice sul solo kind, con
+-- due valori possibili, non aiuterebbe).
+CREATE INDEX IF NOT EXISTS idx_items_kind_seen  ON items (kind, first_seen_at DESC);
 CREATE INDEX IF NOT EXISTS idx_items_first_seen ON items (first_seen_at DESC);
 CREATE INDEX IF NOT EXISTS idx_items_deadline   ON items (deadline);
 CREATE INDEX IF NOT EXISTS idx_items_status     ON items (status);

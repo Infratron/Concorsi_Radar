@@ -65,6 +65,7 @@ export function createMemoryStore(): MemoryStore {
 
   const applyPatch = (row: ItemRow, patch: ItemPatch): void => {
     if (patch.lastSeenAt !== undefined) row.lastSeenAt = patch.lastSeenAt;
+    if (patch.kind !== undefined) row.kind = patch.kind;
     if (patch.deadline !== undefined) row.deadline = patch.deadline;
     if (patch.prize !== undefined) row.prize = patch.prize;
     if (patch.participation !== undefined) row.participation = patch.participation;
@@ -82,6 +83,7 @@ export function createMemoryStore(): MemoryStore {
     if (query.since && row.firstSeenAt < query.since) return false;
     if (query.until && row.firstSeenAt > query.until) return false;
     if (query.statuses && query.statuses.length > 0 && !query.statuses.includes(row.status)) return false;
+    if (query.kinds && query.kinds.length > 0 && !query.kinds.includes(row.kind)) return false;
     if (typeof query.minScore === "number" && row.score < query.minScore) return false;
     const keyword = query.keyword?.trim().toLowerCase();
     if (keyword) {
@@ -157,7 +159,9 @@ export function createMemoryStore(): MemoryStore {
       const existing = items.find((row) => row.urlKey === item.urlKey);
       if (existing) return { item: clone(existing), created: false };
 
-      const row: ItemRow = { id: nextItemId++, ...clone(item) };
+      // `kind` esplicito: chi non lo passa sta inserendo un concorso (è il caso
+      // dei test e degli strumenti che non si occupano di classificazione).
+      const row: ItemRow = { id: nextItemId++, ...clone(item), kind: item.kind ?? "contest" };
       items.push(row);
       return { item: clone(row), created: true };
     },

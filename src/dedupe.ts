@@ -1,5 +1,7 @@
-import type { Insight, ItemRow, NewItem, RawItem } from "./types.ts";
+import type { Insight, ItemKind, ItemRow, NewItem, RawItem, SourceKind } from "./types.ts";
 import type { Store } from "./db/store.ts";
+import { classifyKind } from "./enrich/kind.ts";
+import { readableTitle } from "./lib/titles.ts";
 import {
   canonicalUrl,
   isDuplicateTitle,
@@ -25,6 +27,11 @@ export interface PreparedItem {
   title: string;
   urlKey: string;
   simhash: string;
+  /**
+   * Concorso o articolo/aggregatore. Si decide in ingresso (src/enrich/kind.ts)
+   * e viaggia con l'item, così in chat le due sezioni sono già separate.
+   */
+  kind: ItemKind;
 }
 
 /** Finestra entro cui considerare due item lo stesso concorso. */
@@ -32,15 +39,29 @@ export const DEDUPE_WINDOW_DAYS = 60;
 /** Quanti candidati valutare per ogni item nuovo. */
 export const DEDUPE_CANDIDATE_LIMIT = 8;
 
-export async function prepareItem(raw: RawItem, sourceName?: string | Set<string>): Promise<PreparedItem> {
+/**
+ * Titolo come va salvato e mostrato: prima si tolgono la fonte e il boilerplate,
+ * poi si sistema la forma (urlato, anno incollato). readableTitle è idempotente,
+ * quindi il risultato resta stabile anche se un item ripassa di qui.
+ */
+export function cleanTitle(rawTitle: string, sourceName?: string | Set<string>): string {
+  const pulito = stripBoilerplate(rawTitle);
+  return truncate(readableTitle(sourceName ? stripSourceTokens(pulito, sourceName) : pulito), 300);
+}
+
+export async function prepareItem(
+  raw: RawItem,
+  sourceName?: string | Set<string>,
+  sourceKind: SourceKind = "rss",
+): Promise<PreparedItem> {
   const canonical = canonicalUrl(raw.url);
-  const pulito = stripBoilerplate(raw.title);
-  const title = truncate(sourceName ? stripSourceTokens(pulito, sourceName) : pulito, 300);
+  const title = cleanTitle(raw.title, sourceName);
   return {
     url: canonical,
     title,
     urlKey: urlKey(canonical),
     simhash: simhash(title),
+    kind: classifyKind({ url: canonical, title, sourceKind }),
   };
 }
 
@@ -107,6 +128,7 @@ export function toNewItem(
 ): NewItem {
   return {
     sourceId: raw.sourceId,
+    kind: prepared.kind,
     url: prepared.url,
     urlKey: prepared.urlKey,
     simhash: prepared.simhash,
