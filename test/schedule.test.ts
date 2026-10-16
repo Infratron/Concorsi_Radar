@@ -7,8 +7,6 @@ import {
   DIGEST_CRONS,
   EXTERNAL_TRIGGERS,
   FALLBACK_INGEST_AFTER_MS,
-  INGEST_REPORT_MARK,
-  INGEST_REPORT_SKIP,
   NOTIFY_CRON,
   collectionCheck,
   isDigestWindow,
@@ -16,7 +14,6 @@ import {
   jobFor,
   runOrigin,
   shouldFallbackIngest,
-  shouldReportIngest,
 } from "../src/schedule.ts";
 import type { RunRow } from "../src/types.ts";
 
@@ -46,7 +43,7 @@ describe("jobFor", () => {
 
 describe("shouldFallbackIngest", () => {
   function run(trigger: string, startedAt: string): RunRow {
-    return { startedAt, trigger, sourcesOk: 0, sourcesFail: 0, itemsNew: 0, ms: 0, note: null };
+    return { startedAt, trigger, sourcesOk: 0, sourcesFail: 0, itemsNew: 0, ms: 0, note: null, log: null };
   }
   const NOW = new Date("2026-10-16T12:00:00.000Z");
 
@@ -87,6 +84,7 @@ describe("collectionCheck · il promemoria quando la raccolta è ferma", () => {
       itemsNew: 0,
       ms: 100,
       note,
+      log: null,
     };
   }
   const tick = (oreFa: number, note: string | null = null) => run(NOTIFY_CRON, oreFa, note);
@@ -147,46 +145,6 @@ describe("collectionCheck · il promemoria quando la raccolta è ferma", () => {
   });
 });
 
-describe("shouldReportIngest · il report delle prime raccolte", () => {
-  /** Una raccolta su GitHub con la nota che scrive scripts/ingest.ts. */
-  function raccolta(note: string | null): RunRow {
-    return {
-      startedAt: "2026-10-16T12:00:00.000Z", trigger: "actions", sourcesOk: 1, sourcesFail: 0,
-      itemsNew: 0, ms: 100, note,
-    };
-  }
-
-  it("senza raccolte precedenti il report tocca a questo giro", () => {
-    expect(shouldReportIngest([], "schedule")).toBe(true);
-  });
-
-  it("si ferma dopo le prime raccolte con la diagnostica accesa", () => {
-    const conDiagnostica = [raccolta(INGEST_REPORT_MARK), raccolta(INGEST_REPORT_MARK)];
-    expect(shouldReportIngest(conDiagnostica, "schedule")).toBe(true);
-    expect(shouldReportIngest([...conDiagnostica, raccolta(INGEST_REPORT_MARK)], "schedule")).toBe(false);
-  });
-
-  it("conta le raccolte, non i tick del Worker", () => {
-    const tick: RunRow = {
-      startedAt: "2026-10-16T12:00:00.000Z", trigger: NOTIFY_CRON, sourcesOk: 1, sourcesFail: 0,
-      itemsNew: 0, ms: 100, note: INGEST_REPORT_MARK,
-    };
-    expect(shouldReportIngest([tick, tick], "schedule")).toBe(true);
-  });
-
-  it("una nota senza diagnostica inviata non conta: quelle raccolte sono di prima", () => {
-    // Stessa trappola del promemoria: la nota c'è a ogni giro, il segno no.
-    const vecchie = [raccolta(INGEST_REPORT_SKIP), raccolta("actions | 4 fonti"), raccolta(null)];
-    expect(shouldReportIngest(vecchie, "schedule")).toBe(true);
-  });
-
-  it("il workflow lanciato a mano riceve sempre il report", () => {
-    const tante = Array.from({ length: 10 }, () => raccolta(INGEST_REPORT_MARK));
-    expect(shouldReportIngest(tante, "workflow_dispatch")).toBe(true);
-    expect(shouldReportIngest(tante, "schedule")).toBe(false);
-  });
-});
-
 describe("la raccolta esterna: GitHub o il PC, non conta quale", () => {
   const NOW = new Date("2026-10-16T12:00:00.000Z");
   function run(trigger: string, oreFa: number, note: string | null = null): RunRow {
@@ -198,6 +156,7 @@ describe("la raccolta esterna: GitHub o il PC, non conta quale", () => {
       itemsNew: 0,
       ms: 100,
       note,
+      log: null,
     };
   }
 
@@ -224,12 +183,6 @@ describe("la raccolta esterna: GitHub o il PC, non conta quale", () => {
     const fermo = collectionCheck([tick, run("local", 4)], NOW);
     expect(fermo.ferma).toBe(true);
     expect(fermo.avvisare).toBe(true);
-  });
-
-  it("la diagnostica conta le raccolte locali come le altre", () => {
-    const locale = (): RunRow => run("local", 1, INGEST_REPORT_MARK);
-    expect(shouldReportIngest([locale(), locale()], "")).toBe(true);
-    expect(shouldReportIngest([locale(), locale(), locale()], "")).toBe(false);
   });
 
   it("ogni esecuzione si racconta con il suo nome", () => {

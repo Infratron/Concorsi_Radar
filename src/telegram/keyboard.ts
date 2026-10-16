@@ -1,7 +1,16 @@
 import type { ItemRow, Prefs } from "../types.ts";
 import type { BrandChoice } from "../config/brands.ts";
 import { truncate } from "../lib/text.ts";
-import { CATEGORY_LABELS, STAR_CHOICES, TAG_FILTERS, categoriesToOffer, starLabel, type FilterSource } from "../filters.ts";
+import {
+  CATEGORY_LABELS,
+  PRIZE_QUICK_FILTERS,
+  STAR_CHOICES,
+  TAG_FILTERS,
+  categoriesToOffer,
+  prizeFilterFor,
+  starLabel,
+  type FilterSource,
+} from "../filters.ts";
 import type { InlineKeyboardButton, InlineKeyboardMarkup } from "./api.ts";
 import { daysLeft } from "./format.ts";
 import { DIGEST_HOURS, hourLabel, hourShort, quietRange, shiftQuietRange, stepScore } from "./prefs-config.ts";
@@ -64,6 +73,8 @@ export function menuKeyboard(counts: {
   news: number;
   /** Coupon e rimborsi in archivio: è il numero sul bottone 💶. */
   coupon: number;
+  /** Concorsi senza obbligo di acquisto: è il numero sul bottone 🆓. */
+  gratis: number;
   /** Concorsi delle marche seguite: è il numero che sta sul bottone dei preferiti. */
   preferiti: number;
   /** Quanti filtri sono attivi: 0 = si vede tutto. */
@@ -73,6 +84,13 @@ export function menuKeyboard(counts: {
     inline_keyboard: [
       [button(`🆕 Nuovi (${counts.nuovi})`, "s:nuovi"), button(`📋 Oggi (${counts.oggi})`, "s:oggi")],
       [button(`📅 7 giorni (${counts.settimana})`, "s:settimana"), button(`⏳ Scadenze (${counts.scadenze})`, "s:scadenze")],
+      // I concorsi che non costano niente, su una riga loro: è la domanda "quali
+      // posso fare senza comprare?", e in mezzo alle altre sezioni non si vede.
+      [button(`🆓 Gratis (${counts.gratis})`, "s:gratis")],
+      // E la porta ai tipi di premio: "che premio cerchi?" è la stessa domanda
+      // secca, e da lì si entra nella sezione che interessa senza accendere
+      // nessun filtro.
+      [button("🎁 Tipi di premio", "s:premi")],
       [button(`⭐ Watchlist (${counts.salvati})`, "s:salvati"), button(`📰 News (${counts.news})`, "s:news")],
       [button("🔍 Cerca", "s:cerca"), button("🗂 Storico", "s:storico")],
       // Le offerte su una riga tutta loro: non sono concorsi e non stanno in
@@ -420,16 +438,43 @@ export function settingsKeyboard(prefs: Prefs): InlineKeyboardMarkup {
 }
 
 /**
- * 📡 Fonti: si legge e si torna, con una porta sola in più — la diagnostica, cioè
- * la domanda successiva ("e questa fonte serve a qualcosa?").
+ * 📡 Fonti: si legge e si torna, con una porta in più — la diagnostica, cioè la
+ * domanda successiva ("e questa fonte serve a qualcosa?").
+ *
+ * 🧾 Log c'è solo per l'admin: è il racconto fonte per fonte di ogni raccolta, la
+ * roba da cui si capisce *perché* una fonte non porta niente. Non è un segreto,
+ * è che l'altra persona in chat non ha niente da farne: se le comparisse, ogni
+ * domanda su un guasto finirebbe lì. Il gate è doppio — il bottone non esiste
+ * nella sua tastiera e la sezione non si apre nemmeno da un callback vecchio (vedi
+ * bot.ts).
  */
-export function fontiKeyboard(): InlineKeyboardMarkup {
-  return {
-    inline_keyboard: [
-      [button("🌡 Diagnostica", "s:diagnostica")],
-      ...navRows(),
-    ],
-  };
+export function fontiKeyboard(isAdmin: boolean): InlineKeyboardMarkup {
+  const righe: InlineKeyboardButton[][] = [];
+  if (isAdmin) righe.push([button("🧾 Log delle raccolte", "s:log")]);
+  righe.push([button("🌡 Diagnostica", "s:diagnostica")]);
+  return { inline_keyboard: [...righe, ...navRows()] };
+}
+
+/**
+ * 🧾 Log delle raccolte: una raccolta per schermata, con il suo racconto intero.
+ *
+ * Il passo è la raccolta, non la pagina di un elenco: qui `page` è quale log si
+ * sta leggendo (0 = il più recente), e le frecce portano avanti e indietro nella
+ * storia. Il conteggio in mezzo è l'unica cosa che dice quanto indietro si è
+ * arrivati.
+ */
+export function logKeyboard(pagina: { index: number; total: number }): InlineKeyboardMarkup {
+  const righe: InlineKeyboardButton[][] = [];
+  if (pagina.total > 1) {
+    righe.push([
+      pagina.index > 0 ? button("⬅️ Più recente", `page:${pagina.index - 1}`) : done("⬅️ Più recente"),
+      done(`${pagina.index + 1}/${pagina.total}`),
+      pagina.index < pagina.total - 1 ? button("Più vecchio ➡️", `page:${pagina.index + 1}`) : done("➡️"),
+    ]);
+  }
+  righe.push([button("📡 Fonti", "s:fonti"), button("🏠 Menù", "home")]);
+  righe.push([button("🔄 Aggiorna", "refresh")]);
+  return { inline_keyboard: righe };
 }
 
 /**
@@ -481,9 +526,34 @@ export function emptyKeyboard(conFiltri: boolean, marche = false): InlineKeyboar
 }
 
 /** Testo leggibile della sezione, per l'intestazione delle schermate. */
+/**
+ * 🎁 Tipi di premio: le porte per tipo di premio, con quanti concorsi
+ * aprirebbero ADESSO. Il numero nasce dalla stessa query della sezione (stessa
+ * regola dei conteggi del menù): se il bottone dicesse 35 e l'elenco ne mostrasse
+ * 12, il primo dei due mentirebbe.
+ */
+export function premiKeyboard(counts: Record<string, number>): InlineKeyboardMarkup {
+  const bottoni = PRIZE_QUICK_FILTERS.map((voce) =>
+    button(`${voce.emoji} ${voce.label} (${counts[voce.section] ?? 0})`, `s:${voce.section}`),
+  );
+  const righe: InlineKeyboardButton[][] = [];
+  for (let index = 0; index < bottoni.length; index += 2) righe.push(bottoni.slice(index, index + 2));
+  return { inline_keyboard: [...righe, ...navRows()] };
+}
+
+/** Testo leggibile della sezione, per l'intestazione delle schermate. */
 export function sectionTitle(section: string): string {
   if (section.startsWith("cerca:")) return `Ricerca: ${section.slice("cerca:".length)}`;
+  // Le sezioni per tipo di premio si intitolano come il loro bottone. 🆓 Gratis
+  // non passa di qua: ha un titolo suo ("Solo gratis (senza acquisto)"), più
+  // esplicito di un'emoji.
+  if (section.startsWith("premi:")) {
+    const premio = prizeFilterFor(section);
+    if (premio) return `${premio.emoji} ${premio.label}`;
+  }
   switch (section) {
+    case "premi":
+      return "Tipi di premio";
     case "nuovi":
       return "Nuovi dall'ultimo controllo";
     case "oggi":
@@ -506,6 +576,8 @@ export function sectionTitle(section: string): string {
       return "Articoli e news";
     case "coupon":
       return "Coupon e rimborsi";
+    case "gratis":
+      return "Solo gratis (senza acquisto)";
     case "fonti":
       return "Fonti e raccolte";
     case "vantaggio":
@@ -520,6 +592,8 @@ export function sectionTitle(section: string): string {
       return "Preferiti per marca";
     case "diagnostica":
       return "Diagnostica delle fonti";
+    case "log":
+      return "Log delle raccolte";
     case "preferiti-lista":
       return "Le marche che segui";
     case "cerca":

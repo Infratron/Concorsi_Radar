@@ -342,12 +342,18 @@ describe("store D1 · SQL vero su SQLite", () => {
   });
 
   it("registra le esecuzioni e le restituisce dalla più recente", async () => {
-    await store.recordRun({ startedAt: "2026-10-16T08:00:00.000Z", trigger: "*/15 * * * *", sourcesOk: 2, sourcesFail: 1, itemsNew: 3, ms: 900, note: "primo" });
-    await store.recordRun({ startedAt: "2026-10-16T09:00:00.000Z", trigger: "5 6 * * *", sourcesOk: 0, sourcesFail: 0, itemsNew: 0, ms: 20, note: "digest" });
+    await store.recordRun({ startedAt: "2026-10-16T08:00:00.000Z", trigger: "*/15 * * * *", sourcesOk: 2, sourcesFail: 1, itemsNew: 3, ms: 900, note: "primo", log: "🧪 <b>Raccolta su GitHub</b> · 10:00\n🔴 Soldissimi · HTTP 403" });
+    await store.recordRun({ startedAt: "2026-10-16T09:00:00.000Z", trigger: "5 6 * * *", sourcesOk: 0, sourcesFail: 0, itemsNew: 0, ms: 20, note: "digest", log: null });
 
     const runs = await store.recentRuns(5);
     expect(runs.map((run) => run.note)).toEqual(["digest", "primo"]);
     expect(runs[1].itemsNew).toBe(3);
+
+    // Il log è una colonna a sé: si rilegge intero (righe comprese) e solo per le
+    // esecuzioni che ne hanno uno. La riga del digest l'ha lasciato a NULL.
+    expect(runs[1].log).toContain("\n🔴 Soldissimi");
+    expect(runs[0].log).toBeNull();
+    expect((await store.recentLogs(5)).map((run) => run.note)).toEqual(["primo"]);
   });
 
   it("conserva la cache di robots.txt e il consumo AI giornaliero", async () => {
@@ -461,6 +467,20 @@ describe("store D1 · SQL vero su SQLite", () => {
       item({ urlKey: "key-4", url: "https://d.example/4", title: "Concorso bambini moda", sourceId: "vincimi", tags: ["moda_bambini"], requiresPurchase: false }),
     );
     expect(await store.countItems({ excludeTags: ["moda"] })).toBe(3);
+
+    // L'inclusione per tag, che in SQL è l'altra metà di json_each: le porte di
+    // 🎁 Tipi di premio chiedono "solo i concorsi con questo premio".
+    expect(await store.countItems({ tags: ["giftcard"] })).toBe(1);
+    expect(await store.countItems({ tags: ["giftcard", "moda_bambini"] })).toBe(2);
+    // Elenco vuoto = nessun filtro, come tutti gli altri campi della query.
+    expect(await store.countItems({ tags: [] })).toBe(4);
+    expect(await store.countItems({ tags: ["inesistente"] })).toBe(0);
+    // E l'inclusione convive con le esclusioni della chat: una chat che ha spento
+    // la fonte conad non vede il Bennet nemmeno chiedendo i suoi tag.
+    expect(await store.countItems(filtersFor({ ...defaultFilters(), mutedSources: ["sitemap-conad"] }, { tags: ["raccolta_punti"] }))).toBe(0);
+    expect(
+      (await store.queryItems({ tags: ["moda", "moda_bambini"], limit: 10 })).map((row) => row.urlKey).sort(),
+    ).toEqual(["key-3", "key-4"]);
 
     // Le tre esclusioni insieme, come le manda una chat con i filtri accesi:
     // restano il giftcard gratuito di Vincimi e il concorso "moda_bambini".

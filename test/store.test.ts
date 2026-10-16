@@ -464,12 +464,30 @@ describe("memory store · fonti, run, ai e robots", () => {
   });
 
   it("recordRun e recentRuns restituiscono i run più recenti per primi", async () => {
-    await store.recordRun({ startedAt: "2026-10-16T08:00:00.000Z", trigger: "*/15 * * * *", sourcesOk: 2, sourcesFail: 0, itemsNew: 4, ms: 120, note: null });
-    await store.recordRun({ startedAt: "2026-10-16T09:00:00.000Z", trigger: "*/15 * * * *", sourcesOk: 1, sourcesFail: 1, itemsNew: 2, ms: 200, note: "soldissimi: HTTP 429" });
+    await store.recordRun({ startedAt: "2026-10-16T08:00:00.000Z", trigger: "*/15 * * * *", sourcesOk: 2, sourcesFail: 0, itemsNew: 4, ms: 120, note: null, log: null });
+    await store.recordRun({ startedAt: "2026-10-16T09:00:00.000Z", trigger: "*/15 * * * *", sourcesOk: 1, sourcesFail: 1, itemsNew: 2, ms: 200, note: "soldissimi: HTTP 429", log: "🧪 <b>Raccolta su GitHub</b> · 12:03" });
     const runs = await store.recentRuns(5);
     expect(runs).toHaveLength(2);
     expect(runs[0].startedAt).toBe("2026-10-16T09:00:00.000Z");
     expect(runs[0].note).toBe("soldissimi: HTTP 429");
+  });
+
+  it("il log sta con la sua esecuzione, e recentLogs lascia fuori chi non ne ha uno", async () => {
+    // Il tick del Worker non raccoglie: non ha niente da raccontare, e senza
+    // questo filtro 🧾 Log delle raccolte sarebbe pieno di righe vuote (novantasei
+    // al giorno).
+    await store.recordRun({ startedAt: "2026-10-16T08:00:00.000Z", trigger: "*/15 * * * *", sourcesOk: 0, sourcesFail: 0, itemsNew: 0, ms: 30, note: "tick", log: null });
+    await store.recordRun({ startedAt: "2026-10-16T08:30:00.000Z", trigger: "actions", sourcesOk: 3, sourcesFail: 1, itemsNew: 9, ms: 800, note: "actions | 4 fonti", log: "🧪 <b>Raccolta su GitHub</b> · 10:30\n🔴 Soldissimi · HTTP 403" });
+    await store.recordRun({ startedAt: "2026-10-16T09:00:00.000Z", trigger: "local", sourcesOk: 2, sourcesFail: 0, itemsNew: 1, ms: 500, note: "local | 2 fonti", log: "🧪 <b>Raccolta lanciata a mano</b> · 11:00" });
+
+    expect((await store.recentRuns(5)).map((run) => run.log === null)).toEqual([false, false, true]);
+    expect((await store.recentLogs(5)).map((run) => run.note)).toEqual(["local | 2 fonti", "actions | 4 fonti"]);
+    // Il log si rilegge esattamente come è stato scritto: è testo, e in chat deve
+    // arrivare con le sue righe (la fonte che non ha risposto è la riga che si sta
+    // cercando quando si apre il log).
+    const log = await store.recentLogs(5);
+    expect(log[1].log).toContain("\n🔴 Soldissimi");
+    expect(log).toHaveLength(2);
   });
 
   it("somma il consumo Workers AI del giorno", async () => {
@@ -503,6 +521,14 @@ describe("memory store · fonti, run, ai e robots", () => {
       makeItem({ urlKey: "key-4", url: "https://d.example/4", title: "Concorso bambini moda", sourceId: "vincimi", tags: ["moda_bambini"], requiresPurchase: false }),
     );
     expect(await store.countItems({ excludeTags: ["moda"] })).toBe(3);
+
+    // L'inclusione per tag, che è il contrario: le porte di 🎁 Tipi di premio
+    // chiedono "che premio cerchi?", e lì il tag acceso è quello da vedere.
+    expect(await store.countItems({ tags: ["giftcard"] })).toBe(1);
+    // Più tag = "almeno uno", come le esclusioni: nessuno ha due tag fra questi.
+    expect(await store.countItems({ tags: ["giftcard", "moda_bambini"] })).toBe(2);
+    expect(await store.countItems({ tags: [] })).toBe(4);
+    expect(await store.countItems({ tags: ["inesistente"] })).toBe(0);
 
     // I tre filtri insieme, come li manda una chat che li ha accesi.
     const filtri = { ...defaultFilters(), mutedSources: ["sitemap-conad"], mutedTags: ["moda"], freeOnly: true };

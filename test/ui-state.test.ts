@@ -239,7 +239,19 @@ describe("le due implementazioni concordano", () => {
   it("stesso scenario, stessi risultati", async () => {
     const scenario = async (store: Store): Promise<unknown> => {
       const primo = await store.insertItem(item({ urlKey: "k1", title: "Vinci buoni spesa Esselunga", score: 90 }));
-      const secondo = await store.insertItem(item({ urlKey: "k2", title: "Vinci un viaggio in Sardegna", score: 40 }));
+      // Il secondo non chiede l'acquisto: è l'unica cosa che la sezione 🆓 Gratis
+      // guarda, e i due store devono rispondere lo stesso numero.
+      const secondo = await store.insertItem(
+        item({
+          urlKey: "k2",
+          title: "Vinci un viaggio in Sardegna",
+          score: 40,
+          requiresPurchase: false,
+          // Un tag di tipo di premio: è quello che leggono le porte di
+          // 🎁 Tipi di premio, in inclusione (l'esclusione è l'altra metà).
+          tags: ["buoni_spesa", "viaggio"],
+        }),
+      );
       await store.recordDelivery(42, primo.item.id, "saved", "2026-10-16T08:00:00.000Z");
       await store.recordDelivery(42, secondo.item.id, "saved", "2026-10-16T09:00:00.000Z");
       await store.saveUiState(stato(42, { messageId: 3, section: "salvati", page: 1, lastCheckAt: "2026-10-16T10:00:00.000Z" }));
@@ -249,6 +261,18 @@ describe("le due implementazioni concordano", () => {
         salvati: (await store.listDeliveredItems(42, "saved")).map((row) => row.urlKey),
         nuovi: await store.countItems({ since: "2026-10-10T00:00:00.000Z" }),
         salvatiCosi: await store.countItems({ statuses: ["saved"] }),
+        gratis: await store.countItems({ kinds: ["contest"], statuses: ["new", "sent"], withoutPurchase: true }),
+        // Inclusione per tag: le due implementazioni la leggono allo stesso modo
+        // e nello stesso ordine (ordinati per punteggio, id come spareggio).
+        premi: (
+          await store.queryItems({
+            kinds: ["contest"],
+            statuses: ["new", "sent"],
+            tags: ["viaggio", "giftcard"],
+            orderBy: "score",
+            limit: 10,
+          })
+        ).map((row) => row.urlKey),
       };
     };
 

@@ -115,7 +115,7 @@ describe("cron · il tick completo", () => {
     `);
     await world.store.recordRun({
       startedAt: new Date(NOW.getTime() - 4 * ORA_MS).toISOString(),
-      trigger: "actions", sourcesOk: 12, sourcesFail: 0, itemsNew: 5, ms: 1000, note: "actions",
+      trigger: "actions", sourcesOk: 12, sourcesFail: 0, itemsNew: 5, ms: 1000, note: "actions", log: "🧪 <b>Raccolta su GitHub</b>",
     });
 
     await tick(world, NOW);
@@ -137,7 +137,7 @@ describe("cron · il tick completo", () => {
     `);
     await world.store.recordRun({
       startedAt: new Date(NOW.getTime() - 4 * ORA_MS).toISOString(),
-      trigger: "actions", sourcesOk: 12, sourcesFail: 0, itemsNew: 5, ms: 1000, note: "actions",
+      trigger: "actions", sourcesOk: 12, sourcesFail: 0, itemsNew: 5, ms: 1000, note: "actions", log: "🧪 <b>Raccolta su GitHub</b>",
     });
 
     await tick(world, NOW);
@@ -157,7 +157,7 @@ describe("cron · il tick completo", () => {
     `);
     await world.store.recordRun({
       startedAt: new Date(NOW.getTime() - 20 * 60_000).toISOString(),
-      trigger: "actions", sourcesOk: 12, sourcesFail: 0, itemsNew: 3, ms: 1000, note: "actions",
+      trigger: "actions", sourcesOk: 12, sourcesFail: 0, itemsNew: 3, ms: 1000, note: "actions", log: "🧪 <b>Raccolta su GitHub</b>",
     });
 
     await tick(world, NOW);
@@ -174,7 +174,7 @@ describe("cron · il tick completo", () => {
     // Solo tick del Worker: della raccolta su GitHub non resta niente.
     await world.store.recordRun({
       startedAt: new Date(NOW.getTime() - 15 * 60_000).toISOString(),
-      trigger: NOTIFY_CRON, sourcesOk: 1, sourcesFail: 3, itemsNew: 0, ms: 900, note: "tick",
+      trigger: NOTIFY_CRON, sourcesOk: 1, sourcesFail: 3, itemsNew: 0, ms: 900, note: "tick", log: null,
     });
 
     await tick(world, NOW);

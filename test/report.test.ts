@@ -1,23 +1,27 @@
 import { describe, expect, it } from "vitest";
 import type { SourceAttempt, SourceRow } from "../src/types.ts";
-import type { TelegramClient } from "../src/telegram/api.ts";
 import { ROBOTS_DENIED_REASON } from "../src/lib/robots.ts";
 import {
   esitoFonte,
   esitoUltimoTentativo,
   formatIngestReport,
+  ingestLog,
   plainIngestLines,
-  sendIngestReport,
   type IngestReport,
 } from "../src/telegram/report.ts";
 
 /**
- * Il report della raccolta: le parole con cui si dice "chi ha risposto e chi no".
+ * Il racconto della raccolta: le parole con cui si dice "chi ha risposto e chi no".
  *
  * Il punto di questi test non è la formattazione in sé, ma la DISTINZIONE fra
  * esiti che a occhio si confondono: un 403 e un timeout sono due guasti diversi,
  * un 200 con zero item e un 304 non sono guasti affatto, e robots.txt non è né
- * l'uno né l'altro. Il report serve proprio a non doverlo dedurre da un log.
+ * l'uno né l'altro. Il racconto serve proprio a non doverlo dedurre a mano.
+ *
+ * Dove finisce: nel log dell'esecuzione (`runs.log`), che in chat si legge in
+ * 🧾 Log delle raccolte. Non è più un messaggio mandato all'admin a ogni giro:
+ * quello che si verifica qui è il testo, non l'invio (la lettura dalla chat ha i
+ * suoi test in test/telegram.test.ts).
  */
 
 function tentativo(partial: Partial<SourceAttempt> = {}): SourceAttempt {
@@ -58,17 +62,6 @@ function riga(partial: Partial<SourceRow> = {}): SourceRow {
 
 function report(attempts: SourceAttempt[], partial: Partial<IngestReport> = {}): IngestReport {
   return { attempts, itemsSeen: 5, itemsNew: 2, deferred: 0, titolo: "Prima raccolta su GitHub", ...partial };
-}
-
-function fakeTg(): { tg: TelegramClient; sent: { chatId: number; text: string }[] } {
-  const sent: { chatId: number; text: string }[] = [];
-  const tg = {
-    async sendMessage(chatId: number, text: string) {
-      sent.push({ chatId, text });
-      return { ok: true, messageId: 1, error: null, retryAfter: null };
-    },
-  } as unknown as TelegramClient;
-  return { tg, sent };
 }
 
 describe("report · come si legge l'esito di una fonte", () => {
@@ -147,7 +140,7 @@ describe("report · l'esito letto dall'archivio", () => {
   });
 });
 
-describe("report · il messaggio", () => {
+describe("report · il testo del log", () => {
   it("mette davanti chi NON ha risposto, con ora e codice", () => {
     const testo = formatIngestReport(
       report([
@@ -174,7 +167,7 @@ describe("report · il messaggio", () => {
     expect(testo).toContain("2 fonti rimandate al giro successivo");
   });
 
-  it("senza fonti provate non c'è nessun messaggio da mandare", () => {
+  it("senza fonti provate non c'è niente da raccontare, né in chat né su GitHub", () => {
     expect(formatIngestReport(report([]))).toBeNull();
     expect(plainIngestLines(report([]))).toEqual([]);
   });
@@ -187,23 +180,35 @@ describe("report · il messaggio", () => {
   });
 });
 
-describe("report · l'invio", () => {
-  it("manda all'admin il messaggio con tutte le fonti", async () => {
-    const { tg, sent } = fakeTg();
-    const inviato = await sendIngestReport({
-      tg,
-      chatId: 42,
-      report: report([tentativo(), tentativo({ name: "Scontrino Felice", httpStatus: 403, error: "HTTP 403" })]),
-    });
-    expect(inviato).toBe(true);
-    expect(sent).toHaveLength(1);
-    expect(sent[0]?.chatId).toBe(42);
-    expect(sent[0]?.text).toContain("Scontrino Felice");
+describe("report · il log che si salva con l'esecuzione", () => {
+  it("è il racconto del giro, con le note della pipeline in fondo", () => {
+    // Il log non è una seconda formattazione del report: è lo STESSO testo, più le
+    // note del giro (una fonte morta, un tetto raggiunto). Tenerli in un posto
+    // solo è il motivo per cui sono cresciuti insieme.
+    const log = ingestLog(
+      report([tentativo(), tentativo({ name: "Scontrino Felice", httpStatus: 403, error: "HTTP 403" })]),
+      ["soldissimi: HTTP 429"],
+    ) ?? "";
+
+    expect(log).toContain("Prima raccolta su GitHub</b> · 12:03");
+    expect(log).toContain("🔴 Scontrino Felice · HTTP 403");
+    expect(log).toContain("⚠️ <b>Note del giro</b>");
+    expect(log).toContain("• soldissimi: HTTP 429");
   });
 
-  it("senza un admin con cui parlare non manda niente (e non fallisce)", async () => {
-    const { tg, sent } = fakeTg();
-    expect(await sendIngestReport({ tg, chatId: null, report: report([tentativo()]) })).toBe(false);
-    expect(sent).toHaveLength(0);
+  it("senza note il log resta il solo racconto delle fonti", () => {
+    const log = ingestLog(report([tentativo()])) ?? "";
+    expect(log).toContain("Aggregatore A");
+    expect(log).not.toContain("Note del giro");
+  });
+
+  it("un giro senza fonti provate non produce un log (meglio nulla che un guscio)", () => {
+    expect(ingestLog(report([]))).toBeNull();
+  });
+
+  it("le note non possono iniettare HTML nel log, come i nomi delle fonti", () => {
+    const log = ingestLog(report([tentativo()]), ["fonte <b>x</b> & co"]) ?? "";
+    expect(log).toContain("fonte &lt;b&gt;x&lt;/b&gt; &amp; co");
+    expect(log).not.toContain("<b>x</b>");
   });
 });

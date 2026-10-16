@@ -138,6 +138,13 @@ export interface Store {
   // --- diagnostica ---
   recordRun(run: RunRow): Promise<void>;
   recentRuns(limit: number): Promise<RunRow[]>;
+  /**
+   * Le ultime esecuzioni CHE HANNO UN LOG, dalla più recente: sono le raccolte
+   * vere (Actions, un PC, la raccolta di riserva del Worker). I tick da 15 minuti
+   * e i digest restano fuori, perché non hanno niente da raccontare fonte per
+   * fonte. È quello che legge 🧾 Log delle raccolte.
+   */
+  recentLogs(limit: number): Promise<RunRow[]>;
   /** true la prima volta che vede l'update_id, false se è un retry Telegram. */
   claimUpdate(updateId: number, at: string): Promise<boolean>;
 

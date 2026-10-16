@@ -103,6 +103,37 @@ describe("tag", () => {
     expect(extractTags("Raccolta punti Esselunga: in palio una e-bike")).toContain("raccolta_punti");
   });
 
+  it("riconosce il premio da richiedere, che non arriva da solo", () => {
+    // Le formule del bando, comprese quelle in cui il premio è plurale o è un
+    // buono: "premi richiedibili entro il…", "riscatta il premio in cassa".
+    expect(extractTags("Premi richiedibili entro il 30 novembre")).toContain("premio_da_richiedere");
+    expect(extractTags("Sconto riscattabile: riscatta il premio in cassa")).toContain("premio_da_richiedere");
+    expect(extractTags("Raccolta punti Scottex e Scottonelle: richiedi premi Ariete")).toContain(
+      "premio_da_richiedere",
+    );
+
+    // E i titoli veri delle raccolte in archivio il 16/10/2026, riga per riga:
+    // il tag c'è dove il premio si richiede, e NON c'è dove i premi si
+    // collezionano e basta. La direzione dell'errore è quella dichiarata —
+    // meglio nessun tag che un tag inventato.
+    const vere: [string, boolean][] = [
+      ["Raccolta punti Premiati con il mondo del pulito: richiedi Buoni Amazon, Carburante e Shopping", true],
+      ["Raccolta bollini DPiù Bellissima: richiedi i premi Imetec", true],
+      ["Raccolta bollini Arcaplanet: colleziona i peluche “La Carica dei Cuccioli”", false],
+      ["Raccolta bollini Famila, Italmark, Il Gigante, A&O, Galassia: colleziona premi FILA", false],
+      ["Raccolta punti Italmark Friends: scopri tutti i premi da collezionare", false],
+      ["Raccolta bollini Bennet Guzzini: scopri tutti i premi", false],
+      ["Nuova Raccolta Punti Divella “La Passione che ti Premia”: richiedi la biscottiera e la coppa", false],
+      // Un'estrazione normale, dove il premio lo manda l'organizzatore.
+      ["Concorso Barilla: vinci una Fiat Panda", false],
+      // Un rimborso: "richiedi 25 euro" non è un premio da riscattare.
+      ["Cashback Ymea: richiedi 25 euro di rimborso", false],
+    ];
+    for (const [titolo, atteso] of vere) {
+      expect({ titolo, tag: extractTags(titolo).includes("premio_da_richiedere") }).toEqual({ titolo, tag: atteso });
+    }
+  });
+
   it("non inventa tag su un testo neutro", () => {
     expect(extractTags("Comunicato stampa dell'azienda")).toEqual([]);
   });

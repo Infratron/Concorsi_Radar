@@ -1,17 +1,18 @@
 import type { SourceAttempt, SourceRow } from "../types.ts";
 import { ROBOTS_DENIED_REASON } from "../lib/robots.ts";
 import { truncate } from "../lib/text.ts";
-import type { TelegramClient } from "./api.ts";
 import { escapeHtml, localTimeShort } from "./format.ts";
 
 /**
- * Il report di un giro di raccolta, fonte per fonte: chi ha risposto, con che
+ * Il racconto di un giro di raccolta, fonte per fonte: chi ha risposto, con che
  * codice HTTP, a che ora, e quanti item ha portato.
  *
- * Perché serve: fino a oggi "chi ha risposto e chi no" si scopriva solo aprendo
- * la pagina del job su GitHub — cioè il posto meno comodo che c'è, e l'unico in
- * cui quei dati esistevano. Il report li porta in chat, così le prime raccolte si
- * seguono dal telefono e un 403 non resta invisibile dentro un log di runner.
+ * Dove si legge: nel log dell'esecuzione (`runs.log`), che in chat apre 🧾 Log
+ * delle raccolte — la schermata che vede solo l'admin. Non è più un messaggio
+ * mandato a ogni raccolta: un riepilogo che arriva da solo 48 volte al giorno si
+ * smette di leggerlo, mentre un log che sta lì e si apre quando serve no. Il
+ * testo è lo stesso che il job su GitHub scrive nella pagina di riepilogo, così
+ * chat e runner non possono raccontare due cose diverse.
  *
  * Le STESSE parole valgono per la schermata 📡 Fonti, che legge lo stato salvato
  * dell'ultimo tentativo: un vocabolario solo (esitoFonte), due sorgenti di dati —
@@ -98,7 +99,7 @@ export interface IngestReport {
 }
 
 /**
- * Il messaggio del report, in HTML. Raggruppato per esito — prima chi NON ha
+ * Il log della raccolta, in HTML. Raggruppato per esito — prima chi NON ha
  * risposto — perché è quello che si sta cercando quando lo si legge: le fonti che
  * funzionano non hanno bisogno di attenzione, le altre sì.
  */
@@ -138,18 +139,23 @@ export function plainIngestLines(report: IngestReport): string[] {
   });
 }
 
-export interface IngestReportDeps {
-  tg: TelegramClient;
-  /** null se admin e token non sono configurati: allora non si manda niente. */
-  chatId: number | null;
-  report: IngestReport;
-}
-
-/** Manda il report all'admin. true se è partito davvero. */
-export async function sendIngestReport(deps: IngestReportDeps): Promise<boolean> {
-  if (deps.chatId === null) return false;
-  const testo = formatIngestReport(deps.report);
-  if (testo === null) return false;
-  const result = await deps.tg.sendMessage(deps.chatId, testo, { disablePreview: true });
-  return result.ok;
+/**
+ * Il log da salvare con l'esecuzione: il racconto delle fonti (chi ha risposto,
+ * con che codice, quanti item) più le note della pipeline — una fonte che ha
+ * fallito tre volte di fila, un tetto raggiunto, quel che è girato storto.
+ *
+ * Le note stanno QUI e non nella nota dell'esecuzione (`runs.note`, che è una
+ * riga sola di conteggi) perché sono la spiegazione di quello che si sta
+ * leggendo: nel log arriva tutto quello che serve a capire un giro, in un posto
+ * solo. `null` se non c'è nessuna fonte da raccontare.
+ */
+export function ingestLog(report: IngestReport, notes: string[] = []): string | null {
+  const testo = formatIngestReport(report);
+  if (testo === null) return null;
+  const righe = [testo];
+  const vere = notes.filter((nota) => nota.trim().length > 0);
+  if (vere.length > 0) {
+    righe.push("", "⚠️ <b>Note del giro</b>", ...vere.map((nota) => `• ${escapeHtml(nota)}`));
+  }
+  return righe.join("\n");
 }

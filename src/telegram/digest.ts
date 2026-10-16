@@ -48,6 +48,65 @@ export const WATCHLIST_REMINDER_DAYS = [3, 1];
 /** Tetto di promemoria per chat in un giro: oltre diventa un listone. */
 export const WATCHLIST_MAX_PER_RUN = 2;
 
+/**
+ * Le raccolte punti e i premi da richiedere si ricordano molto prima, e non per
+ * gusto di mandare messaggi: la data che l'archivio conosce è la FINE della
+ * raccolta, e per queste due cose è la data sbagliata. Scontrini e bollini si
+ * mettono via *mentre* si fa la spesa — a tre giorni dalla fine è tardi per
+ * cominciare — e il premio va richiesto, spesso con premi a numero limitato:
+ * aspettare l'ultimo giorno è il modo di restare senza.
+ *
+ * Trenta giorni vuol dire "c'è tempo, ma attrezzati"; sette, "richiedilo
+ * adesso"; l'uno resta perché è l'ultimo momento utile. La data vera della
+ * richiesta nei testi non c'è quasi mai (sull'archivio vero del 16/10/2026 una
+ * raccolta su tredici la nomina), quindi la scala è anticipata per costruzione e
+ * il messaggio lo dice invece di far finta di saperlo.
+ */
+export const RACCOLTA_REMINDER_DAYS = [30, 7, 1];
+
+/** Che tipo di promemoria merita questo item: lo dicono i suoi tag. */
+export type ReminderKind = "watchlist" | "raccolta" | "premio";
+
+/**
+ * Una raccolta punti che dice anche "richiedi il premio" resta anzitutto una
+ * raccolta: il consiglio che serve è il primo dei due, cioè mettere via gli
+ * scontrini da subito. Il tag `premio_da_richiedere` copre tutto il resto — i
+ * concorsi in cui il premio si riscatta a parte, entro una data sua.
+ */
+export function reminderKindFor(item: ItemRow): ReminderKind {
+  if (item.tags.includes("raccolta_punti")) return "raccolta";
+  if (item.tags.includes("premio_da_richiedere")) return "premio";
+  return "watchlist";
+}
+
+/** La scala dei promemoria di questo item: le raccolte punti molto prima. */
+export function reminderDaysFor(item: ItemRow): number[] {
+  return reminderKindFor(item) === "watchlist" ? WATCHLIST_REMINDER_DAYS : RACCOLTA_REMINDER_DAYS;
+}
+
+/** "chiude tra 12 giorni" · "chiude domani" · "chiude oggi". */
+function quandoChiude(left: number): string {
+  return left === 0 ? "chiude oggi" : left === 1 ? "chiude domani" : `chiude tra ${left} giorni`;
+}
+
+/**
+ * Il testo del promemoria. Per un concorso normale è la scheda con
+ * l'intestazione della watchlist; per raccolte e premi da richiedere c'è la riga
+ * che la data non dice: quello che c'è da fare ADESSO.
+ */
+function reminderText(item: ItemRow, left: number, now: Date): string {
+  const kind = reminderKindFor(item);
+  if (kind === "watchlist") {
+    return `⭐ <b>Watchlist</b> · ${quandoChiude(left)}\n\n${formatItemCard(item, now)}`;
+  }
+  const testa = kind === "raccolta" ? "🧾 <b>Raccolta punti</b>" : "🎫 <b>Premio da richiedere</b>";
+  const avviso =
+    kind === "raccolta"
+      ? "Metti via scontrini e bollini: si accumulano per tutta la raccolta, e il premio va richiesto prima che chiuda. Con i premi a numero limitato, aspettare l'ultimo giorno è il modo di restare senza."
+      : "Il premio non arriva da solo: va richiesto, e nei bandi la richiesta ha una data sua, prima della fine del concorso.";
+  return `${testa} · ${quandoChiude(left)}\n\n${avviso}\n\n${formatItemCard(item, now)}`;
+}
+
 function parseQuietHours(value: string): [number, number] | null {
   const match = /^(\d{1,2})\s*-\s*(\d{1,2})$/.exec(value.trim());
   if (!match) return null;
@@ -175,10 +234,12 @@ export async function sendDigests(deps: NotifyDeps): Promise<{ chats: number; me
 /**
  * Promemoria di chiusura per i concorsi che hai messo in watchlist.
  *
- * Regole: solo item salvati, solo con una scadenza, solo a 3 giorni e a 1 giorno
- * dalla chiusura, una volta sola per soglia (la consegna "reminder:3" resta
- * registrata). Rispetta la fascia di silenzio e non tocca il ritmo degli avvisi
- * immediati: è un messaggio che hai chiesto tu salvando il concorso.
+ * Regole: solo item salvati, solo con una scadenza, una volta sola per soglia (la
+ * consegna "reminder:3" resta registrata). La scala delle soglie dipende
+ * dall'item: 3 e 1 giorno per un concorso, 30, 7 e 1 per una raccolta punti o un
+ * premio da richiedere (vedi RACCOLTA_REMINDER_DAYS), con il testo che dice cosa
+ * mettere da parte. Rispetta la fascia di silenzio e non tocca il ritmo degli
+ * avvisi immediati: è un messaggio che hai chiesto tu salvando il concorso.
  */
 export async function sendWatchlistReminders(deps: NotifyDeps): Promise<{ sent: number }> {
   const { store, tg, now } = deps;
@@ -195,16 +256,21 @@ export async function sendWatchlistReminders(deps: NotifyDeps): Promise<{ sent: 
       if (inviati >= WATCHLIST_MAX_PER_RUN) break;
       if (item.status === "expired") continue;
       const left = daysLeft(item.deadline, now);
+      // La scala delle soglie è dell'item, non della funzione: una raccolta punti
+      // si avvisa a 30 giorni, un concorso a 3 (vedi RACCOLTA_REMINDER_DAYS).
+      const scala = reminderDaysFor(item);
       // Senza scadenza non c'è niente da ricordare in tempo: resta nella watchlist.
-      if (left === null || left > WATCHLIST_REMINDER_DAYS[0]) continue;
+      if (left === null || left > scala[0]) continue;
       // Un item che scade già chiuso (left < 0) non si annuncia più.
       if (left < 0) continue;
-      const soglia = left <= 1 ? 1 : 3;
-      const kind = `reminder:${soglia}`;
-      if (await store.isDelivered(chatId, item.id, kind)) continue;
+      // La prima soglia utile fra quelle non ancora superate: la più PICCOLA che
+      // copre i giorni rimasti. Così un item salvato in ritardo riceve il
+      // promemoria che gli tocca adesso, non il primo della scala.
+      const soglia = [...scala].reverse().find((giorni) => giorni >= left) ?? scala[0];
+      const segno = `reminder:${soglia}`;
+      if (await store.isDelivered(chatId, item.id, segno)) continue;
 
-      const quando = left === 0 ? "chiude oggi" : left === 1 ? "chiude domani" : `chiude tra ${left} giorni`;
-      const testo = `⭐ <b>Watchlist</b> · ${quando}\n\n${formatItemCard(item, now)}`;
+      const testo = reminderText(item, left, now);
       const result = await tg.sendMessage(chatId, testo, {
         keyboard: instantKeyboard(item, regolamentoUrl(item)),
         disablePreview: true,
@@ -213,7 +279,7 @@ export async function sendWatchlistReminders(deps: NotifyDeps): Promise<{ sent: 
 
       // La soglia annunciata resta registrata: il giro successivo non ripete lo
       // stesso promemoria (e quello a un giorno resta un messaggio a sé).
-      await store.recordDelivery(chatId, item.id, kind, now.toISOString());
+      await store.recordDelivery(chatId, item.id, segno, now.toISOString());
       inviati++;
       sent++;
     }

@@ -2,12 +2,14 @@ import type { ChatFilters, ItemKind, ItemQuery, ItemRow, Prefs, SourceRow, UiSta
 import { truncate } from "../lib/text.ts";
 import {
   CATEGORY_ORDER,
+  PRIZE_QUICK_FILTERS,
   TAG_FILTERS,
   activeFilterCount,
   defaultFilters,
   filterChangeLabel,
   filterableSources,
   filtersFor,
+  prizeFilterFor,
   withFilterChange,
   type FilterChange,
 } from "../filters.ts";
@@ -65,6 +67,16 @@ const RESCORE_PAGE = 200;
  * si accendono e si spengono, e l'anticipo di un mese fa non è quello di oggi).
  */
 const VANTAGGIO_MS = 30 * 86_400_000;
+/**
+ * Quanti log si tengono a portata di mano in 🧾 Log delle raccolte.
+ *
+ * Venti raccolte: con la raccolta su GitHub ogni mezz'ora sono circa dieci ore
+ * di storia — un guasto di stamattina c'è ancora, uno della settimana scorsa no.
+ * La storia lunga non si perde, sta nella pagina dei job su GitHub; quello che
+ * serve qui è leggere l'ultimo giro senza aprire un browser, e poter tornare
+ * indietro di qualche lancio quando un guasto è appena passato.
+ */
+const LOGS_SHOWN = 20;
 
 export function defaultPrefs(chatId: number): Prefs {
   return {
@@ -163,6 +175,9 @@ function intentForCommand(command: string, args: string): Intent | null {
     case "/coupon":
     case "/rimborsi":
       return { kind: "section", section: "coupon" };
+    case "/gratis":
+    case "/gratuiti":
+      return { kind: "section", section: "gratis" };
     case "/vinti":
       return { kind: "section", section: "vinti" };
     case "/scaduti":
@@ -183,6 +198,11 @@ function intentForCommand(command: string, args: string): Intent | null {
     case "/diagnostica":
     case "/utili":
       return { kind: "section", section: "diagnostica" };
+    // Il log delle raccolte è una scorciatoia per l'admin: per gli altri la
+    // sezione non si apre (vedi handleUpdate).
+    case "/log":
+    case "/raccolte":
+      return { kind: "section", section: "log" };
     case "/impostazioni":
       return { kind: "section", section: "impostazioni" };
     case "/stop":
@@ -341,6 +361,28 @@ const COUPON: ItemKind[] = ["coupon"];
 
 function baseSectionQuery(section: string, now: Date, lastCheckAt: string | null): ItemQuery {
   if (section === "news") return { kinds: ARTICOLI, statuses: ATTIVI };
+  // 🆓 Gratis: i concorsi dove non si compra niente. È un vincolo sull'ARCHIVIO
+  // (`withoutPurchase`), non sui tag: il tag "gratis" lo assegna l'arricchimento
+  // leggendo le parole della pagina, e un concorso senza acquisto che non scrive
+  // "gratis" da nessuna parte è uguale a tutti gli altri. L'ordine è per
+  // punteggio, come le altre sezioni che suggeriscono: chi ha davanti a sé "solo
+  // quelli che non costano" sta chiedendo quali vale la pena fare.
+  //
+  // Non è lo stesso filtro di 🎁 Solo senza acquisto (filtri personali): quello
+  // cambia TUTTE le sezioni filtrate e resta acceso; questa è una domanda secca
+  // che non tocca le preferenze.
+  if (section === "gratis") {
+    return { kinds: CONCORSI, statuses: ATTIVI, withoutPurchase: true, orderBy: "score" };
+  }
+  // 🎁 Tipi di premio: `premi:<tag>` è "solo i concorsi con questo premio", in
+  // INCLUSIONE (`tags`) — il contrario dei filtri personali, che sono esclusioni.
+  // La visita d'ingresso alla schermata delle porte ha tag null e non passa da
+  // qui. Il tag è uno di quelli offerti (vedi isKnownSection): una sezione
+  // inventata non legge niente, invece di leggere tutto per sbaglio.
+  const premio = prizeFilterFor(section);
+  if (premio?.tag) {
+    return { kinds: CONCORSI, statuses: ATTIVI, tags: [premio.tag], orderBy: "score" };
+  }
   // 💶 Coupon: l'ordine è quello di arrivo (il default dello store), non il
   // punteggio: fra buoni sconto "quale vale la pena" non vuol dire niente, mentre
   // "quale è arrivato adesso" sì — un coupon vecchio è un coupon scaduto.
@@ -418,8 +460,17 @@ function baseSectionQuery(section: string, now: Date, lastCheckAt: string | null
  * fonte, e una ricerca è già una domanda precisa.
  */
 const SEZIONI_FILTRATE = new Set([
-  "nuovi", "oggi", "settimana", "scadenze", "news", "scaduti", "preferiti-lista", "coupon",
+  "nuovi", "oggi", "settimana", "scadenze", "news", "scaduti", "preferiti-lista", "coupon", "gratis",
 ]);
+
+/**
+ * Se la sezione rispetta i filtri della chat. Sono i nomi dell'insieme più le
+ * sezioni per tipo di premio, che sono un prefisso (`premi:giftcard`): anche lì
+ * un filtro vale, perché anche lì il bot sta suggerendo cosa guardare.
+ */
+function isFilteredSection(section: string): boolean {
+  return SEZIONI_FILTRATE.has(section) || section.startsWith("premi:");
+}
 
 function sectionQuery(section: string, now: Date, lastCheckAt: string | null, filters: ChatFilters): ItemQuery {
   const base = baseSectionQuery(section, now, lastCheckAt);
@@ -429,7 +480,7 @@ function sectionQuery(section: string, now: Date, lastCheckAt: string | null, fi
   if (section === "preferiti-lista" && filters.favoriteBrands.length > 0) {
     return filtersFor(filters, { ...base, brands: [...filters.favoriteBrands] });
   }
-  return SEZIONI_FILTRATE.has(section) ? filtersFor(filters, base) : base;
+  return isFilteredSection(section) ? filtersFor(filters, base) : base;
 }
 
 /** Sezioni il cui contenuto viene dalle decisioni di QUESTA chat, non da una query. */
@@ -448,6 +499,8 @@ function isListSection(section: string): boolean {
     section === "ignorati" ||
     section === "preferiti-lista" ||
     section === "coupon" ||
+    section === "gratis" ||
+    section.startsWith("premi:") ||
     section.startsWith("cerca:")
   );
 }
@@ -504,7 +557,7 @@ async function loadScreenData(
   // senza filtri si contano solo per poter dire "vedi 12 di 40".
   const [
     archiveTotal, contest, news, coupon, contestTotal, newsTotal, couponTotal,
-    nuovi, oggi, settimana, scadenze, preferiti, quantiScaduti,
+    nuovi, oggi, settimana, scadenze, preferiti, quantiScaduti, gratis,
   ] = await Promise.all([
       store.countItems({}),
       store.countItems(filtersFor(filters, { kinds: CONCORSI })),
@@ -525,9 +578,26 @@ async function loadScreenData(
         : Promise.resolve(0),
       // Il conteggio dei chiusi serve solo allo storico: fuori da lì resta a zero.
       state.section === "storico" ? store.countItems(scaduti) : Promise.resolve(0),
+      // 🆓 Gratis: il numero è quello che il bottone mostra, e nasce dalla STESSA
+      // query della sezione — così il conto non può dire una cosa e l'elenco
+      // un'altra (è la regola delle caselle finali del README).
+      store.countItems(sectionQuery("gratis", now, null, filters)),
     ]);
+  // I tipi di premio si contano solo quando si apre 🎁 Tipi di premio: cinque
+  // query per un menù che non mostra quei numeri sarebbero lavoro per niente, a
+  // ogni schermata. 🆓 Gratis è già contata qui sopra: la stessa query non si
+  // paga due volte.
+  const premi: Record<string, number> = {};
+  if (state.section === "premi") {
+    for (const voce of PRIZE_QUICK_FILTERS) {
+      premi[voce.section] =
+        voce.section === "gratis" ? gratis : await store.countItems(sectionQuery(voce.section, now, null, filters));
+    }
+  }
+
   const counts: ScreenCounts = {
-    nuovi, oggi, settimana, scadenze, news, contest, coupon, contestTotal, newsTotal, couponTotal, preferiti,
+    nuovi, oggi, settimana, scadenze, news, contest, coupon, contestTotal, newsTotal, couponTotal, preferiti, gratis,
+    premi,
     filtri: activeFilterCount(filters),
     salvati: salvati.length, vinti: vinti.length, ignorati: ignorati.length, scaduti: quantiScaduti,
   };
@@ -580,6 +650,12 @@ async function loadScreenData(
   const fonti = sezioneFonti ? await store.getSources() : ([] as SourceRow[]);
   const diagnosi = state.section === "diagnostica" ? diagnosiFonti(fonti, await store.sourceStats(), now) : [];
 
+  // 🧾 Log delle raccolte: è dell'admin, e i log si leggono solo aprendo quella
+  // schermata (sono kilobyte di dettaglio: leggerli a ogni menù sarebbe lavoro
+  // per niente). Venti raccolte all'indietro, una per schermata.
+  const isAdmin = chatId === deps.adminChatId;
+  const logs = isAdmin && state.section === "log" ? await store.recentLogs(LOGS_SHOWN) : [];
+
   const tutteLeFonti = state.section === "filtri-fonti" ? filterableSources() : [];
   const pagineFonti = Math.max(1, Math.ceil(tutteLeFonti.length / PAGE_SIZE));
   const paginaFonti = Math.min(Math.max(state.page, 0), pagineFonti - 1);
@@ -592,11 +668,19 @@ async function loadScreenData(
   // La paginazione vale anche per le sezioni che non sono elenchi di item: il
   // totale su cui si contano le pagine è il loro, altrimenti lo stato della
   // pagina verrebbe riportato a 0 a ogni tocco. Il passo cambia con la
-  // schermata (le marche stanno due per riga), e il conto deve usare lo stesso
-  // passo della tastiera, altrimenti "Succ" salta mezzo schermo.
-  const passo = state.section === "preferiti" ? BRANDS_PAGE_SIZE : PAGE_SIZE;
+  // schermata — le marche stanno due per riga, con i log è una raccolta per
+  // schermata — e il conto deve usare lo stesso passo della tastiera: se il passo
+  // fosse quello degli elenchi (6), due log farebbero UNA pagina e la freccia
+  // «Più vecchio» riporterebbe alla stessa raccolta.
+  const passo = state.section === "log" ? 1 : state.section === "preferiti" ? BRANDS_PAGE_SIZE : PAGE_SIZE;
   const totalePagine =
-    state.section === "filtri-fonti" ? tutteLeFonti.length : state.section === "preferiti" ? marche.length : total;
+    state.section === "filtri-fonti"
+      ? tutteLeFonti.length
+      : state.section === "preferiti"
+        ? marche.length
+        : state.section === "log"
+          ? logs.length
+          : total;
   const pagine = Math.max(1, Math.ceil(totalePagine / passo));
   const page = Math.min(Math.max(state.page, 0), pagine - 1);
 
@@ -605,6 +689,8 @@ async function loadScreenData(
     page,
     items,
     total,
+    logs,
+    isAdmin,
     openItem,
     decision,
     regolamentoUrl: openItem ? regolamentoUrl(openItem) : null,
@@ -750,6 +836,13 @@ export async function handleUpdate(update: TelegramUpdate, deps: BotDeps): Promi
     // Senza comando: se la chat è in modalità ricerca, il testo è la ricerca.
     else if (state.section === "cerca" && text.length > 0) intent = { kind: "section", section: `cerca:${truncate(text, 40)}` };
     else intent = { kind: "home" };
+  }
+
+  // 🧾 Log delle raccolte è la schermata dell'admin: il bottone non compare
+  // nella tastiera dell'altra persona, e questo è il secondo cancello — un
+  // callback_data vecchio non apre una schermata che non è sua.
+  if (intent.kind === "section" && intent.section === "log" && chatId !== adminChatId) {
+    intent = { kind: "home" };
   }
 
   if (intent.kind === "decision") {

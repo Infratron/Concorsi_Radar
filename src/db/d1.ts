@@ -129,6 +129,7 @@ interface RunDbRow {
   items_new: number;
   ms: number;
   note: string | null;
+  log: string | null;
 }
 
 interface RobotsDbRow {
@@ -298,6 +299,9 @@ function rowToRun(row: RunDbRow): RunRow {
     itemsNew: row.items_new,
     ms: row.ms,
     note: row.note,
+    // Le righe scritte prima che la colonna esistesse non hanno un log: `null`,
+    // non una stringa vuota (un log vuoto sarebbe un lancio senza fonti).
+    log: row.log ?? null,
   };
 }
 
@@ -395,6 +399,16 @@ function buildWhere(query: ItemQuery): { sql: string; params: unknown[] } {
         .join(", ")}))`,
     );
     params.push(...query.excludeTags);
+  }
+  if (query.tags && query.tags.length > 0) {
+    // Inclusione: l'item entra se HA almeno uno di questi tag. Stesso json_each
+    // dell'esclusione (con LIKE un tag "moda" prenderebbe anche "moda_bambini").
+    where.push(
+      `EXISTS (SELECT 1 FROM json_each(items.tags) AS tag WHERE tag.value IN (${query.tags
+        .map(() => "?")
+        .join(", ")}))`,
+    );
+    params.push(...query.tags);
   }
   if (query.withoutPurchase === true) {
     where.push("requires_purchase = 0");
@@ -814,10 +828,10 @@ export function createD1Store(db: D1Like): Store {
     async recordRun(run: RunRow): Promise<void> {
       await db
         .prepare(
-          `INSERT INTO runs (started_at, trigger, sources_ok, sources_fail, items_new, ms, note)
-           VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          `INSERT INTO runs (started_at, trigger, sources_ok, sources_fail, items_new, ms, note, log)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
         )
-        .bind(run.startedAt, run.trigger, run.sourcesOk, run.sourcesFail, run.itemsNew, run.ms, run.note)
+        .bind(run.startedAt, run.trigger, run.sourcesOk, run.sourcesFail, run.itemsNew, run.ms, run.note, run.log)
         .run();
     },
 
@@ -825,6 +839,20 @@ export function createD1Store(db: D1Like): Store {
       const capped = Math.min(Math.max(Math.trunc(limit), 1), 50);
       const result = await db
         .prepare("SELECT * FROM runs ORDER BY started_at DESC LIMIT ?")
+        .bind(capped)
+        .all<RunDbRow>();
+      return (result.results ?? []).map(rowToRun);
+    },
+
+    /**
+     * I log delle ultime raccolte, dal più recente. `log IS NOT NULL` è il
+     * filtro che conta: i tick da 15 minuti non hanno un racconto da dare, quindi
+     * quello che resta è l'elenco dei lanci veri.
+     */
+    async recentLogs(limit: number): Promise<RunRow[]> {
+      const capped = Math.min(Math.max(Math.trunc(limit), 1), 50);
+      const result = await db
+        .prepare("SELECT * FROM runs WHERE log IS NOT NULL ORDER BY started_at DESC LIMIT ?")
         .bind(capped)
         .all<RunDbRow>();
       return (result.results ?? []).map(rowToRun);

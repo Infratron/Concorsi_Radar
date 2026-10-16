@@ -102,6 +102,14 @@ Decisioni di progetto che contano:
   dichiarato: "Cashback Fabuloso: 5 € di rimborso **e vinci** una lavatrice" sta
   fra i concorsi, perché nasconderlo costerebbe più di un coupon di troppo (la
   regola sta in [src/enrich/kind.ts](src/enrich/kind.ts)).
+- **I concorsi che non costano niente hanno una sezione loro.** Un'altra domanda
+  secca — "quali posso fare senza comprare?" — che prima si otteneva solo
+  accendendo il filtro **🎁 solo senza acquisto** in 🎛 Cosa vedi e ricordandosi
+  di spegnerlo: `🆓 Gratis` è una sezione, e `/gratis` un comando. Il vincolo è
+  sulla colonna `requires_purchase` (chi dichiara "senza obbligo di acquisto"
+  vince sul resto del testo, chi non dichiara niente resta in elenco), non sui
+  tag; il numero sul bottone nasce dalla stessa query dell'elenco, e i filtri
+  della chat valgono anche qui (qui sotto).
 - **Il bando si cerca dove c'è, e si salva sulla riga.** Il bottone 📄 Regolamento
   della scheda non dipende più dal fatto che il riassunto del feed nomini il
   bando: la raccolta legge la pagina del concorso, sceglie il link che somiglia al
@@ -255,8 +263,13 @@ database è raggiunto via API HTTP di D1. Servono tre *repository secret*
 Il permesso deve essere **Edit**, non Read: la raccolta scrive (e con Read il job
 fallisce con un 403). Non serve nessun permesso di zona o di dominio.
 
-Facoltativi, per gli avvisi e per il **report delle fonti** in chat (senza, tutto
-resta visibile in 📡 Fonti e in `/health`): `TELEGRAM_BOT_TOKEN` e `ADMIN_CHAT_ID`.
+Facoltativi, per l'**avviso di fonte in errore** in chat (senza, tutto resta
+visibile in 📡 Fonti e in `/health`): `TELEGRAM_BOT_TOKEN` e `ADMIN_CHAT_ID`.
+Il racconto di ogni raccolta — chi ha risposto e chi no, con l'ora e il codice
+HTTP — **non passa da Telegram**: si salva come log dell'esecuzione e si legge in
+🧾 **Log delle raccolte** (sezione 5), dove non fa rumore. Ecco perché con questi
+due secret mancanti non si perde niente di quello che si vedeva prima: i log si
+scrivono comunque, e li legge il bot.
 
 Se questi tre secret mancano, il radar non resta muto: il Worker se ne accorge e
 passa alla **raccolta di riserva**, e dopo **tre ore** senza una raccolta su
@@ -336,7 +349,7 @@ scegli il repository e imposta:
 | Deploy command | `npx wrangler deploy` |
 | Preview builds | **disattivate** (vedi sotto) |
 
-Il *build command* è la rete di sicurezza: se il typecheck o uno dei 243 test
+Il *build command* è la rete di sicurezza: se il typecheck o uno dei 534 test
 fallisce, la build si ferma e **il deploy non parte**. `npm ci` serve a rendere
 l'installazione riproducibile dal `package-lock.json`.
 
@@ -401,6 +414,8 @@ scrivere `/start`.
 
 [🆕 Nuovi (3)]        [📋 Oggi (12)]
 [📅 7 giorni (40)]    [⏳ Scadenze (2)]
+[🆓 Gratis (88)]
+[🎁 Tipi di premio]
 [⭐ Watchlist (1)]    [📰 News (7)]
 [🔍 Cerca]            [🗂 Storico]
 [💶 Coupon e rimborsi (67)]
@@ -414,14 +429,16 @@ scrivere `/start`.
 | 🆕 Nuovi | quello che è arrivato **dall'ultimo controllo** (il numero è sulla voce del menù) |
 | 📋 Oggi / 📅 7 giorni | l'archivio recente, ordinato per punteggio |
 | ⏳ Scadenze | chi chiude entro 7 giorni e **non è già chiuso** |
-| ⭐ Watchlist | i concorsi che hai salvato, **ordinati per scadenza** (chi chiude prima sta in cima) e con il promemoria a 3 giorni e 1 giorno dalla chiusura |
+| 🆓 Gratis | i concorsi dove non si compra niente: **senza scontrino, senza codice sulla confezione, senza spesa minima** (qui sotto) |
+| 🎁 Tipi di premio | cinque porte per tipo di premio — 💳 gift card, 🚗 auto e moto, ✈️ viaggi, 🛒 buoni spesa, 🆓 gratis: si entra, si guarda, si esce, senza accendere nessun filtro (qui sotto) |
+| ⭐ Watchlist | i concorsi che hai salvato, **ordinati per scadenza** (chi chiude prima sta in cima) e con il promemoria a 3 giorni e 1 giorno dalla chiusura — a 30, 7 e 1 per raccolte punti e premi da richiedere (qui sotto) |
 | 📰 News | gli articoli e le pagine-elenco che parlano di concorsi: **non** sono concorsi, e il link porta al pezzo, non alla pagina ufficiale |
 | 💶 Coupon e rimborsi | i buoni sconto, i rimborsi e le operazioni a cashback da spendere al negozio o online: **non** sono concorsi e **non** producono notifiche (qui sotto) |
 | 🗂 Storico | cosa è successo a quello che hai visto: 🏆 vinti, ⌛ chiusi (chi ha chiuso per ultimo in cima) e 🚫 scartati, che da lì puoi riprendere |
 | 🔍 Cerca | scrivi una parola: il bot cancella il tuo messaggio e mostra i risultati (concorsi e news insieme, gli articoli marcati 📰) |
 | 🏷 Preferiti per marca | le marche che segui: filtrano i concorsi, valgono **10 punti in più** e hanno una sezione loro (qui sotto) |
 | 🎛 Cosa vedi | i tuoi filtri: quali tipi di concorso, quali categorie di fonti e quali fonti vuoi vedere (qui sotto) |
-| 📡 Fonti | quali fonti rispondono: ora, codice HTTP e item dell'ultimo tentativo, più le ultime raccolte (e la porta a 🌡 Diagnostica) |
+| 📡 Fonti | quali fonti rispondono: ora, codice HTTP e item dell'ultimo tentativo, più le ultime raccolte (e le porte a 🌡 Diagnostica e — solo per l'admin — a 🧾 Log delle raccolte) |
 | 🏁 Vantaggio | `/vantaggio`: di quanto arriviamo prima degli aggregatori, e quanto spesso non arriviamo affatto |
 | ⚙️ Impostazioni | soglia degli avvisi, fascia di silenzio e orari dei digest, regolabili di fino, più la porta ai filtri |
 | 🔄 Aggiorna | rilegge tutto e dice se è arrivato qualcosa di nuovo |
@@ -498,7 +515,9 @@ una categoria spegne tutte le fonti che la dichiarano;
 - **⭐ stelle minime**: `Tutte`, `70+` o `80+`. È lo stesso filtro della riga in
 fondo agli elenchi, e come quello vale anche per le notifiche;
 - **🎁 solo senza acquisto**, che lascia fuori chi chiede uno scontrino, un codice
-sulla confezione o un minimo di spesa;
+sulla confezione o un minimo di spesa. È un filtro che **resta acceso** e cambia
+**tutte** le sezioni filtrate, mentre 🆓 Gratis è una domanda secca con una
+sezione sua: vedi la differenza qui sotto;
 - **📡 Scegli le fonti**: l'elenco delle fonti accese, una per riga e a pagine,
 per spegnere quella singola che ti manda rumore.
 
@@ -578,6 +597,10 @@ promemoria automatico **tre giorni e un giorno prima della chiusura** — un
 messaggio con il link, così non si perde proprio quello che tenevi d'occhio. Chi
 non ha una scadenza resta in watchlist senza promemoria.
 
+Se quello che hai salvato è una **raccolta punti** o un **premio da richiedere**,
+il promemoria arriva molto prima: sono le due cose per cui la data di chiusura è
+la data sbagliata (🧾 qui sotto).
+
 **Watchlist** e **Non mi interessa** addestrano i pesi: ogni tag dei concorsi che
 salvi guadagna un punto, quelli che ignori ne perdono uno (clamp ±5 per tag),
 quindi i punteggi si spostano verso i tuoi gusti. Le decisioni sono **per
@@ -595,10 +618,103 @@ digest e nella scheda — non sposta i pesi due volte.
 
 I comandi funzionano ancora ma sono scorciatoie, non il modo normale: `/start`
 (che è anche l'iscrizione, ed è l'unico pubblicato nel menù "/" di Telegram),
-`/menu`, `/nuovi`, `/oggi`, `/settimana`, `/scadenze`, `/salvati` (o
+`/menu`, `/nuovi`, `/oggi`, `/settimana`, `/scadenze`, `/gratis`, `/salvati` (o
 `/watchlist`), `/news`, `/coupon`, `/storico`, `/vinti`, `/scaduti`, `/cerca`, `/fonti`,
 `/diagnostica`, `/vantaggio`, `/impostazioni`, `/stop` e
 `/salva|/vinto|/ignora <id>`.
+
+### 🎁 Tipi di premio: cinque porte, nessun filtro acceso
+
+"Voglio vedere le gift card" e "non voglio più vedere le raccolte punti" sono due
+richieste diverse, e prima c'era un posto solo per la seconda. I filtri di 🎛 Cosa
+vedi sono tutti **esclusioni**: si accendono, **restano accese** e cambiano tutte
+le sezioni — chi vuole dare un'occhiata ai viaggi non vuole smettere di vedere il
+resto, e soprattutto non vuole ricordarsi di spegnere. 🎁 Tipi di premio è la
+porta per la prima richiesta: si entra, si guarda, si esce.
+
+Cinque bottoni, ognuno con quanti concorsi aprirebbe **adesso**, e dietro una
+sezione che filtra in **inclusione** sul tag dell'item (`tags` nella query, che è
+il campo nuovo in [src/types.ts](src/types.ts)). La sezione rispetta i filtri che
+hai già — ⭐ stelle minime, fonti spente, marche seguite — e il numero sul bottone
+nasce dalla stessa query dell'elenco, come per tutte le altre sezioni.
+
+| Porta | Come filtra | In archivio il 16/10/2026 |
+|---|---|---|
+| 💳 Gift card | tag `giftcard` | 35 |
+| 🚗 Auto e moto | tag `auto` | **2** |
+| ✈️ Viaggi | tag `viaggio` | 17 |
+| 🛒 Buoni spesa | tag `buoni_spesa` | 15 |
+| 🆓 Gratis | obbligo d'acquisto, non un tag | 88 |
+
+Tre cose da sapere su questi numeri, perché sono misurati e non stimati:
+
+- **🚗 Auto e moto è quasi vuota, ed è vero.** I concorsi con un'auto in palio ci
+  sono (una Fiat Panda è il premio classico), ma il tag lo assegna il testo —
+  "auto", "automobile", "moto" — e un bando che scrive solo "in palio una Panda"
+  non lo prende. Ho provato ad allargare il riconoscimento alle marche e alle
+  parole generiche: su 151 concorsi attivi si passerebbe da **2 a 4**, al prezzo
+  di taggare `auto` un peluche panda. Due che ci sono davanti a quattro di cui una
+  sbagliata è meglio, e il numero sul bottone lo dice subito com'è piccola;
+- **🆓 Gratis non è il tag `gratis`** (che sta su 31 item e vuol dire "la pagina
+  dice gratis"): è lo stesso vincolo dell'omonima sezione, cioè
+  `requires_purchase = 0`, che ne conta **88**. La porta riapre quella sezione
+  invece di duplicarla: due query e due testi per lo stesso elenco sono due cose
+  da tenere allineate, e prima o poi se ne allinea una sola;
+- **un item può stare in più porte** (una gift card per un viaggio sta in due): le
+  porte non si escludono a vicenda, e non c'è nessuna priorità fra loro.
+
+La direzione dell'errore è quella dichiarata: nessun concorso finisce nella porta
+sbagliata, ma qualcuno che dichiara il premio in modo insolito resta fuori. Chi
+non vuole perdere niente guarda 📋 Oggi, dove i tag sono comunque una riga della
+scheda (`🏷 giftcard, viaggio`) — non un elenco separato.
+
+### 🧾 Raccolte punti e premi da richiedere: si ricordano prima
+
+Per due cose la data di chiusura è la data **sbagliata**, e il promemoria
+standard arriverebbe quando è ormai tardi:
+
+- una **raccolta punti** (bollini, francobolli, punti fedeltà) si fa alla cassa,
+  una spesa alla volta: a tre giorni dalla fine non c'è più niente da mettere
+  via, e se gli scontrini li hai buttati per mesi la raccolta l'hai persa senza
+  accorgertene;
+- un **premio da richiedere** non arriva da solo: va riscattato, e nei bandi la
+  richiesta ha una data sua, prima della fine del concorso — con i premi a
+  numero limitato, aspettare l'ultimo giorno è il modo di restare senza.
+
+Quindi la scala dei promemoria dipende dall'item: **30, 7 e 1 giorno** per questi,
+**3 e 1** per tutti gli altri. Il messaggio non è la scheda e basta, ha una riga
+in più che dice cosa c'è da fare *adesso* — "metti via scontrini e bollini", "il
+premio va richiesto" — perché è l'unica informazione che la data non porta con sé.
+Chi decide se un item è dell'uno o dell'altro tipo sono i suoi **tag**
+(`reminderDaysFor` in [src/telegram/digest.ts](src/telegram/digest.ts)):
+`raccolta_punti` lo assegna la fonte e le regole da mesi, `premio_da_richiedere`
+è nuovo in [src/enrich/rules.ts](src/enrich/rules.ts) e riconosce le formule vere
+dei titoli ("richiedi premi Ariete", "richiedi i premi Imetec", "premi
+richiedibili entro il…").
+
+Le due scale non si mescolano: la soglia dei tre giorni non appartiene alla scala
+lunga. La scala dice **quando** avvisare, non pretende di averlo fatto per tempo:
+chi salva una raccolta quando i trenta giorni sono già passati riceve comunque il
+primo promemoria che gli tocca, con i giorni che mancano davvero ("chiude tra 5
+giorni"), e il conto non ricomincia da capo a ogni giro — ogni soglia si annuncia
+una volta sola. Restano valide tutte le regole di prima: solo item **salvati**,
+fascia di silenzio rispettata, e nessun promemoria per chi non dichiara una
+scadenza.
+
+Perché la scala è anticipata e non calcolata su una data vera: la data della
+richiesta **nei testi non c'è**. Misurato sull'archivio del 16/10/2026: **13
+raccolte punti attive, 7 con una data, e una sola che nomina la scadenza della
+richiesta**. Una seconda data da estrarre sarebbe stata una colonna, una
+migrazione e un arricchimento per una riga su tredici — quindi il codice anticipa
+e lo dice, invece di far finta di sapere quando scade il premio.
+
+**Nota su un archivio già esistente**: `raccolta_punti` c'è già su tutte le
+raccolte in archivio (lo dichiara la fonte in
+[src/config/sources.ts](src/config/sources.ts)), quindi la scala lunga funziona
+subito per loro. Il tag nuovo `premio_da_richiedere` invece si assegna
+all'ingestione: le righe raccolte prima di oggi non ce l'hanno, e per quelle
+resta la scala dei tre giorni (nessun comando di riempimento lo aggiunge: quello
+di `npm run rules` cerca i bandi, non i tag).
 
 ### 💶 Coupon e rimborsi: si spende meno, non si vince
 
@@ -653,6 +769,51 @@ chat: **6 fonti su 6 rispondono, 107 item letti, 72 nuovi di cui 67 coupon**,
 anche un premio. Si apre con `/coupon` e la schermata dice `67 coupon · pagina
 1/12`.
 
+### 🆓 Gratis: i concorsi che non costano niente
+
+"Quali posso fare **senza comprare**?" è una delle prime domande di chi usa il
+bot, e fino a oggi si rispondeva girando intorno al problema: il filtro **🎁 solo
+senza acquisto** in 🎛 Cosa vedi lascia fuori chi chiede uno scontrino, ma è un
+filtro che **resta acceso** e cambia **tutte** le sezioni — chi voleva solo dare
+un'occhiata ai gratis doveva accenderlo, guardare, e spegnerlo. Adesso c'è una
+sezione, `🆓 Gratis (88)`, e il comando `/gratis`.
+
+Il numero sul bottone non è un conteggio a parte: nasce dalla **stessa query**
+della sezione (`kinds: ["contest"], statuses: ["new", "sent"],
+withoutPurchase: true`, ordinata per punteggio), quindi elenco e totale non
+possono raccontare due cose diverse. Il vincolo è sull'**archivio**, cioè sulla
+colonna `requires_purchase`, non sui tag: il tag `gratis` lo assegna
+l'arricchimento leggendo le parole della pagina, e un concorso senza acquisto che
+non scrive "gratis" da nessuna parte è identico a tutti gli altri.
+
+Da dove viene `requires_purchase` ([src/enrich/rules.ts](src/enrich/rules.ts)):
+l'arricchimento cerca il segnale d'acquisto — "acquist", "scontrin", "raccolta
+punti", "minimo di spesa", "codice sulla confezione" — e **vince la negazione**:
+basta che la pagina dica "senza obbligo di acquisto" e il concorso resta gratis,
+anche se il resto del testo parla di scontrini. La direzione dell'errore è
+voluta: chi non dichiara niente **resta in elenco** ("non lo so" non è una prova,
+e il default della colonna è 0). Una riga in più da scartare costa meno di un
+concorso gratis che sparisce perché nessuno l'ha scritto.
+
+Tre differenze dal filtro 🎁:
+
+- **non tocca le preferenze**: aprire 🆓 Gratis non accende niente in 🎛 Cosa
+  vedi, e chiudendola si torna esattamente a com'era. Il filtro resta la scelta
+  stabile di chi *non vuole mai* vedere i concorsi a scontrino;
+- **i filtri della chat valgono anche qui**, come in tutte le sezioni che
+  suggeriscono: con le ⭐ stelle minime alte o una marca muta l'elenco si
+  accorcia, e il numero sul bottone si accorcia con lui;
+- **sono concorsi**: i coupon "senza acquisto" e gli articoli che parlano di
+  concorsi gratis non entrano — in 🆓 Gratis c'è solo roba su cui si partecipa, e
+  il punteggio è quello delle altre sezioni (a differenza di 💶 Coupon, qui
+  "quanto vale la pena" vuol dire qualcosa).
+
+Misurato il 16/10/2026 sull'archivio vero: **151 concorsi attivi, 88 senza
+acquisto** — quasi sei su dieci, il che dice anche quanto sia larga la falla di
+un elenco che li mescola a chi chiede lo scontrino. Si apre con `/gratis`, o dal
+bottone `🆓 Gratis` che sta nel menù su una riga sua, subito sotto le sezioni del
+periodo.
+
 ### 📡 Fonti: chi ha risposto, senza aprire i log di GitHub
 
 Alle prime raccolte la domanda è una sola — *chi risponde e chi no* — e fino a
@@ -673,20 +834,58 @@ fonte che ci rifiuta, il secondo una rete caduta — e senza codice HTTP resta i
 messaggio dell'errore), un **200 con 0 item** è una fonte che risponde ed è vuota
 (non è rotta: il numero degli item è lì proprio per distinguerla), un **304** è
 una risposta — la pagina non è cambiata — e **robots.txt** non è né un guasto né
-una risposta: siamo noi a non poterla leggere. Sono le stesse parole nel report,
+una risposta: siamo noi a non poterla leggere. Sono le stesse parole nel log,
 nella schermata e in `/health` (`lastStatus`, `lastError`, `lastItems` per fonte),
 perché il vocabolario degli esiti sta in un posto solo
 ([src/telegram/report.ts](src/telegram/report.ts)).
 
-**Il report fonte per fonte** arriva in chat all'admin nelle **prime tre raccolte**
-con la diagnostica accesa — con l'esito di ognuna e i problemi in cima — e in ogni
-raccolta lanciata **a mano** dal pulsante *Run workflow*: lì la domanda è di un
-umano ("ho cambiato una fonte, come è andata?"), e a una domanda si risponde
-sempre. Negli altri giri non si manda niente: lo stato resta in 📡 Fonti, che non
-fa rumore. Quale raccolta ha già ricevuto il report lo dice la nota
-dell'esecuzione (`diagnostica: inviata`), e il segno si scrive **solo** se il
-messaggio è partito davvero, così un invio fallito si ritenta al giro dopo invece
-di essere dato per fatto.
+**Il racconto fonte per fonte** non arriva più in chat come messaggio: si salva
+con l'esecuzione e si legge quando serve, in 🧾 Log delle raccolte (qui sotto).
+Un riepilogo che si presenta da solo ogni mezz'ora diventa rumore, e il rumore si
+smette di leggere; un log che sta al suo posto e si apre dopo aver cambiato una
+fonte no.
+
+### 🧾 Log delle raccolte: un log per ogni lancio (solo per l'admin)
+
+Da 📡 Fonti, l'admin ha una porta in più: **🧾 Log delle raccolte**, con una
+raccolta per schermata e il racconto **intero** di quel giro — quante fonti sono
+state provate, quante hanno risposto, chi non ha risposto e perché, quanti item
+sono arrivati — più le note della pipeline (una fonte che ha fallito tre volte di
+fila, le fonti rimandate al giro dopo per budget). È lo stesso testo che il job
+scrive nella sua pagina di riepilogo su GitHub, letto dal telefono.
+
+```
+🧾 Log delle raccolte · 1/12
+
+GitHub · 20/11 10:30 · 30 ok / 2 errori · 185 nuovi
+
+🧪 Raccolta su GitHub · 10:30
+32 fonti provate, 30 hanno risposto, 2 no · 210 item letti, 185 nuovi
+
+Non hanno risposto
+🔴 Tiscali · HTTP 403
+⚪️ Soldissimi · HTTP 304 · non è cambiata
+```
+
+Le frecce scorrono la storia (gli ultimi **20** lanci: con la raccolta ogni
+mezz'ora sono circa dieci ore, e per la storia lunga c'è la pagina dei job su
+GitHub), e ogni log dice da dove viene il giro — `GitHub`, `questo PC` o
+`Raccolta di riserva (Worker)`, che è quella che parte dalla rete di Cloudflare
+quando GitHub tace.
+
+**La schermata è dell'admin, e non è un segreto:** l'altra persona ha le sue
+sezioni e non ha niente da fare con i 403 di una fonte. Il gate è doppio — il
+bottone non esiste nella sua tastiera, e la sezione non si apre nemmeno da un
+`callback_data` vecchio (vedi `handleUpdate` in [src/telegram/bot.ts](src/telegram/bot.ts))
+— perché un filtro solo è un filtro che prima o poi passa. Il comando `/log` (o
+`/raccolte`) funziona anche scritto a mano, ma **non è pubblicato** nel menù "/"
+di Telegram, che registra solo `/start` ([src/telegram/api.ts](src/telegram/api.ts)):
+chi non lo conosce non lo trova scritto da nessuna parte.
+
+**Perché i tick non ci sono**: il log lo scrivono le **raccolte** (`log` nella
+tabella `runs`), non i tick da 15 minuti che consegnano gli avvisi e mettono via i
+concorsi scaduti. Quindi l'elenco dei log è l'elenco dei **lanci veri**, senza
+novantasei righe al giorno che non raccontano niente.
 
 ### 🌡 Diagnostica: quali fonti valgono la pena
 
@@ -751,7 +950,8 @@ Ogni voce si regola di fino e di solito:
 | 📬 Digest | le **24 ore** una per una: un tocco accende l'ora, lo stesso tocco la spegne | `8 + 19`, `7 + 13 + 20`, `Off` |
 
 Dentro la **fascia di silenzio** non parte nessuna notifica — avvisi immediati,
-digest, promemoria della watchlist e promemoria della raccolta ferma — e gli item
+digest, promemoria della watchlist (raccolte punti comprese) e promemoria della
+raccolta ferma — e gli item
 restano in attesa del digest successivo. Con il silenzio spento i due cursori
 partono dalla fascia solita (23–7) e lo riaccendono: chi tocca ➖ ➕ vuole una
 fascia, e `Off` resta a un tocco per disfarlo.
@@ -1195,19 +1395,22 @@ npm run dry-run                                        # cosa verrebbe inviato, 
 npm run ingest                                         # raccolta vera, come su Actions
 npm run prune                                          # cosa non è più un concorso attivo (elenco)
 npm run prune -- --apply                               # e lo toglie dall'archivio
-npm test                                               # 518 test
+npm test                                               # 534 test
 npm run typecheck
 ```
 
 In chat: 📡 **Fonti** per lo stato di ogni fonte — ora, codice HTTP e item
-letti nell'ultimo tentativo — e delle ultime raccolte, 🌡 **Diagnostica** (o
-`/diagnostica`) per sapere quali fonti **non portano concorsi** o falliscono, con
-il contributo di ognuna letto dall'archivio, ⚙️ **Impostazioni** per
-soglia, silenzio e digest (a cursori: vedi la sezione 5), 🎛 **Cosa vedi** per i
-filtri personali. Le stesse informazioni per fonte stanno in `/health`, nei campi
-`lastStatus` / `lastError` / `lastItems`.
-La tabella `runs` in D1 conserva la nota di ogni esecuzione: quelle con
-`trigger = actions` sono la raccolta su GitHub, le altre i tick del Worker.
+letti nell'ultimo tentativo — e delle ultime raccolte, 🧾 **Log delle raccolte**
+(solo admin, da 📡 Fonti o con `/log`) per il racconto **intero** di un lancio,
+fonte per fonte, 🌡 **Diagnostica** (o `/diagnostica`) per sapere quali fonti
+**non portano concorsi** o falliscono, con il contributo di ognuna letto
+dall'archivio, ⚙️ **Impostazioni** per soglia, silenzio e digest (a cursori: vedi
+la sezione 5), 🎛 **Cosa vedi** per i filtri personali. Le stesse informazioni per
+fonte stanno in `/health`, nei campi `lastStatus` / `lastError` / `lastItems`.
+La tabella `runs` in D1 conserva la nota e il log di ogni esecuzione: quelle con
+`trigger = actions` sono la raccolta su GitHub, le altre i tick del Worker, e il
+log (`log`) ce l'hanno solo le raccolte — i tick e i digest lo lasciano vuoto, ed
+è per questo che 🧾 Log delle raccolte è l'elenco dei lanci.
 
 ## 11. Limiti noti
 
@@ -1234,14 +1437,17 @@ La tabella `runs` in D1 conserva la nota di ogni esecuzione: quelle con
   riattivarli dal pulsante *Enable workflow*). Per un radar di concorsi va bene;
   se ti serve puntualità, l'alternativa è Workers Paid con la raccolta dentro il
   Worker.
-- **Il report delle fonti gira dentro la raccolta su Actions**, quindi per
-  vederlo arrivare serve che quel codice sia **su GitHub**: un deploy del Worker
-  non lo aggiorna, e il report è dell'ambiente in cui la raccolta gira davvero (i
-  log del runner sono la ragione per cui esiste). Le colonne dell'ultimo
-  tentativo invece le scrive anche il Worker, nella raccolta di riserva: appena un
-  tick gira, 📡 Fonti ha i codici HTTP di tutte le fonti che la rete di Cloudflare
-  raggiunge. L'invio del messaggio è coperto dai test con il client Telegram finto
-  ([test/report.test.ts](test/report.test.ts)), come le altre notifiche.
+- **Il log di una raccolta lo scrive la raccolta**, quindi per vederlo arrivare
+  serve che quel codice sia **su GitHub**: un deploy del Worker non aggiorna
+  `npm run ingest`, ed è il runner a sapere come sono andate le fonti (i suoi log
+  sono la ragione per cui questo racconto esiste). Finché il codice su GitHub è
+  vecchio, i giri nuovi non hanno un log — e in 🧾 Log delle raccolte resta
+  l'ultimo che c'è, non una riga vuota. I tick e la raccolta di riserva girano
+  invece dentro il Worker, quindi il loro log arriva con il **deploy**. Le colonne
+  dell'ultimo tentativo le scrivono entrambi: appena un tick gira, 📡 Fonti ha i
+  codici HTTP di tutte le fonti che la rete di Cloudflare raggiunge. La lettura
+  dalla chat e il testo del log sono coperti dai test
+  ([test/report.test.ts](test/report.test.ts), [test/telegram.test.ts](test/telegram.test.ts)).
 - **La raccolta dipende dai tre secret su GitHub**: senza, il job fallisce subito
   e per due ore il radar resta completamente fermo; poi il Worker riparte con la
   raccolta di riserva (2 fonti su 12 da qui, contro 12 su 12 da Actions). Dopo tre
@@ -1308,6 +1514,12 @@ La tabella `runs` in D1 conserva la nota di ogni esecuzione: quelle con
   fonte riprovata prima della migrazione scrive `ok, codice non registrato`
   invece di uno `0 item` che sarebbe una misura inventata: ogni fonte torna alla
   riga completa al primo tentativo successivo.
+- **Stessa cosa per i log delle raccolte**: la colonna `log` di `runs` va
+  aggiunta con `ALTER TABLE runs ADD COLUMN log TEXT;` prima di pubblicare il
+  codice che la scrive — la raccolta **inserisce** quella colonna, quindi su un
+  database non migrato ogni lancio nuovo fallirebbe. Le righe scritte prima
+  restano senza log (`null`, che significa "questo giro non ha un racconto", non
+  "racconto vuoto") e in 🧾 Log delle raccolte non compaiono.
 - **Stessa cosa per i filtri personali**: la colonna `filters` di `prefs` va
   aggiunta con `ALTER TABLE prefs ADD COLUMN filters TEXT NOT NULL DEFAULT '{}';`
   prima di pubblicare il codice che la usa (l'`ALTER` è già stato eseguito sul

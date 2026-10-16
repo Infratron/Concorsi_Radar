@@ -100,37 +100,6 @@ export const COLLECTION_REMINDER_GAP_MS = 6 * 60 * 60 * 1000;
 export const COLLECTION_REMINDER_MARK = "promemoria raccolta: inviato";
 export const COLLECTION_REMINDER_SKIP = "promemoria raccolta: no";
 
-/**
- * Quante raccolte su GitHub si raccontano per intero, all'inizio: il report
- * fonte-per-fonte serve a chi sta mettendo su il radar, e dopo tre giri ognuno sa
- * chi risponde e chi no. Il resto del tempo lo stato resta in 📡 Fonti.
- */
-export const FIRST_INGEST_REPORTS = 3;
-/** Il segno lasciato nella nota quando il report è partito davvero. */
-export const INGEST_REPORT_MARK = "diagnostica: inviata";
-export const INGEST_REPORT_SKIP = "diagnostica: no";
-
-/**
- * Decide se questo giro di raccolta va raccontato fonte per fonte.
- *
- * Perché si contano le raccolte CON la diagnostica accesa e non tutte quelle mai
- * fatte: il workflow di questo repository gira da mesi, quindi "le prime tre
- * esecuzioni" in senso assoluto sono passate da un pezzo e il report non
- * arriverebbe mai. Si guarda il segno nella nota (vedi INGEST_REPORT_MARK), quindi
- * il conteggio parte dalla prima raccolta che la diagnostica ce l'ha.
- *
- * Il workflow lanciato a mano è una domanda di un umano — "come sono andate le
- * fonti?", di solito dopo averne cambiata una — e a una domanda si risponde
- * sempre.
- */
-export function shouldReportIngest(runs: RunRow[], eventName: string): boolean {
-  if (eventName === "workflow_dispatch") return true;
-  const conDiagnostica = runs.filter(
-    (run) => isExternalTrigger(run.trigger) && (run.note ?? "").includes(INGEST_REPORT_MARK),
-  ).length;
-  return conDiagnostica < FIRST_INGEST_REPORTS;
-}
-
 export interface CollectionCheck {
   /** Ore dall'ultima raccolta esterna; null se non compare nella finestra. */
   oreDaRaccolta: number | null;

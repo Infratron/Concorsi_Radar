@@ -232,6 +232,18 @@ const TAG_MATCHERS: { tag: string; pattern: RegExp }[] = [
   { tag: "sport", pattern: /\b(palestra|sport|calcio|partita|maglia|campo)\b/ },
   { tag: "carburante", pattern: /\b(carburante|benzina|rifornimento|gasolio)\b/ },
   { tag: "raccolta_punti", pattern: /raccolta punti|punti fedelt|bollini|francobolli/ },
+  // "Premi da richiedere": il premio non arriva da solo, si riscatta — e la
+  // richiesta ha una data sua, prima della fine del concorso. È quello che
+  // distingue una raccolta punti da un'estrazione: il messaggio della watchlist
+  // cambia scala per questi item (vedi RACCOLTA_REMINDER_DAYS in
+  // src/telegram/digest.ts), perché a tre giorni dalla chiusura è tardi.
+  // I titoli veri lo dicono così: "richiedi premi Ariete", "richiedi i premi
+  // Imetec", "richiedi Buoni Amazon", "premi richiedibili entro il…".
+  {
+    tag: "premio_da_richiedere",
+    pattern:
+      /richied[ie]\w*\s+(?:i\s+|il\s+|la\s+|lo\s+|un\s+|una\s+)?(?:premi|premio|buoni|buono)|premi\s+(?:da\s+richiedere|richiedibil)|riscatt\w*\s+(?:i\s+|il\s+|la\s+)?(?:premi|premio)|premio\s+da\s+riscattare/,
+  },
   { tag: "scontrino", pattern: /\b(scontrino|ticket|cassa)\b/ },
   { tag: "gratis", pattern: /gratis|gratuito|gratuita|senza acquisto|senza obbligo/ },
   { tag: "social", pattern: /\b(instagram|facebook|tiktok|social|hashtag)\b/ },

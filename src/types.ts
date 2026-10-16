@@ -316,6 +316,14 @@ export interface ItemQuery {
   excludeSources?: string[];
   /** Tiene fuori gli item che hanno uno di questi tag (filtri della chat). */
   excludeTags?: string[];
+  /**
+   * Solo gli item che hanno ALMENO uno di questi tag. È l'inclusione che mancava:
+   * `excludeTags` spegne un tipo, questo lo chiede. Serve alle sezioni per tipo
+   * di premio (🎁 Tipi di premio), dove la domanda è "che premio cerchi?" e non
+   * "cosa non vuoi vedere": lì l'esclusione non basta, perché il tag acceso è
+   * quello che si vuole vedere.
+   */
+  tags?: string[];
   /** Solo item senza obbligo di acquisto (filtro "solo gratis" della chat). */
   withoutPurchase?: boolean;
   /**
@@ -423,6 +431,16 @@ export interface RunRow {
   itemsNew: number;
   ms: number;
   note: string | null;
+  /**
+   * Il racconto fonte per fonte di una raccolta — chi ha risposto, con che
+   * codice HTTP, quanti item — in HTML, come lo compone src/telegram/report.ts.
+   *
+   * Lo scrivono le raccolte vere (Actions, un PC, la raccolta di riserva del
+   * Worker); i tick da 15 minuti e i digest lasciano `null`. Quindi l'elenco dei
+   * log È l'elenco dei lanci, e si legge in 🧾 Log delle raccolte, la schermata
+   * che vede solo l'admin.
+   */
+  log: string | null;
 }
 
 export interface RobotsRow {

@@ -162,8 +162,19 @@ CREATE TABLE IF NOT EXISTS runs (
   sources_fail INTEGER NOT NULL DEFAULT 0,
   items_new    INTEGER NOT NULL DEFAULT 0,
   ms           INTEGER NOT NULL DEFAULT 0,
-  note         TEXT
+  note         TEXT,
+  log          TEXT
 );
+
+-- `log` è il racconto fonte per fonte di UNA raccolta (chi ha risposto, con che
+-- codice HTTP, quanti item): la stessa cosa che il job su GitHub scrive nella
+-- pagina di riepilogo, ma leggibile dalla chat in 🧾 Log delle raccolte — la
+-- schermata che vede solo l'admin. Lo scrivono le raccolte vere (`actions`,
+-- `local` e la raccolta di riserva del Worker); i tick da 15 minuti e i digest
+-- lasciano NULL, quindi l'elenco dei log è l'elenco dei lanci. Su un database
+-- già creato la colonna va aggiunta a mano PRIMA di pubblicare il codice che la
+-- legge:
+--   ALTER TABLE runs ADD COLUMN log TEXT;
 
 -- Idempotenza del webhook Telegram: Telegram ritenta gli update non-2xx.
 CREATE TABLE IF NOT EXISTS updates (

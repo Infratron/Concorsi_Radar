@@ -153,8 +153,14 @@ describe("store D1 via API HTTP", () => {
     await s.recordDelivery(111, 1, "instant", "2026-10-16T08:00:00.000Z");
     expect(await s.isDelivered(111, 1, "instant")).toBe(true);
 
-    await s.recordRun({ startedAt: "2026-10-16T08:00:00.000Z", trigger: "actions", sourcesOk: 3, sourcesFail: 0, itemsNew: 2, ms: 800, note: "raccolta" });
+    // La raccolta su GitHub scrive da qui, log compreso: è il tragitto che porta
+    // il racconto di un giro fino a 🧾 Log delle raccolte, quindi si prova intero.
+    await s.recordRun({
+      startedAt: "2026-10-16T08:00:00.000Z", trigger: "actions", sourcesOk: 3, sourcesFail: 0,
+      itemsNew: 2, ms: 800, note: "raccolta", log: "🧪 <b>Raccolta su GitHub</b> · 10:00\n🔴 Soldissimi · HTTP 403",
+    });
     expect((await s.recentRuns(5))[0].note).toBe("raccolta");
+    expect((await s.recentLogs(5))[0].log).toContain("\n🔴 Soldissimi");
   });
 
   it("segnala l'errore dell'API invece di restituire righe vuote", async () => {

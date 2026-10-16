@@ -1,9 +1,17 @@
 import type { ItemRow, Prefs, RunRow, SourceRow, UiState } from "../types.ts";
 import { brandLabel, type BrandChoice } from "../config/brands.ts";
 import { GRUPPI_DIAGNOSI, type Diagnosi, type RiepilogoDiagnosi } from "../sources-health.ts";
-import { CATEGORY_LABELS, isSeeingAll, mutedSourceIds, onlyFavoriteBrands, type FilterSource } from "../filters.ts";
+import {
+  CATEGORY_LABELS,
+  PRIZE_QUICK_FILTERS,
+  isSeeingAll,
+  mutedSourceIds,
+  onlyFavoriteBrands,
+  prizeFilterFor,
+  type FilterSource,
+} from "../filters.ts";
 import type { LeadStats } from "../enrich/lead.ts";
-import type { InlineKeyboardMarkup } from "./api.ts";
+import { MAX_MESSAGE_CHARS, type InlineKeyboardMarkup } from "./api.ts";
 import { escapeHtml, formatDate, formatItemCard, sourceLabel } from "./format.ts";
 import { esitoUltimoTentativo } from "./report.ts";
 import { truncate } from "../lib/text.ts";
@@ -20,8 +28,10 @@ import {
   fontiKeyboard,
   itemButtonLabel,
   listKeyboard,
+  logKeyboard,
   marcheKeyboard,
   menuKeyboard,
+  premiKeyboard,
   sectionTitle,
   settingsKeyboard,
   storicoKeyboard,
@@ -105,11 +115,18 @@ export const SECTIONS = [
   "preferiti",
   "preferiti-lista",
   "coupon",
+  "gratis",
+  "premi",
   "diagnostica",
+  "log",
 ] as const;
 
 export function isKnownSection(section: string): boolean {
-  return (SECTIONS as readonly string[]).includes(section) || section.startsWith("cerca:");
+  if ((SECTIONS as readonly string[]).includes(section)) return true;
+  if (section.startsWith("cerca:")) return true;
+  // `premi:<tag>` si accetta solo se il tag è uno di quelli offerti: una sezione
+  // inventata non leggerebbe niente, e sarebbe un elenco vuoto senza spiegazione.
+  return prizeFilterFor(section) !== null;
 }
 
 /** Traduce i `callback_data` dei bottoni in intenti. Ignora il resto. */
@@ -129,7 +146,10 @@ export function parseCallback(data: string | undefined): Intent {
     case "noop":
       return { kind: "none" };
     case "s": {
-      const section = first.toLowerCase();
+      // La sezione si ricompone INTERA: alcune hanno un prefisso (`premi:giftcard`,
+      // `cerca:nutella`) e tagliarla al primo pezzo aprirebbe la porta sbagliata —
+      // "premi:giftcard" diventerebbe "premi", cioè la schermata delle porte.
+      const section = rest.join(":").toLowerCase();
       return isKnownSection(section) ? { kind: "section", section } : { kind: "none" };
     }
     case "page": {
@@ -201,6 +221,18 @@ export interface ScreenCounts {
   contest: number;
   /** Concorsi delle marche seguite, con i filtri della chat: è il numero sul bottone. */
   preferiti: number;
+  /**
+   * Concorsi senza obbligo di acquisto (🆓 Gratis), con i filtri della chat.
+   * Nasce dalla stessa query della sezione, quindi il numero sul bottone e
+   * l'elenco non possono raccontare due cose diverse.
+   */
+  gratis: number;
+  /**
+   * Quanti concorsi aprirebbe ciascuna porta di 🎁 Tipi di premio, per sezione
+   * ("premi:giftcard", "gratis"…). Si contano solo aprendo quella schermata:
+   * cinque query per un menù che non li mostra sarebbero lavoro per niente.
+   */
+  premi: Record<string, number>;
   /** Storico: contati solo quando si apre 🗂 Storico, per non pesare sul menù. */
   vinti: number;
   scaduti: number;
@@ -228,6 +260,16 @@ export interface ScreenData {
   regolamentoUrl: string | null;
   sources: SourceRow[];
   runs: RunRow[];
+  /**
+   * Le ultime esecuzioni con un log, dalla più recente: si legge solo in
+   * 🧾 Log delle raccolte, e solo per l'admin.
+   */
+  logs: RunRow[];
+  /**
+   * true se la schermata è per l'admin (quella chat): decide i bottoni che
+   * l'altra persona non deve vedere, come 🧾 Log delle raccolte.
+   */
+  isAdmin: boolean;
   /** Verdetto su ogni fonte accesa: si legge solo nella schermata della diagnostica. */
   diagnosi: Diagnosi[];
   /** I numeri della testata della diagnostica (null altrove). */
@@ -315,6 +357,14 @@ function listScreen(state: UiState, data: ScreenData, now: Date): Screen {
         "Non segui ancora nessuna marca, quindi non c'è niente da mostrare qui: aprine una in 🏷 Preferiti per marca.",
       coupon:
         "Nessun coupon in archivio: i buoni sconto e i rimborsi arrivano dalle fonti di coupon, appena le trovano.",
+      gratis:
+        "Nessun concorso senza acquisto qui: per ora tutti quelli in archivio chiedono uno scontrino, un codice o una spesa minima.",
+      ...Object.fromEntries(
+        PRIZE_QUICK_FILTERS.filter((voce) => voce.tag !== null).map((voce) => [
+          voce.section,
+          `Nessun concorso con ${voce.label.toLowerCase()} in palio adesso: il tipo lo decide quello che la pagina dichiara, e in questo momento nessun concorso dell'archivio lo dichiara.`,
+        ]),
+      ),
     };
     const filtrata = data.counts.filtri > 0;
     const righeVuote = [
@@ -344,8 +394,12 @@ function listScreen(state: UiState, data: ScreenData, now: Date): Screen {
       ? "Qui ci sono gli articoli: il link porta al pezzo, non alla pagina del concorso."
       : state.section === "coupon"
         ? "Qui ci sono i buoni sconto e i rimborsi: si spende meno, non si vince. Non finiscono nei concorsi né negli avvisi."
+        : state.section === "gratis"
+        ? "Qui ci sono solo i concorsi senza acquisto: nessuno scontrino, nessun codice da comprare, nessuna spesa minima. Il giudizio viene da quello che la pagina dichiara — se non dice niente, il concorso resta in elenco."
+        : state.section.startsWith("premi:")
+        ? "Qui ci sono solo i concorsi di questo tipo: il premio lo legge l'arricchimento dal testo della pagina, quindi un concorso lo trovi qui se lo dichiara. Per gli altri resta tutto come prima: questa porta non accende nessun filtro."
         : state.section === "salvati"
-        ? "Ordinati per scadenza: chi chiude prima sta in cima. Ti avviso 3 giorni e 1 giorno prima."
+        ? "Ordinati per scadenza: chi chiude prima sta in cima. Ti avviso 3 giorni e 1 giorno prima — e molto prima per le raccolte punti e i premi da richiedere, dove scontrini e bollini si mettono via durante la raccolta."
         : state.section === "preferiti-lista"
           ? "Solo le marche che segui, dal punteggio più alto: è il motivo per cui le trovi qui in cima."
           : "Tocca un concorso per aprirlo:",
@@ -362,10 +416,14 @@ function listScreen(state: UiState, data: ScreenData, now: Date): Screen {
  * e Watchlist, Storico e Cerca sono scelte esplicite: lì una riga in più sarebbe
  * solo un tasto che non serve.
  */
-const SEZIONI_STELLE = new Set(["nuovi", "oggi", "settimana", "scadenze", "scaduti", "preferiti-lista"]);
+const SEZIONI_STELLE = new Set([
+  "nuovi", "oggi", "settimana", "scadenze", "scaduti", "preferiti-lista", "gratis",
+]);
 
 function stellePer(data: ScreenData, section: string): number | null {
-  return SEZIONI_STELLE.has(section) ? data.prefs.filters.minScore : null;
+  // Anche le porte per tipo di premio sono sezioni che suggeriscono ("quale
+  // viaggio vale la pena?"): la riga delle stelle si mostra, come in 📋 Oggi.
+  return SEZIONI_STELLE.has(section) || section.startsWith("premi:") ? data.prefs.filters.minScore : null;
 }
 
 /**
@@ -528,7 +586,57 @@ function sourcesScreen(data: ScreenData): Screen {
       );
     }
   }
-  return { text: righe.join("\n"), keyboard: fontiKeyboard() };
+  return { text: righe.join("\n"), keyboard: fontiKeyboard(data.isAdmin) };
+}
+
+/**
+ * 🧾 Log delle raccolte (solo admin): il racconto di un lancio, per intero.
+ *
+ * Perché non è più un messaggio che arriva da sé: un riepilogo mandato a ogni
+ * raccolta — ogni mezz'ora — diventa rumore, e il rumore si smette di leggere,
+ * mentre la domanda "chi non risponde?" torna ogni volta che si cambia una fonte
+ * o che l'archivio si ferma. Qui il racconto resta al suo posto, uno per lancio,
+ * e si apre quando serve.
+ *
+ * La riga di testa dice da dove viene il giro (`GitHub`, `questo PC`, `Worker`) e
+ * come è finito, perché il log di una raccolta di riserva non è quello di una
+ * raccolta piena: scambiarli farebbe cercare un guasto che non c'è.
+ */
+function logScreen(data: ScreenData): Screen {
+  const logs = data.logs;
+  const pagina = Math.min(Math.max(data.page, 0), Math.max(0, logs.length - 1));
+  const esecuzione = logs[pagina] ?? null;
+
+  if (esecuzione === null || esecuzione.log === null) {
+    return {
+      text: [
+        "🧾 <b>Log delle raccolte</b>",
+        "",
+        "Ancora nessun log: il primo lo scrive la prossima raccolta (quella su GitHub, una lanciata da qui, o la raccolta di riserva del Worker).",
+        "",
+        "In chat non arriva più nessun riepilogo: il racconto di ogni lancio si legge qui.",
+      ].join("\n"),
+      keyboard: logKeyboard({ index: 0, total: 1 }),
+    };
+  }
+
+  const righe = [
+    `🧾 <b>Log delle raccolte</b> · ${pagina + 1}/${logs.length}`,
+    "",
+    `${runOrigin(esecuzione.trigger)} · ${oreMinuti(esecuzione.startedAt)} · ${esecuzione.sourcesOk} ok / ${esecuzione.sourcesFail} errori · ${esecuzione.itemsNew} nuovi`,
+    "",
+  ];
+  // Il log di un giro con trenta fonti può superare quello che Telegram accetta
+  // in un messaggio: si taglia la coda (le fonti che hanno risposto stanno in
+  // fondo, i guasti in cima) e il … dice che manca qualcosa. Meglio un log
+  // troncato, che si apre, di uno che fa fallire la modifica del messaggio.
+  const spazio = MAX_MESSAGE_CHARS - righe.join("\n").length - 120;
+  righe.push(esecuzione.log.length > spazio ? truncate(esecuzione.log, spazio) : esecuzione.log);
+  righe.push(
+    "",
+    "Un log per ogni raccolta, il più recente per primo. Questa schermata la vedi solo tu.",
+  );
+  return { text: righe.join("\n"), keyboard: logKeyboard({ index: pagina, total: logs.length }) };
 }
 
 /**
@@ -710,6 +818,26 @@ function filtriFontiScreen(data: ScreenData): Screen {
   };
 }
 
+/**
+ * 🎁 Tipi di premio: cinque porte, una per tipo di premio.
+ *
+ * Perché è una schermata e non filtri in 🎛 Cosa vedi: i filtri sono esclusioni
+ * che RESTANO accese e cambiano tutte le sezioni — chi vuole solo dare
+ * un'occhiata alle gift card non vuole smettere di vedere il resto. Qui si entra,
+ * si guarda, si esce: nessuna preferenza toccata, e il numero sul bottone è
+ * quanti concorsi aprirebbe adesso.
+ */
+function premiScreen(data: ScreenData): Screen {
+  const righe = [
+    "🎁 <b>Tipi di premio</b>",
+    "",
+    "Non sono filtri: non cambiano niente per le altre sezioni e non restano accesi. Toccane una e vedi solo i concorsi con quel premio, con i filtri che hai già.",
+    "",
+    "Il numero è quanti concorsi aprirebbe adesso — se è <b>0</b>, quel tipo non c'è in archivio in questo momento.",
+  ];
+  return { text: righe.join("\n"), keyboard: premiKeyboard(data.counts.premi) };
+}
+
 function searchPromptScreen(): Screen {
   return {
     text: [
@@ -752,10 +880,14 @@ export function renderScreen(state: UiState, data: ScreenData, now: Date): Scree
       return filtriScreen(data);
     case "filtri-fonti":
       return filtriFontiScreen(data);
+    case "premi":
+      return premiScreen(data);
     case "preferiti":
       return marcheScreen(data);
     case "diagnostica":
       return diagnosticaScreen(data);
+    case "log":
+      return logScreen(data);
     case "cerca":
       return searchPromptScreen();
     default:

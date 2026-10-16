@@ -122,6 +122,10 @@ export function createMemoryStore(): MemoryStore {
     if (query.excludeTags && query.excludeTags.length > 0 && row.tags.some((tag) => query.excludeTags!.includes(tag))) {
       return false;
     }
+    // Inclusione per tag: come in SQL, entra l'item che ne ha ALMENO uno.
+    if (query.tags && query.tags.length > 0 && !row.tags.some((tag) => query.tags!.includes(tag))) {
+      return false;
+    }
     if (query.withoutPurchase === true && row.requiresPurchase) return false;
     if (query.brands && query.brands.length > 0 && (row.brand === null || !query.brands.includes(row.brand))) {
       return false;
@@ -396,6 +400,17 @@ export function createMemoryStore(): MemoryStore {
     async recentRuns(limit: number): Promise<RunRow[]> {
       const capped = Math.min(Math.max(Math.trunc(limit), 1), 50);
       return runs
+        .slice()
+        .sort((a, b) => b.startedAt.localeCompare(a.startedAt))
+        .slice(0, capped)
+        .map((run) => clone(run));
+    },
+
+    /** Come in D1: solo le esecuzioni con un racconto, dalla più recente. */
+    async recentLogs(limit: number): Promise<RunRow[]> {
+      const capped = Math.min(Math.max(Math.trunc(limit), 1), 50);
+      return runs
+        .filter((run) => run.log !== null)
         .slice()
         .sort((a, b) => b.startedAt.localeCompare(a.startedAt))
         .slice(0, capped)

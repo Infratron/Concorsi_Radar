@@ -90,6 +90,46 @@ export function tagLabel(tag: string): string {
   return TAG_FILTERS.find((entry) => entry.tag === tag)?.label ?? tag;
 }
 
+/**
+ * Un tipo di premio che si apre come SEZIONE dal menù (🎁 Tipi di premio).
+ *
+ * Non è un filtro da accendere: i filtri di 🎛 Cosa vedi sono esclusioni, restano
+ * accese e cambiano tutte le sezioni. Queste sono domande secche — "che premio
+ * cerchi?" — quindi la sezione che aprono filtra in INCLUSIONE sul tag
+ * (`tags` nella query) e non tocca le preferenze di nessuno.
+ */
+export interface PrizeQuickFilter {
+  /** Tag dell'item. null solo per 🆓 Gratis, che non è un tag ma l'obbligo d'acquisto. */
+  tag: string | null;
+  /** Sezione che apre il bottone ("premi:giftcard"). */
+  section: string;
+  emoji: string;
+  /** Nome senza emoji: serve anche dentro una frase ("Nessun concorso con …"). */
+  label: string;
+}
+
+/**
+ * L'ordine è quello dei bottoni, e i tag sono quelli che le regole assegnano
+ * leggendo premio e testo (src/enrich/rules.ts).
+ *
+ * 🆓 Gratis sta in mezzo agli altri perché la domanda è la stessa ("che cosa
+ * cerchi?"), ma non è un tipo di premio: apre la sezione che il menù ha già,
+ * con il vincolo sull'obbligo di acquisto. Duplicarla qui vorrebbe dire due
+ * query e due testi da tenere allineati per lo stesso elenco.
+ */
+export const PRIZE_QUICK_FILTERS: PrizeQuickFilter[] = [
+  { tag: "giftcard", section: "premi:giftcard", emoji: "💳", label: "Gift card" },
+  { tag: "auto", section: "premi:auto", emoji: "🚗", label: "Auto e moto" },
+  { tag: "viaggio", section: "premi:viaggio", emoji: "✈️", label: "Viaggi" },
+  { tag: "buoni_spesa", section: "premi:buoni_spesa", emoji: "🛒", label: "Buoni spesa" },
+  { tag: null, section: "gratis", emoji: "🆓", label: "Gratis" },
+];
+
+/** Il tipo di premio di questa sezione, oppure null se non è una di quelle porte. */
+export function prizeFilterFor(section: string): PrizeQuickFilter | null {
+  return PRIZE_QUICK_FILTERS.find((entry) => entry.section === section) ?? null;
+}
+
 /** Categorie davvero presenti fra le fonti accese: filtrare un tipo che non esiste è rumore. */
 export function categoriesToOffer(): Category[] {
   const usate = new Set<Category>();

@@ -6,6 +6,7 @@ import type { TelegramUpdate } from "./telegram/api.ts";
 import { TelegramClient } from "./telegram/api.ts";
 import { handleUpdate } from "./telegram/bot.ts";
 import { sendCollectionReminder, sendDigests, sendInstantAlerts, sendWatchlistReminders } from "./telegram/digest.ts";
+import { ingestLog } from "./telegram/report.ts";
 import { COLLECTION_REMINDER_MARK, COLLECTION_REMINDER_SKIP, jobFor, shouldFallbackIngest } from "./schedule.ts";
 import { USER_AGENT } from "./config/sources.ts";
 import { benchDedupeLookup, benchSource, downloadBodies, summarise } from "./debug/bench.ts";
@@ -54,6 +55,8 @@ async function runCron(env: Env, cron: string, now: Date): Promise<void> {
       startedAt: now.toISOString(), trigger: cron, sourcesOk: 0, sourcesFail: 0,
       itemsNew: result.messages, ms: Date.now() - started,
       note: `digest: ${result.chats} chat, ${result.messages} messaggi`,
+      // Un digest non è una raccolta: niente log, e fuori da 🧾 Log delle raccolte.
+      log: null,
     });
     return;
   }
@@ -71,6 +74,11 @@ async function runCron(env: Env, cron: string, now: Date): Promise<void> {
   // lettura per entrambe — 50 righe coprono circa dodici ore di tick da 15 minuti.
   const runs = await store.recentRuns(50);
   let fallback: { ok: number; due: number } | null = null;
+  // Il log di questo tick: lo scrive solo la raccolta di riserva, che è l'unica
+  // cosa che qui raccoglie davvero. Un tick che si limita a consegnare e a
+  // mettere via i scaduti non ha nulla da raccontare fonte per fonte, e senza log
+  // non compare in 🧾 Log delle raccolte (vedi recentLogs nello store).
+  let log: string | null = null;
 
   if (shouldFallbackIngest(runs, now)) {
     // Raccolta di riserva: la rete di Cloudflare raggiunge poche fonti, ma
@@ -83,6 +91,19 @@ async function runCron(env: Env, cron: string, now: Date): Promise<void> {
     note.push(`raccolta di riserva: ${summary.itemsNew} nuovi, ${summary.sourcesOk}/${summary.sourcesDue} fonti ok`);
     fallback = { ok: summary.sourcesOk, due: summary.sourcesDue };
     note.push(...summary.notes.slice(0, 2));
+    log = ingestLog(
+      {
+        attempts: summary.attempts,
+        itemsSeen: summary.itemsSeen,
+        itemsNew: summary.itemsNew,
+        deferred: summary.deferred,
+        // Il titolo lo dice: la rete di Cloudflare raggiunge poche fonti, e un
+        // giro di riserva non va scambiato per una raccolta piena che è andata
+        // male.
+        titolo: "Raccolta di riserva (Worker)",
+      },
+      summary.notes,
+    );
     // Come al primo giro in assoluto: niente avvisi immediati su un archivio che
     // si sta riempiendo di concorsi vecchi.
     skipInstant = summary.archiveWasEmpty;
@@ -94,9 +115,9 @@ async function runCron(env: Env, cron: string, now: Date): Promise<void> {
   }
 
   const instant = skipInstant ? 0 : (await sendInstantAlerts({ store, tg, now })).sent;
-  // Promemoria della watchlist: a tre giorni e a un giorno dalla chiusura di un
-  // concorso che l'utente ha salvato. È l'utility che evita di perdere proprio
-  // quello che si teneva d'occhio.
+  // Promemoria della watchlist: a tre giorni e a un giorno dalla chiusura, ma a
+  // trenta e a sette per le raccolte punti e i premi da richiedere, che "chiudono"
+  // quando ormai è tardi per cominciare a mettere via gli scontrini.
   const reminders = skipInstant ? 0 : (await sendWatchlistReminders({ store, tg, now })).sent;
   // Il promemoria non dipende dagli avvisi: se la raccolta è ferma lo dice anche
   // in un giro in cui non c'era niente da notificare (anzi, soprattutto in quello).
@@ -104,7 +125,7 @@ async function runCron(env: Env, cron: string, now: Date): Promise<void> {
   const expired = await expireOldItems(store, now);
   note.push(
     `avvisi: ${instant} istantanei`,
-    `promemoria watchlist: ${reminders}`,
+    `promemoria: ${reminders}`,
     // Il segno nella nota è il modo in cui il tick successivo sa di aver già
     // avvisato: per questo si scrive solo quando il messaggio è partito davvero.
     raccolta.sent > 0 ? COLLECTION_REMINDER_MARK : COLLECTION_REMINDER_SKIP,
@@ -115,6 +136,7 @@ async function runCron(env: Env, cron: string, now: Date): Promise<void> {
     startedAt: now.toISOString(), trigger: cron,
     sourcesOk, sourcesFail, itemsNew, ms: Date.now() - started,
     note: note.join(" | "),
+    log,
   });
 }
 
@@ -196,7 +218,19 @@ export default {
       return jsonResponse({
         ok: true,
         allowedChatIds: access.allowed,
-        runs,
+        // Il log di una raccolta è lungo (una riga per fonte) e in /health non
+        // serve: qui basta sapere che quel giro ha un racconto da leggere in
+        // chat, e quale. `hasLog` dice esattamente questo.
+        runs: runs.map((run) => ({
+          startedAt: run.startedAt,
+          trigger: run.trigger,
+          sourcesOk: run.sourcesOk,
+          sourcesFail: run.sourcesFail,
+          itemsNew: run.itemsNew,
+          ms: run.ms,
+          note: run.note,
+          hasLog: run.log !== null,
+        })),
         // Fonte per fonte: oltre alla storia (lastOkAt, failStreak) c'è l'esito
         // dell'ULTIMO tentativo — ora, codice HTTP, item letti — che è la stessa
         // cosa che si legge in 📡 Fonti, senza aprire i log di GitHub.

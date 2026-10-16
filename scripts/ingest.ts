@@ -3,9 +3,9 @@ import { SOURCES, USER_AGENT } from "../src/config/sources.ts";
 import { createD1HttpStore } from "../src/db/d1-http.ts";
 import { runIngest, type IngestSummary } from "../src/pipeline.ts";
 import { TelegramClient } from "../src/telegram/api.ts";
-import { INGEST_REPORT_MARK, INGEST_REPORT_SKIP, isExternalTrigger, shouldReportIngest } from "../src/schedule.ts";
+import { isExternalTrigger } from "../src/schedule.ts";
 import { d1OptionsForLocalRun } from "./wrangler-auth.ts";
-import { plainIngestLines, sendIngestReport, type IngestReport } from "../src/telegram/report.ts";
+import { ingestLog, plainIngestLines, type IngestReport } from "../src/telegram/report.ts";
 
 /**
  * Raccolta dei feed per GitHub Actions.
@@ -23,9 +23,13 @@ import { plainIngestLines, sendIngestReport, type IngestReport } from "../src/te
  *
  * Credenziali (variabili d'ambiente): CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_API_TOKEN
  * (permesso D1:Edit), D1_DATABASE_ID. Facoltativi: TELEGRAM_BOT_TOKEN e
- * ADMIN_CHAT_ID (o ALLOWED_CHAT_IDS) per l'avviso di fonte in errore e per il
- * report delle prime raccolte — quello che dice chi ha risposto e chi no, con
- * l'ora e il codice HTTP, senza aprire la pagina del job (src/telegram/report.ts).
+ * ADMIN_CHAT_ID (o ALLOWED_CHAT_IDS) per l'avviso di fonte in errore.
+ *
+ * In chat non arriva NESSUN riepilogo: il racconto fonte per fonte (chi ha
+ * risposto, con che codice, quanti item) si salva come log dell'esecuzione
+ * (`runs.log`) e si legge in 🧾 Log delle raccolte, che vede solo l'admin — così
+ * un giro ogni mezz'ora non diventa rumore in chat
+ * (src/telegram/report.ts, `ingestLog`).
  *
  * Uso locale:  npm run ingest
  *
@@ -59,7 +63,7 @@ const EXTERNAL_CPU_BUDGET_MS = 600_000;
  */
 const EXTERNAL_RULES_LOOKUP_MS = 120_000;
 
-function note(summary: IngestSummary, diagnostica: string): string {
+function note(summary: IngestSummary): string {
   return [
     // La prima parola è l'esecutore, e si legge in 🕒 Ultime raccolte: "actions"
     // sotto GitHub, "local" per una raccolta lanciata da un PC (src/schedule.ts).
@@ -68,9 +72,6 @@ function note(summary: IngestSummary, diagnostica: string): string {
     `${summary.duplicates} duplicati`,
     `${summary.filtered} fuori tema`,
     `${summary.stale} non attivi`,
-    // Il segno della diagnostica: dice al giro successivo se il report è già
-    // stato mandato (vedi shouldReportIngest in src/schedule.ts).
-    diagnostica,
     ...summary.notes.slice(0, 3),
   ].join(" | ");
 }
@@ -164,18 +165,11 @@ async function main(): Promise<void> {
       ? "Raccolta lanciata a mano"
       : precedenti === 0 ? `Prima raccolta ${dove}` : `Raccolta ${dove}`,
   };
-  // Il report in chat vale per le prime raccolte e per quelle chieste a mano;
-  // negli altri giri lo stato delle fonti si legge in 📡 Fonti, che non fa
-  // rumore. Il segno va nella nota SOLO se il messaggio è partito davvero: se la
-  // notifica fallisce, il giro dopo ci riprova invece di considerarlo fatto.
-  let diagnostica = INGEST_REPORT_SKIP;
-  if (shouldReportIngest(runs, eventName)) {
-    const notifica = notifier();
-    const inviato = notifica
-      ? await sendIngestReport({ tg: notifica.tg, chatId: notifica.chatId, report })
-      : false;
-    diagnostica = inviato ? INGEST_REPORT_MARK : INGEST_REPORT_SKIP;
-  }
+  // Il racconto del giro si salva con l'esecuzione: in chat non parte niente, il
+  // log si apre quando lo si vuole leggere (🧾 Log delle raccolte, solo admin).
+  // `manuale` non serve più a decidere se mandare il report — non si manda mai —
+  // ma il titolo del log dice comunque da dove viene questo giro.
+  const log = ingestLog(report, summary.notes);
 
   await store.recordRun({
     startedAt: now.toISOString(),
@@ -184,7 +178,8 @@ async function main(): Promise<void> {
     sourcesFail: summary.sourcesFail,
     itemsNew: summary.itemsNew,
     ms: summary.ms,
-    note: note(summary, diagnostica),
+    note: note(summary),
+    log,
   });
   await writeJobSummary(summary, report);
 
@@ -195,7 +190,7 @@ async function main(): Promise<void> {
   );
   for (const nota of summary.notes) console.log(`  ! ${nota}`);
   if (avvisi > 0) console.log(`  → ${avvisi} avvisi di fonte in errore inviati all'admin`);
-  if (diagnostica === INGEST_REPORT_MARK) console.log("  → report delle fonti inviato all'admin");
+  console.log(log === null ? "  → nessun log (nessuna fonte provata)" : "  → log salvato: si legge in 🧾 Log delle raccolte");
 
   // Se nessuna fonte ha risposto il job deve diventare rosso: è la spia che
   // qualcosa è cambiato (token scaduto, rete, API di D1) e va guardata subito.
