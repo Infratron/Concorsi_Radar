@@ -74,6 +74,28 @@ in `.dev.vars` e riempi i quattro valori.
 autorizzato risponde con il tuo id (e non fa nient'altro). Aggiungilo a
 `ALLOWED_CHAT_IDS`, ridistribuisci e riscrivi `/start`.
 
+**Formato di `ALLOWED_CHAT_IDS` (errore facile):** è **una sola** variabile che
+contiene tutti gli id sulla stessa riga, separati da virgola:
+
+```
+ALLOWED_CHAT_IDS = 111111111,222222222
+```
+
+Crearne due separate (`ALLOWED_CHAT_IDS_1`, `ALLOWED_CHAT_IDS_2`) **non funziona**:
+il codice legge solo `ALLOWED_CHAT_IDS`. Se `ADMIN_CHAT_ID` non è impostato, il
+primo id dell'elenco fa anche da admin (riceve gli avvisi tecnici).
+
+**Come verificare cosa ha davvero il Worker**: `GET /status` elenca in `missing`
+le variabili assenti, quindi è il controllo più rapido dopo averle inserite. Nel
+dashboard ricordati di premere **Save**: finché resta il banner *Unsaved changes*
+le variabili non esistono per il Worker, e anche una volta salvate servono alcuni
+secondi per vederle attive.
+
+```bash
+curl "https://concorsi-radar.<tuo>.workers.dev/status"
+# {"ok":true,"bot":"Concorsi Radar","missing":[]}   ← niente da aggiungere
+```
+
 ## 4. Installazione e primo deploy
 
 ```bash
