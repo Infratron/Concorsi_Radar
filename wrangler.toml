@@ -14,8 +14,9 @@ binding = "AI"
 [[d1_databases]]
 binding = "DB"
 database_name = "concorsi-radar"
-# Sostituisci con l'id restituito da `npm run db:create`.
-database_id = "REPLACE_WITH_D1_DATABASE_ID"
+# Id del database creato con `npm run db:create`. Non è un segreto: identifica il
+# database nell'account e senza di esso la build di Workers Builds non pubblica.
+database_id = "2c47a097-ad0e-4872-b868-9d9b3efe0dbb"
 
 # 3 trigger (limite Free = 5 per account):
 #  - ingestione a rotazione ogni 15 minuti
