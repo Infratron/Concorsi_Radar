@@ -58,14 +58,23 @@ function capitalizeFirstLetter(word: string): string {
   return `${lower.slice(0, index)}${lower.charAt(index).toUpperCase()}${lower.slice(index + 1)}`;
 }
 
+/**
+ * Dopo questi segni comincia una frase nuova: lì anche la parolina torna
+ * maiuscola, altrimenti "KRAFT E MORATO – LA COMBO PERFETTA" diventerebbe
+ * "Kraft e Morato – la Combo Perfetta", che sembra un errore di battitura.
+ */
+const CLAUSE_BREAK = /[–—:;.!?»\)]$/;
+
 /** Da urlato a leggibile, con le paroline italiane minuscole. */
 function toReadableCase(input: string): string {
+  let inizioFrase = true;
   return input
     .split(" ")
-    .map((word, index) => {
+    .map((word) => {
       const lower = word.toLowerCase();
-      if (index > 0 && SMALL_WORDS.has(lower)) return lower;
-      return capitalizeFirstLetter(word);
+      const parolina = !inizioFrase && SMALL_WORDS.has(lower);
+      inizioFrase = CLAUSE_BREAK.test(word);
+      return parolina ? lower : capitalizeFirstLetter(word);
     })
     .join(" ");
 }

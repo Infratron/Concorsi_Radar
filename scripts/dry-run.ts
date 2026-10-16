@@ -63,7 +63,14 @@ async function main(): Promise<void> {
   );
   for (const nota of summary.notes) console.log(`  ! ${nota}`);
 
-  const items = await store.queryItems({ limit: 200, orderBy: "score" });
+  const archivio = await store.queryItems({ limit: 200, orderBy: "score" });
+  // Il bot tiene separate le due cose: i concorsi su cui si partecipa e gli
+  // articoli che ne parlano. La prova generale deve mostrare la stessa
+  // divisione, altrimenti non è una prova generale.
+  const items = archivio.filter((item) => item.kind === "contest");
+  const news = archivio.filter((item) => item.kind === "news");
+  console.log(`\nArchivio di questa esecuzione: ${items.length} concorsi, ${news.length} news.`);
+  for (const articolo of news) console.log(`  📰 ${articolo.title} → ${articolo.url}`);
   if (items.length === 0) {
     console.log("\nNessun concorso nuovo da mostrare.");
     return;

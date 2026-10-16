@@ -28,6 +28,8 @@ describe("titoli leggibili", () => {
     expect(readableTitle("LA CACCIA AL TESORO DEL CAPITANO")).toBe("La Caccia al Tesoro del Capitano");
     expect(readableTitle("PREMIO IN PALIO PER TUTTI")).toBe("Premio in Palio per Tutti");
     expect(readableTitle("«IL GRANDE PREMIO»")).toBe("«Il Grande Premio»");
+    // Dopo un trattino comincia una frase nuova: la parolina torna maiuscola.
+    expect(readableTitle("KRAFT e MORATO – LA COMBO PERFETTA")).toBe("Kraft e Morato – La Combo Perfetta");
   });
 
   it("separa lettere e anno attaccati", () => {

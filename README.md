@@ -77,7 +77,9 @@ Decisioni di progetto che contano:
   notizia *sul* concorso, la pagina-elenco e la tassonomia finiscono in 📰 News.
   È la differenza fra aprire un link e partecipare, e aprire un pezzo che
   promette dieci concorsi e non ne fa vincere nessuno. Gli articoli non
-  producono notifiche: si leggono quando si vuole.
+  producono notifiche: si leggono quando si vuole. Misurato il 16/10/2026 su una
+  lettura delle sole fonti di cronaca: **30 articoli e 10 concorsi** — senza la
+  divisione, quei 30 finivano nella sezione dei concorsi.
 - **Google News è la fonte più fresca** (batte gli aggregatori di ore), ma porta
   anche rumore: le sue notizie passano un filtro di pertinenza prima di entrare e
   restano comunque in 📰 News, perché il link è la pagina del giornale.
