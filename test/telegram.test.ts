@@ -556,6 +556,30 @@ describe("interfaccia · un solo messaggio per chat", () => {
     expect(keyboard.inline_keyboard[0]?.[0]?.text).toContain("Scade domani");
   });
 
+  it("un tocco dal digest apre la scheda senza cancellare il digest", async () => {
+    const { tg, calls } = makeTg();
+    await handleUpdate(command(1, "/start"), deps(store, tg));
+    calls.length = 0;
+
+    // Il digest è un altro messaggio (500): il prefisso d: dice di conservarlo.
+    await handleUpdate(
+      { update_id: 2, callback_query: { id: "cb-2", data: "d:open:3", message: { message_id: 500, chat: { id: CHAT } }, from: { id: CHAT } } },
+      deps(store, tg),
+    );
+
+    expect((await store.getUiState(CHAT))?.openItemId).toBe(3);
+    expect(lastWith(calls, "editMessageText")?.payload.message_id).toBe(100);
+    expect(calls.filter((call) => call.method === "deleteMessage")).toHaveLength(0);
+  });
+
+  it("ripetere la stessa decisione non sposta i pesi due volte", async () => {
+    const { tg } = makeTg();
+    await handleUpdate(command(1, "/start"), deps(store, tg));
+    await handleUpdate(tap(2, "save:1", 100), deps(store, tg));
+    await handleUpdate(tap(3, "save:1", 100), deps(store, tg));
+    expect((await store.getPrefs(CHAT))?.weights.giftcard).toBe(1);
+  });
+
   it("i salvati sono per chat e mostrano il punteggio", async () => {
     const { tg, calls } = makeTg();
     await handleUpdate(command(1, "/start"), deps(store, tg));
@@ -644,5 +668,19 @@ describe("digest e avvisi", () => {
     const result = await sendDigests({ store, tg, now: NOW });
     expect(result).toEqual({ chats: 0, messages: 0 });
     expect(calls).toHaveLength(0);
+  });
+
+  it("il digest porta i bottoni per aprire i concorsi, senza essere cancellato", async () => {
+    const store = createMemoryStore();
+    await store.upsertPrefs(prefs());
+    const ids = await seed(store, [{ title: "Concorso da digest" }]);
+    const { tg, calls } = makeTg();
+
+    const result = await sendDigests({ store, tg, now: NOW });
+    expect(result.messages).toBe(1);
+
+    const inviato = lastWith(calls, "sendMessage");
+    const keyboard = inviato?.payload.reply_markup as { inline_keyboard: { callback_data?: string }[][] };
+    expect(keyboard.inline_keyboard.flat().map((b) => b.callback_data)).toEqual([`d:open:${ids[0]}`, "d:home"]);
   });
 });

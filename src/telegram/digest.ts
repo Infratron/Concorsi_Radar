@@ -2,7 +2,7 @@ import type { Store } from "../db/store.ts";
 import type { ItemRow, Prefs } from "../types.ts";
 import type { TelegramClient } from "./api.ts";
 import { daysLeft, formatDigest, formatItemCard, localHour, type DigestSection } from "./format.ts";
-import { instantKeyboard } from "./keyboard.ts";
+import { digestKeyboard, instantKeyboard } from "./keyboard.ts";
 
 /**
  * Digest programmati e avvisi istantanei.
@@ -121,8 +121,11 @@ export async function sendDigests(deps: NotifyDeps): Promise<{ chats: number; me
     const texts = formatDigest(sectionsFor(included, now), now, extraLines);
 
     let sent = 0;
-    for (const text of texts) {
-      const result = await tg.sendMessage(chatId, text, { disablePreview: true });
+    for (const [index, text] of texts.entries()) {
+      // I bottoni stanno solo sull'ultimo messaggio (è lì che finisce l'elenco),
+      // così un digest lungo non ripete otto volte le stesse scelte.
+      const keyboard = index === texts.length - 1 ? digestKeyboard(included, now) : undefined;
+      const result = await tg.sendMessage(chatId, text, { keyboard, disablePreview: true });
       if (!result.ok) break;
       sent++;
     }

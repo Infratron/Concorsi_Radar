@@ -309,10 +309,13 @@ export async function handleUpdate(update: TelegramUpdate, deps: BotDeps): Promi
   }
 
   const state = (await store.getUiState(chatId)) ?? emptyState(chatId);
-  // Messaggio da cui arriva il tocco: se non è la schermata viva, è una notifica.
-  // Dopo averla usata la togliamo, per non lasciare residui in chat.
+  // Prefisso `d:` = il tocco arriva da un digest: quel messaggio è contenuto da
+  // rileggere, quindi non si cancella. Un avviso immediato invece ha già fatto il
+  // suo lavoro appena lo usi, e allora sparisce: in chat non resta niente appeso.
+  const datiCallback = callback?.data ?? "";
+  const conserva = datiCallback.startsWith("d:");
   const notificationId =
-    callback?.message?.message_id !== undefined && callback.message.message_id !== state.messageId
+    !conserva && callback?.message?.message_id !== undefined && callback.message.message_id !== state.messageId
       ? callback.message.message_id
       : null;
 
@@ -323,7 +326,7 @@ export async function handleUpdate(update: TelegramUpdate, deps: BotDeps): Promi
 
   let intent: Intent;
   if (callback) {
-    intent = parseCallback(callback.data);
+    intent = parseCallback(conserva ? datiCallback.slice(2) : datiCallback);
   } else {
     const text = (message?.text ?? "").trim();
     const [rawCommand, ...rest] = text.split(/\s+/);
@@ -342,8 +345,11 @@ export async function handleUpdate(update: TelegramUpdate, deps: BotDeps): Promi
       return { handled: true };
     }
     const kind = intent.action === "save" ? "saved" : intent.action === "ign" ? "ignored" : "won";
+    const ripetuta = await store.isDelivered(chatId, intent.itemId, kind);
     await store.recordDelivery(chatId, intent.itemId, kind, nowIso);
-    if (intent.action !== "won") {
+    // Decidere due volte la stessa cosa (doppio tocco sullo stesso bottone, o
+    // scheda e digest dello stesso concorso) non sposta i pesi due volte.
+    if (intent.action !== "won" && !ripetuta) {
       await store.bumpWeights(chatId, weightsFor(item.tags, intent.action === "save" ? 1 : -1));
     }
   }

@@ -254,7 +254,7 @@ scegli il repository e imposta:
 | Deploy command | `npx wrangler deploy` |
 | Preview builds | **disattivate** (vedi sotto) |
 
-Il *build command* è la rete di sicurezza: se il typecheck o uno dei 215 test
+Il *build command* è la rete di sicurezza: se il typecheck o uno dei 218 test
 fallisce, la build si ferma e **il deploy non parte**. `npm ci` serve a rendere
 l'installazione riproducibile dal `package-lock.json`.
 
@@ -325,9 +325,14 @@ salvi guadagna un punto, quelli che ignori ne perdono uno (clamp ±5 per tag),
 quindi i punteggi si spostano verso i tuoi gusti. Le decisioni sono **per
 persona**: se tu ignori un concorso, alla tua amica arriva lo stesso.
 
-Gli **avvisi immediati** sono l'eccezione: sono messaggi a sé (devono restare
-leggibili mentre fai altro), con gli stessi bottoni. Appena ne usi uno, il bot lo
-toglie di mezzo e aggiorna la schermata: in chat non resta niente di appeso.
+**Le notifiche** (avvisi immediati e digest) sono messaggi a sé, e hanno gli stessi
+bottoni: dal digest tocchi un concorso e si apre la scheda nella schermata viva.
+La differenza è cosa succede dopo: il digest **resta** (è contenuto da rileggere),
+mentre l'avviso immediato ha già fatto il suo lavoro appena lo usi e il bot lo
+cancella, così in chat non resta niente di appeso.
+
+Decidere due volte la stessa cosa — doppio tocco, o lo stesso concorso visto nel
+digest e nella scheda — non sposta i pesi due volte.
 
 I comandi funzionano ancora ma sono scorciatoie, non il modo normale: `/start`
 (che è anche l'iscrizione, ed è l'unico pubblicato nel menù "/" di Telegram),
@@ -524,7 +529,7 @@ per leggere il numero della piattaforma serve `npx wrangler tail` su un deploy.
 curl "https://<worker>/health?secret=WEBHOOK_SECRET"   # esecuzioni e stato fonti
 npm run dry-run                                        # cosa verrebbe inviato, senza inviare
 npm run ingest                                         # raccolta vera, come su Actions
-npm test                                               # 215 test
+npm test                                               # 218 test
 npm run typecheck
 ```
 
@@ -602,7 +607,7 @@ scripts/
   dry-run.ts               prova generale senza inviare nulla
   bench-cpu.ts             stessa misura su Node, con le fonti vere
   seed-sources.ts          genera l'SQL di sincronizzazione delle fonti
-test/                      12 file, 215 test (vitest, nessuna rete)
+test/                      12 file, 218 test (vitest, nessuna rete)
 ```
 
 Il tratto che tiene insieme tutto: **una sola copia dell'SQL**. `src/db/d1.ts`

@@ -123,6 +123,20 @@ export function instantKeyboard(item: ItemRow, regolamentoUrl: string | null): I
   };
 }
 
+/**
+ * Bottoni del digest: un concorso per riga, più il ritorno al menù. I
+ * callback_data hanno il prefisso `d:`: dicono al router che questo messaggio
+ * NON va cancellato dopo l'uso (il digest è contenuto da rileggere, mentre un
+ * avviso immediato ha già fatto il suo lavoro appena lo tocchi).
+ */
+export function digestKeyboard(items: ItemRow[], now: Date): InlineKeyboardMarkup {
+  const rows: InlineKeyboardButton[][] = items.map((item) => [
+    button(itemButtonLabel(item, now), `d:open:${item.id}`),
+  ]);
+  rows.push([button("🏠 Menù", "d:home")]);
+  return { inline_keyboard: rows };
+}
+
 /** Soglie proposte per gli avvisi immediati (punteggio minimo). */
 export const SCORE_CHOICES = [60, 70, 80, 90];
 /** Fasce di silenzio pronte all'uso: "off" = nessun silenzio. */
