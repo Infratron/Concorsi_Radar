@@ -147,9 +147,10 @@ git remote add origin git@github.com:<utente>/<repo>.git
 git push -u origin main
 ```
 
-Poi nel dashboard Cloudflare: **Workers & Pages → Create application → GitHub**
-(se il Worker esistesse già: **Settings → Builds → Connect**), scegli il
-repository e imposta:
+Poi nel dashboard Cloudflare: **Workers & Pages → concorsi-radar → Settings →
+Builds → Connect** (è il percorso giusto perché il Worker esiste già dal primo
+deploy; per un Worker che non esiste ancora è **Create application → GitHub**),
+scegli il repository e imposta:
 
 | Impostazione | Valore |
 |---|---|
