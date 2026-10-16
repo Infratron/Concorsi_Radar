@@ -152,6 +152,28 @@ describe("pipeline · ingestione e deduplica cross-fonte", () => {
     expect(barilla[0].score).toBeGreaterThanOrEqual(80);
   });
 
+  it("registra la vista di ogni concorso e di ogni fonte, una volta sola", async () => {
+    await runIngest(deps(), NOW, SOLO_FONTI_DEL_TEST);
+
+    // Una riga per (concorso, fonte): 5 item visti, di cui uno duplicato.
+    const viste = await store.listSightings("2026-01-01T00:00:00.000Z");
+    expect(viste).toHaveLength(5);
+    expect(viste.filter((vista) => vista.sourceId === "fonte-a")).toHaveLength(3);
+    expect(viste.filter((vista) => vista.sourceId === "fonte-b")).toHaveLength(2);
+    expect(viste.every((vista) => vista.kept)).toBe(true);
+    expect(viste.every((vista) => vista.seenAt === NOW.toISOString())).toBe(true);
+
+    // La copia dell'aggregatore punta alla STESSA riga del concorso: è quello che
+    // rende confrontabili le due viste di Barilla.
+    const barilla = (await store.queryItems({ limit: 50 })).find((item) => item.title.toLowerCase().includes("barilla"));
+    expect(barilla).toBeDefined();
+    expect((await store.listItemSightings(barilla!.id))).toHaveLength(2);
+
+    // Il giro successivo rivede gli stessi item: nessuna vista in più.
+    await runIngest(deps(), new Date(NOW.getTime() + 15 * 60 * 1000), SOLO_FONTI_DEL_TEST);
+    expect(await store.listSightings("2026-01-01T00:00:00.000Z")).toHaveLength(5);
+  });
+
   it("al giro successivo non crea più nulla (chiavi già viste)", async () => {
     await runIngest(deps(), NOW, SOLO_FONTI_DEL_TEST);
     const secondo = await runIngest(deps(), new Date(NOW.getTime() + 15 * 60 * 1000), SOLO_FONTI_DEL_TEST);
@@ -743,6 +765,14 @@ describe("pipeline · solo concorsi ancora attivi", () => {
     expect(summary.itemsNew).toBe(1);
     expect(summary.stale).toBe(3);
     expect(summary.notes.some((nota) => nota.includes("non attivi"))).toBe(true);
+
+    // Anche gli scartati dal cancello lasciano la loro vista (kept=false): così il
+    // vantaggio di tempistica può dirlo, invece di far sembrare che la fonte non
+    // li avesse. Sono due e non tre: la pagina di sezione viene fermata prima, e
+    // non è un concorso — registrarla come vista sarebbe un falso positivo.
+    const scartati = (await store.listSightings("2026-01-01T00:00:00.000Z")).filter((vista) => !vista.kept);
+    expect(scartati).toHaveLength(2);
+    expect(scartati.every((vista) => vista.itemId === null)).toBe(true);
   });
 
   it("una notizia di un'edizione passata non entra nemmeno da un feed", async () => {

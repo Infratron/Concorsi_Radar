@@ -55,6 +55,34 @@ CREATE INDEX IF NOT EXISTS idx_items_deadline   ON items (deadline);
 CREATE INDEX IF NOT EXISTS idx_items_status     ON items (status);
 CREATE INDEX IF NOT EXISTS idx_items_score      ON items (score DESC);
 
+-- `sightings`: la prima volta che ogni fonte ha visto un concorso. È la memoria
+-- che serve al vantaggio di tempistica (comando /vantaggio): in `items` resta solo
+-- la fonte che l'ha visto per prima, quindi senza questa tabella non si può sapere
+-- se l'aggregatore è arrivato dopo di noi o prima.
+--
+-- La chiave (url_key, source_id) rende la scrittura idempotente: si scrive una
+-- volta per concorso e per fonte, e i giri successivi non aggiungono righe.
+-- È una misura, non un dato di servizio: la pipeline registra la vista in un blocco
+-- che non può far fallire l'ingestione, quindi una tabella mancante costa il
+-- numero, non il concorso. Va creata PRIMA di pubblicare il codice che la usa:
+--   npm run db:init   (CREATE TABLE IF NOT EXISTS: non tocca le altre tabelle)
+CREATE TABLE IF NOT EXISTS sightings (
+  url_key   TEXT NOT NULL,
+  source_id TEXT NOT NULL,
+  item_id   INTEGER,
+  kind      TEXT NOT NULL DEFAULT 'contest',
+  channel   TEXT NOT NULL,
+  seen_at   TEXT NOT NULL,
+  kept      INTEGER NOT NULL DEFAULT 1,
+  PRIMARY KEY (url_key, source_id)
+);
+
+-- La finestra del comando è "gli ultimi 30 giorni di viste": l'indice serve a
+-- non leggere tutta la tabella ogni volta che si apre la schermata.
+CREATE INDEX IF NOT EXISTS idx_sightings_seen ON sightings (seen_at DESC);
+-- La scheda di un concorso chiede le sue viste: senza indice è una scansione.
+CREATE INDEX IF NOT EXISTS idx_sightings_item ON sightings (item_id);
+
 CREATE TABLE IF NOT EXISTS deliveries (
   chat_id INTEGER NOT NULL,
   item_id INTEGER NOT NULL,

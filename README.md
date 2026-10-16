@@ -358,8 +358,17 @@ casi in chat resta un messaggio solo.
 | 🔍 Cerca | scrivi una parola: il bot cancella il tuo messaggio e mostra i risultati (concorsi e news insieme, gli articoli marcati 📰) |
 | 🎛 Cosa vedi | i tuoi filtri: quali tipi di concorso, quali categorie di fonti e quali fonti vuoi vedere (qui sotto) |
 | 📡 Fonti | quali fonti rispondono, quando, e le ultime raccolte |
+| 🏁 Vantaggio | `/vantaggio`: di quanto arriviamo prima degli aggregatori, e quanto spesso non arriviamo affatto |
 | ⚙️ Impostazioni | soglia degli avvisi, fascia di silenzio, orari dei digest, e la porta ai filtri |
 | 🔄 Aggiorna | rilegge tutto e dice se è arrivato qualcosa di nuovo |
+
+`/vantaggio` (o `/anticipo`) apre la misura del **vantaggio di tempistica**: di
+quanto vediamo un concorso prima degli aggregatori. La schermata dichiara i suoi
+stessi limiti — da quanti giorni esiste la misura, su quanti concorsi si può
+calcolare, e quante fonti hanno fallito l'ultimo giro — perché un anticipo
+misurato mentre la raccolta è ferma non è un anticipo. Sulla scheda di un
+concorso la stessa misura compare per quel concorso soltanto (`🏁 Visto 6 ore
+prima degli aggregatori`). Il funzionamento sta in [src/enrich/lead.ts](src/enrich/lead.ts).
 
 Tutte le sezioni dei concorsi mostrano **solo i concorsi**: la pagina di un
 aggregatore o la notizia di un giornale non compaiono mai lì dentro. Le sezioni
@@ -701,7 +710,7 @@ npm run dry-run                                        # cosa verrebbe inviato, 
 npm run ingest                                         # raccolta vera, come su Actions
 npm run prune                                          # cosa non è più un concorso attivo (elenco)
 npm run prune -- --apply                               # e lo toglie dall'archivio
-npm test                                               # 319 test
+npm test                                               # 338 test
 npm run typecheck
 ```
 
@@ -774,6 +783,19 @@ La tabella `runs` in D1 conserva la nota di ogni esecuzione: quelle con
   prima di pubblicare il codice che la usa (l'`ALTER` è già stato eseguito sul
   database di produzione il 16/10/2026). Il valore `{}` significa "vedi tutto":
   chi non ha mai aperto 🎛 Cosa vedi continua a vedere l'archivio intero.
+- **La tabella `sightings` (vantaggio di tempistica) è nata con `npm run db:init`
+  il 16/10/2026**, quindi in produzione c'è. Su un database nuovo la crea
+  `db:init` insieme alle altre: è una `CREATE TABLE IF NOT EXISTS`, non serve
+  nessun `ALTER`. La pipeline registra la vista in un blocco che non può far
+  fallire l'ingestione, quindi anche se la tabella mancasse si perderebbe il
+  numero e non il concorso — con il motivo scritto nella nota del giro.
+- **La misura del vantaggio parte dal giorno in cui è nata**: `sightings` non ha
+  storico, quindi i primi numeri sono pochi e vanno letti con la riga "Misuro da
+  N giorni" che la schermata mostra. Tre cose la sporcano, e tutte e tre sono
+  dichiarate: l'ingest fermo (una fonte che non risponde non vede niente),
+  l'accensione di una fonte nuova (la prima esecuzione scarica l'arretrato e
+  sembra che l'abbiamo visto prima noi), e le fonti "stampa" come Google News,
+  che restano fuori dal confronto perché sono echi e non la fonte del concorso.
 
 ## 12. Mappa del progetto
 
@@ -797,7 +819,8 @@ src/
   lib/http.ts              fetch con ETag, retry, timeout
   lib/robots.ts            parsing e matching di robots.txt
   ingest/                  rss.ts, sitemap.ts, httplist.ts, index.ts
-  enrich/                  rules.ts, score.ts, ai.ts, kind.ts (concorso o articolo), freshness.ts
+  enrich/                  rules.ts, score.ts, ai.ts, kind.ts (concorso o articolo), freshness.ts,
+                           lead.ts (vantaggio di tempistica: canali, viste, statistiche)
   db/                      schema.sql, store.ts, d1.ts, d1-http.ts, memory.ts
   telegram/                api.ts, format.ts, keyboard.ts, screens.ts, bot.ts, digest.ts
   debug/bench.ts           misura della CPU per invocazione (Node e workerd)
@@ -808,7 +831,7 @@ scripts/
   dry-run.ts               prova generale senza inviare nulla
   bench-cpu.ts             stessa misura su Node, con le fonti vere
   seed-sources.ts          genera l'SQL di sincronizzazione delle fonti
-test/                      14 file, 243 test (vitest, nessuna rete)
+test/                      18 file, 338 test (vitest, nessuna rete)
 ```
 
 Il tratto che tiene insieme tutto: **una sola copia dell'SQL**. `src/db/d1.ts`

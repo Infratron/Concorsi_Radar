@@ -8,6 +8,7 @@ import type {
   Prefs,
   RobotsRow,
   RunRow,
+  Sighting,
   SourceRow,
   UiState,
 } from "../types.ts";
@@ -63,6 +64,10 @@ export function createMemoryStore(): MemoryStore {
   const aiUsage = new Map<string, { calls: number; neurons: number }>();
   const robots = new Map<string, RobotsRow>();
   const ui = new Map<number, UiState>();
+  // Le viste: chiave (urlKey, fonte) come la PRIMARY KEY di D1, così anche qui la
+  // seconda vista della stessa fonte non aggiunge niente.
+  const sightings: Sighting[] = [];
+  const viste = new Set<string>();
   let nextItemId = 1;
 
   const applyPatch = (row: ItemRow, patch: ItemPatch): void => {
@@ -217,6 +222,29 @@ export function createMemoryStore(): MemoryStore {
     async touchItem(id: number, at: string): Promise<void> {
       const row = items.find((candidate) => candidate.id === id);
       if (row) row.lastSeenAt = at;
+    },
+
+    async recordSighting(sighting: Sighting): Promise<void> {
+      const chiave = `${sighting.urlKey}|${sighting.sourceId}`;
+      if (viste.has(chiave)) return;
+      viste.add(chiave);
+      sightings.push(clone(sighting));
+    },
+
+    async listSightings(sinceIso: string, limit = 2000): Promise<Sighting[]> {
+      const capped = Math.min(Math.max(Math.trunc(limit), 1), 5000);
+      return sightings
+        .filter((row) => row.seenAt >= sinceIso)
+        .sort((a, b) => b.seenAt.localeCompare(a.seenAt))
+        .slice(0, capped)
+        .map((row) => clone(row));
+    },
+
+    async listItemSightings(itemId: number): Promise<Sighting[]> {
+      return sightings
+        .filter((row) => row.itemId === itemId)
+        .sort((a, b) => a.seenAt.localeCompare(b.seenAt))
+        .map((row) => clone(row));
     },
 
     async deleteItems(ids: number[]): Promise<number> {

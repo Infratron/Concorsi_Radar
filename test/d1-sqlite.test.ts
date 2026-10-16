@@ -112,6 +112,51 @@ describe("store D1 · SQL vero su SQLite", () => {
     expect((await store.queryItems({ kinds: ["contest"] }))).toHaveLength(0);
   });
 
+  it("registra una sola vista per concorso e per fonte, e le rilegge", async () => {
+    await store.recordSighting({
+      urlKey: "key-esselunga",
+      sourceId: "premieconcorsi",
+      itemId: 1,
+      kind: "contest",
+      channel: "aggregatore",
+      seenAt: "2026-11-20T08:00:00.000Z",
+      kept: true,
+    });
+    // Stessa fonte, stesso concorso, un giro dopo: la PRIMARY KEY ferma la riga.
+    await store.recordSighting({
+      urlKey: "key-esselunga",
+      sourceId: "premieconcorsi",
+      itemId: 1,
+      kind: "contest",
+      channel: "aggregatore",
+      seenAt: "2026-11-20T09:00:00.000Z",
+      kept: true,
+    });
+    await store.recordSighting({
+      urlKey: "key-esselunga",
+      sourceId: "sitemap-conad",
+      itemId: 1,
+      kind: "contest",
+      channel: "brand",
+      seenAt: "2026-11-19T08:00:00.000Z",
+      kept: true,
+    });
+
+    const tutte = await store.listSightings("2026-01-01T00:00:00.000Z");
+    expect(tutte).toHaveLength(2);
+    const aggregatore = tutte.find((vista) => vista.sourceId === "premieconcorsi");
+    expect(aggregatore?.seenAt).toBe("2026-11-20T08:00:00.000Z");
+    expect(aggregatore?.channel).toBe("aggregatore");
+    expect(aggregatore?.kept).toBe(true);
+
+    // La finestra taglia: la vista del 19 non entra in "dal 20".
+    expect((await store.listSightings("2026-11-20T00:00:00.000Z")).map((vista) => vista.sourceId)).toEqual([
+      "premieconcorsi",
+    ]);
+    // La scheda chiede le viste del concorso, in ordine di tempo.
+    expect((await store.listItemSightings(1)).map((vista) => vista.channel)).toEqual(["brand", "aggregatore"]);
+  });
+
   it("propone il candidato con urlKey identico", async () => {
     await store.insertItem(item());
     const candidates = await store.findDuplicateCandidates("key-esselunga", "ffffffffffffffff", "2026-10-01T00:00:00.000Z");

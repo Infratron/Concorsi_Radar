@@ -8,6 +8,7 @@ import type {
   Prefs,
   RobotsRow,
   RunRow,
+  Sighting,
   SourceRow,
   UiState,
 } from "../types.ts";
@@ -89,6 +90,16 @@ interface PrefsDbRow {
   digest_hours: string;
   /** JSON dei filtri della chat. Assente su un database antecedente alla colonna. */
   filters?: string | null;
+}
+
+interface SightingDbRow {
+  url_key: string;
+  source_id: string;
+  item_id: number | null;
+  kind: string;
+  channel: string;
+  seen_at: string;
+  kept: number;
 }
 
 interface UiDbRow {
@@ -180,6 +191,22 @@ function rowToItem(row: ItemDbRow): ItemRow {
     clusterId: row.cluster_id,
     status: row.status as ItemStatus,
     aiUsed: row.ai_used === 1,
+  };
+}
+
+function rowToSighting(row: SightingDbRow): Sighting {
+  return {
+    urlKey: row.url_key,
+    sourceId: row.source_id,
+    itemId: row.item_id,
+    // Valore inatteso = concorso, come per gli item: è il significato di default
+    // della colonna e l'unico che non nasconde una riga alle statistiche.
+    kind: row.kind === "news" ? "news" : "contest",
+    // Un canale scritto male vale "stampa", cioè resta fuori dal confronto:
+    // meglio non contare una vista che contarla dalla parte sbagliata.
+    channel: row.channel === "brand" || row.channel === "aggregatore" ? row.channel : "stampa",
+    seenAt: row.seen_at,
+    kept: row.kept === 1,
   };
 }
 
@@ -463,6 +490,46 @@ export function createD1Store(db: D1Like): Store {
 
     async touchItem(id: number, at: string): Promise<void> {
       await db.prepare("UPDATE items SET last_seen_at = ? WHERE id = ?").bind(at, id).run();
+    },
+
+    async recordSighting(sighting: Sighting): Promise<void> {
+      // DO NOTHING e non DO UPDATE: la prima vista è il dato, le successive non
+      // aggiungono niente e non devono spostare l'orologio del confronto.
+      await db
+        .prepare(
+          `INSERT INTO sightings (url_key, source_id, item_id, kind, channel, seen_at, kept)
+           VALUES (?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(url_key, source_id) DO NOTHING`,
+        )
+        .bind(
+          sighting.urlKey,
+          sighting.sourceId,
+          sighting.itemId,
+          sighting.kind,
+          sighting.channel,
+          sighting.seenAt,
+          sighting.kept ? 1 : 0,
+        )
+        .run();
+    },
+
+    async listSightings(sinceIso: string, limit = 2000): Promise<Sighting[]> {
+      // Tetto di sicurezza: la finestra del comando sono 30 giorni, e con questo
+      // limite la schermata non può diventare una query da migliaia di righe.
+      const capped = Math.min(Math.max(Math.trunc(limit), 1), 5000);
+      const result = await db
+        .prepare("SELECT * FROM sightings WHERE seen_at >= ? ORDER BY seen_at DESC LIMIT ?")
+        .bind(sinceIso, capped)
+        .all<SightingDbRow>();
+      return (result.results ?? []).map(rowToSighting);
+    },
+
+    async listItemSightings(itemId: number): Promise<Sighting[]> {
+      const result = await db
+        .prepare("SELECT * FROM sightings WHERE item_id = ? ORDER BY seen_at ASC")
+        .bind(itemId)
+        .all<SightingDbRow>();
+      return (result.results ?? []).map(rowToSighting);
     },
 
     async deleteItems(ids: number[]): Promise<number> {

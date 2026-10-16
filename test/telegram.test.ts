@@ -24,6 +24,7 @@ import {
 } from "../src/telegram/keyboard.ts";
 import { activeFilterCount, defaultFilters, filterableSources, parseFilters, withFilterChange } from "../src/filters.ts";
 import { applyIntent, parseCallback } from "../src/telegram/screens.ts";
+import { channelOf } from "../src/enrich/lead.ts";
 import { handleUpdate } from "../src/telegram/bot.ts";
 import {
   isQuietHour,
@@ -1239,5 +1240,90 @@ describe("digest e avvisi", () => {
     const inviato = lastWith(calls, "sendMessage");
     const keyboard = inviato?.payload.reply_markup as { inline_keyboard: { callback_data?: string }[][] };
     expect(keyboard.inline_keyboard.flat().map((b) => b.callback_data)).toEqual([`d:open:${ids[0]}`, "d:home"]);
+  });
+});
+
+describe("vantaggio di tempistica · comando /vantaggio", () => {
+  /** Una vista di una fonte su un concorso: la riga che alimenta la misura. */
+  const vista = (itemId: number, sourceId: string, seenAt: string, kept = true) => ({
+    urlKey: `vista-${itemId}-${sourceId}`,
+    sourceId,
+    itemId,
+    kind: "contest" as const,
+    channel: channelOf(sourceId),
+    seenAt,
+    kept,
+  });
+
+  it("senza viste registrate dichiara che la misura parte da adesso", async () => {
+    const store = createMemoryStore();
+    await store.upsertPrefs(prefs());
+    const { tg, calls } = makeTg();
+
+    await handleUpdate(command(1, "/vantaggio"), deps(store, tg));
+
+    const testo = String(lastWith(calls, "sendMessage")?.payload.text ?? "");
+    expect(testo).toContain("Vantaggio di tempistica");
+    expect(testo).toContain("Ancora nessun concorso visto da entrambi i canali");
+  });
+
+  it("mostra mediana, verso e i due casi censurati", async () => {
+    const store = createMemoryStore();
+    await store.upsertPrefs(prefs());
+    const ids = await seed(store, [
+      { title: "Concorso Barilla", sourceId: "premieconcorsi" },
+      { title: "Concorso Conad", sourceId: "sitemap-conad" },
+      { title: "Concorso Findus", sourceId: "premieconcorsi" },
+    ]);
+    // Il primo l'abbiamo visto prima noi di sei ore, il secondo solo dalle fonti
+    // dirette, il terzo solo dagli aggregatori: i tre casi che il comando separa.
+    await store.recordSighting(vista(ids[0], "premieconcorsi", "2026-11-20T08:00:00.000Z"));
+    await store.recordSighting(vista(ids[0], "sitemap-conad", "2026-11-20T02:00:00.000Z"));
+    await store.recordSighting(vista(ids[1], "sitemap-conad", "2026-11-20T03:00:00.000Z"));
+    await store.recordSighting(vista(ids[2], "soldissimi", "2026-11-20T04:00:00.000Z"));
+    const { tg, calls } = makeTg();
+
+    await handleUpdate(command(1, "/vantaggio"), deps(store, tg));
+
+    const testo = String(lastWith(calls, "sendMessage")?.payload.text ?? "");
+    expect(testo).toContain("Su <b>1</b> concorso visto da entrambi i canali");
+    expect(testo).toContain("Mediana <b>6 ore prima</b>");
+    expect(testo).toContain("Prima noi: <b>1</b>");
+    expect(testo).toContain("Solo da fonti dirette: <b>1</b>");
+    expect(testo).toContain("Solo dagli aggregatori: <b>1</b>");
+    expect(testo).toContain("Misuro da <b>1</b> giorno");
+    expect((await store.getUiState(CHAT))?.section).toBe("vantaggio");
+  });
+
+  it("la scheda di un concorso porta il suo anticipo", async () => {
+    const store = createMemoryStore();
+    await store.upsertPrefs(prefs());
+    const ids = await seed(store, [{ title: "Concorso Barilla", sourceId: "premieconcorsi" }]);
+    await store.recordSighting(vista(ids[0], "premieconcorsi", "2026-11-20T08:00:00.000Z"));
+    await store.recordSighting(vista(ids[0], "sitemap-conad", "2026-11-20T02:00:00.000Z"));
+    const { tg, calls } = makeTg();
+
+    await handleUpdate(command(1, "/start"), deps(store, tg));
+    await handleUpdate(tap(2, `open:${ids[0]}`, 100), deps(store, tg));
+
+    const testo = String(lastWith(calls, "editMessageText")?.payload.text ?? "");
+    expect(testo).toContain("Visto <b>6 ore</b> prima degli aggregatori");
+  });
+
+  it("sulla scheda dice anche quando siamo arrivati dopo", async () => {
+    const store = createMemoryStore();
+    await store.upsertPrefs(prefs());
+    const ids = await seed(store, [{ title: "Concorso Barilla", sourceId: "premieconcorsi" }]);
+    // L'aggregatore lo ha pubblicato alle 2, la pagina del brand alle 9: qui siamo
+    // arrivati dopo, ed è la riga che dice quanto.
+    await store.recordSighting(vista(ids[0], "premieconcorsi", "2026-11-20T02:00:00.000Z"));
+    await store.recordSighting(vista(ids[0], "sitemap-conad", "2026-11-20T09:00:00.000Z"));
+    const { tg, calls } = makeTg();
+
+    await handleUpdate(command(1, "/start"), deps(store, tg));
+    await handleUpdate(tap(2, `open:${ids[0]}`, 100), deps(store, tg));
+
+    const testo = String(lastWith(calls, "editMessageText")?.payload.text ?? "");
+    expect(testo).toContain("Gli aggregatori l'hanno visto <b>7 ore</b> prima");
   });
 });

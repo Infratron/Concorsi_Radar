@@ -7,6 +7,7 @@ import { indexPageUrls, staleReason } from "./enrich/freshness.ts";
 import { MAX_AI_CALLS_PER_RUN, enrichWithAi, mergeInsight, needsAi } from "./enrich/ai.ts";
 import { applyWeights, baseScore } from "./enrich/score.ts";
 import {
+  type PreparedItem,
   isFullyEnriched,
   loadDuplicateCandidates,
   mergeDuplicate,
@@ -16,6 +17,7 @@ import {
   touchDuplicate,
   upgradeTitle,
 } from "./dedupe.ts";
+import { sightingFor } from "./enrich/lead.ts";
 import { fnv1a32, sourceNameTokens } from "./lib/text.ts";
 
 /**
@@ -207,6 +209,29 @@ export async function runIngest(
   let deferred = 0;
   let aiCalls = 0;
 
+  // Registrazione delle viste: una riga per concorso e per fonte, ed è il dato da
+  // cui nasce /vantaggio. Sta in un try di proposito — è una misura, e una misura
+  // non deve poter costare un concorso: se la tabella non c'è ancora la riga manca
+  // e il motivo resta nella nota del giro, invece di far scartare l'item.
+  let visteNonRegistrate = false;
+  const registraVista = async (
+    source: SourceRow,
+    prepared: PreparedItem,
+    itemId: number | null,
+    kept: boolean,
+  ): Promise<void> => {
+    if (prepared.kind !== "contest") return;
+    try {
+      await deps.store.recordSighting(
+        sightingFor({ urlKey: prepared.urlKey, sourceId: source.id, itemId, kind: prepared.kind, kept, now }),
+      );
+    } catch (error) {
+      if (visteNonRegistrate) return;
+      visteNonRegistrate = true;
+      notes.push(`viste non registrate (${errorMessage(error)})`);
+    }
+  };
+
   for (const source of due) {
     // Freno di CPU: se il budget è finito, la fonte resta al giro successivo.
     // Non viene registrata come eseguita, quindi la rotazione la ripesca subito
@@ -300,6 +325,9 @@ export async function runIngest(
 
         if (existing) {
           duplicates++;
+          // La copia dell'aggregatore è il caso più frequente del regime, ed è
+          // esattamente la riga che rende misurabile l'anticipo.
+          await registraVista(source, prepared, existing.id, true);
           // Un duplicato non crea una seconda riga, ma può portare un nome
           // migliore: la copia con il titolo più completo lo sostituisce.
           await upgradeTitle(deps.store, existing, prepared);
@@ -334,6 +362,9 @@ export async function runIngest(
         );
         if (motivo !== null) {
           stale++;
+          // Visto e buttato: si registra con kept=false, così /vantaggio può dire
+          // anche quanti concorsi l'archivio ha visto e non ha tenuto.
+          await registraVista(source, prepared, null, false);
           const chiave = motivoChiave(motivo);
           motivi.set(chiave, (motivi.get(chiave) ?? 0) + 1);
           continue;
@@ -350,6 +381,7 @@ export async function runIngest(
         cpuProxyMs += performance.now() - enrichStart;
         const inserted = await deps.store.insertItem(toNewItem(raw, prepared, insight, score, now));
         if (inserted.created) itemsNew++;
+        await registraVista(source, prepared, inserted.item.id, true);
       } catch (error) {
         notes.push(`${source.id}: item scartato (${errorMessage(error)})`);
       }

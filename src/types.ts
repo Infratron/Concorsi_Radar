@@ -35,6 +35,39 @@ export interface SourceRow extends SourceConfig {
   failStreak: number;
 }
 
+/**
+ * Da CHI arriva la notizia, non da chi organizza il concorso. Serve a misurare il
+ * vantaggio di tempistica (src/enrich/lead.ts): `brand` è la fonte diretta di cui
+ * andiamo fieri, `aggregatore` è il metro con cui ci confrontiamo, `stampa` sono
+ * gli echi (le query Google News) che restano fuori dal confronto.
+ */
+export type SourceChannel = "brand" | "aggregatore" | "stampa";
+
+/**
+ * La PRIMA volta che una fonte ha visto un concorso.
+ *
+ * Perché esiste: in `items` c'è una riga sola per concorso e tiene solo la fonte
+ * che l'ha visto per prima — un duplicato aggiorna `last_seen_at` e non lascia
+ * traccia di chi altro lo avesse. Così l'anticipo rispetto agli aggregatori era
+ * impossibile da misurare: qui invece ogni fonte lascia la sua riga, e il
+ * confronto si fa fra la prima vista diretta e la prima vista da aggregatore.
+ *
+ * La chiave è (url_key, source_id): la seconda volta che la stessa fonte rivede
+ * lo stesso URL non si scrive niente, quindi la tabella non cresce a ogni giro.
+ */
+export interface Sighting {
+  urlKey: string;
+  sourceId: string;
+  /** id della riga in `items`, oppure null se il cancello l'ha scartato. */
+  itemId: number | null;
+  kind: ItemKind;
+  channel: SourceChannel;
+  /** ISO 8601: quando il GIRO di raccolta l'ha visto, non la data della fonte. */
+  seenAt: string;
+  /** false = visto ma scartato (non è un concorso attivo). */
+  kept: boolean;
+}
+
 /** Elemento grezzo estratto da una fonte, prima di deduplica e arricchimento. */
 export interface RawItem {
   sourceId: string;

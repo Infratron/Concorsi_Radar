@@ -1,5 +1,6 @@
 import type { ItemRow, Prefs, RunRow, SourceRow, UiState } from "../types.ts";
 import { CATEGORY_LABELS, isSeeingAll, mutedSourceIds, type FilterSource } from "../filters.ts";
+import type { LeadStats } from "../enrich/lead.ts";
 import type { InlineKeyboardMarkup } from "./api.ts";
 import { escapeHtml, formatDate, formatItemCard, sourceLabel } from "./format.ts";
 import {
@@ -15,6 +16,7 @@ import {
   sectionTitle,
   settingsKeyboard,
   storicoKeyboard,
+  vantaggioKeyboard,
 } from "./keyboard.ts";
 
 /**
@@ -80,6 +82,7 @@ export const SECTIONS = [
   "ignorati",
   "cerca",
   "fonti",
+  "vantaggio",
   "impostazioni",
   "filtri",
   "filtri-fonti",
@@ -199,6 +202,10 @@ export interface ScreenData {
   regolamentoUrl: string | null;
   sources: SourceRow[];
   runs: RunRow[];
+  /** Statistiche del vantaggio di tempistica: solo nella sezione /vantaggio. */
+  lead: LeadStats | null;
+  /** Anticipo del concorso aperto in scheda, in ore: null se non è misurabile. */
+  leadDelConcorso: number | null;
   prefs: Prefs;
   archiveTotal: number;
   /** Pagina di fonti da mostrare in 📡 Scegli le fonti (già ritagliata). */
@@ -314,6 +321,100 @@ function stellePer(data: ScreenData, section: string): number | null {
   return SEZIONI_STELLE.has(section) ? data.prefs.filters.minScore : null;
 }
 
+/**
+ * Durata in parole. In chat il decimale non serve: "6,3 ore" non dice niente a
+ * nessuno, "6 ore" sì.
+ */
+function durata(ore: number): string {
+  const quanta = Math.abs(ore);
+  if (quanta < 1) return "meno di un'ora";
+  if (quanta < 24) {
+    const intere = Math.round(quanta);
+    return intere === 1 ? "un'ora" : `${intere} ore`;
+  }
+  const giorni = Math.round(quanta / 24);
+  return giorni === 1 ? "un giorno" : `${giorni} giorni`;
+}
+
+/** "6 ore prima", "2 giorni dopo", "insieme": il verso conta quanto la misura. */
+function anticipo(ore: number): string {
+  if (Math.abs(ore) < 0.5) return "insieme";
+  return ore > 0 ? `${durata(ore)} prima` : `${durata(ore)} dopo`;
+}
+
+/**
+ * Il vantaggio di tempistica: di quanto vediamo un concorso prima degli
+ * aggregatori. È una misura con tre limiti dichiarati dentro la schermata — da
+ * quando esiste, su quanti concorsi si può calcolare, e quante fonti sono in
+ * errore — perché un anticipo misurato mentre la raccolta è ferma non è un
+ * anticipo.
+ */
+function vantaggioScreen(data: ScreenData): Screen {
+  const righe = ["🏁 <b>Vantaggio di tempistica</b>", ""];
+  const lead = data.lead;
+  if (!lead || lead.concorsi === 0) {
+    righe.push(
+      "Da adesso registro <b>quando</b> ogni fonte vede un concorso, così posso dire di quanto arriviamo prima degli aggregatori.",
+      "",
+      "Ancora nessun concorso visto da entrambi i canali: il primo numero arriva appena un aggregatore riprende qualcosa che ho già in archivio.",
+    );
+    return { text: righe.join("\n"), keyboard: vantaggioKeyboard() };
+  }
+
+  righe.push(
+    `Ultimi 30 giorni · <b>${lead.concorsi}</b> ${lead.concorsi === 1 ? "concorso visto" : "concorsi visti"} almeno una volta`,
+    `Misuro da <b>${lead.daGiorni}</b> ${lead.daGiorni === 1 ? "giorno" : "giorni"} (la tabella parte vuota)`,
+  );
+
+  if (lead.confrontabili === 0) {
+    righe.push(
+      "",
+      "Nessun concorso visto sia da una fonte diretta sia da un aggregatore: finché le due strade non si incrociano il confronto non esiste.",
+    );
+  } else {
+    righe.push(
+      "",
+      `📊 Su <b>${lead.confrontabili}</b> ${lead.confrontabili === 1 ? "concorso visto" : "concorsi visti"} da entrambi i canali:`,
+      `⏱ Mediana <b>${anticipo(lead.medianaOre ?? 0)}</b>${
+        lead.p25Ore !== null && lead.p75Ore !== null && lead.p25Ore !== lead.p75Ore
+          ? ` · metà dei casi fra ${anticipo(lead.p25Ore)} e ${anticipo(lead.p75Ore)}`
+          : ""
+      }`,
+      `🥇 Prima noi: <b>${lead.avanti}</b> · 🐌 prima loro: <b>${lead.dietro}</b>${
+        lead.insieme > 0 ? ` · 🤝 stesso giro: <b>${lead.insieme}</b>` : ""
+      }`,
+    );
+  }
+
+  righe.push(
+    "",
+    `🎯 Solo da fonti dirette: <b>${lead.soloDiretti}</b> — gli aggregatori non li hanno ripresi`,
+    `🕳 Solo dagli aggregatori: <b>${lead.soloAggregatori}</b> — questi ci sono sfuggiti`,
+  );
+
+  if (lead.avanti > 0) {
+    righe.push(
+      "",
+      "Quando eravamo avanti:",
+      `• entro 6 ore: ${lead.fasce.entro6h}`,
+      `• 6–24 ore: ${lead.fasce.entroGiorno}`,
+      `• 1–3 giorni: ${lead.fasce.entro3giorni}`,
+      `• oltre 3 giorni: ${lead.fasce.oltre}`,
+    );
+  }
+
+  const attive = data.sources.filter((source) => source.enabled);
+  const inErrore = attive.filter((source) => source.failStreak > 0).length;
+  if (attive.length > 0) {
+    righe.push(
+      "",
+      `📡 <b>${inErrore}</b> fonti su <b>${attive.length}</b> hanno fallito l'ultimo giro: nei giorni in cui la raccolta è ferma il numero qui sopra misura il fermo, non la velocità.`,
+    );
+  }
+
+  return { text: righe.join("\n"), keyboard: vantaggioKeyboard() };
+}
+
 function cardScreen(state: UiState, data: ScreenData, now: Date): Screen {
   const item = data.openItem;
   if (!item) {
@@ -333,6 +434,17 @@ function cardScreen(state: UiState, data: ScreenData, now: Date): Screen {
   const righe: string[] = [];
   if (stato) righe.push(stato, "");
   righe.push(formatItemCard(item, now));
+  // Il vantaggio misurato su QUESTO concorso: è la riga che rende il numero del
+  // comando /vantaggio verificabile caso per caso.
+  if (data.leadDelConcorso !== null) {
+    righe.push(
+      data.leadDelConcorso > 0.5
+        ? `🏁 Visto <b>${durata(data.leadDelConcorso)}</b> prima degli aggregatori`
+        : data.leadDelConcorso < -0.5
+          ? `🏁 Gli aggregatori l'hanno visto <b>${durata(data.leadDelConcorso)}</b> prima`
+          : "🏁 Visto dagli aggregatori nello stesso giro",
+    );
+  }
   righe.push(`🆔 <code>${item.id}</code> · 📥 fonte: ${escapeHtml(sourceLabel(item.sourceId))}`);
   return {
     text: righe.join("\n"),
@@ -467,6 +579,8 @@ export function renderScreen(state: UiState, data: ScreenData, now: Date): Scree
       };
     case "fonti":
       return sourcesScreen(data);
+    case "vantaggio":
+      return vantaggioScreen(data);
     case "impostazioni":
       return settingsScreen(data);
     case "filtri":

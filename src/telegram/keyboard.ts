@@ -293,6 +293,20 @@ export function settingsKeyboard(prefs: Prefs): InlineKeyboardMarkup {
   };
 }
 
+/**
+ * Il vantaggio di tempistica non ha scelte da fare: si legge e si torna. L'unica
+ * scorciatoia utile è la schermata delle fonti, da cui si vede perché un anticipo
+ * può essere storto (una fonte ferma da giorni non porta niente a nessuno).
+ */
+export function vantaggioKeyboard(): InlineKeyboardMarkup {
+  return {
+    inline_keyboard: [
+      [button("📡 Fonti", "s:fonti"), button("🔄 Aggiorna", "refresh")],
+      [button("🏠 Menù", "home")],
+    ],
+  };
+}
+
 /** Schermate senza scelte: solo il ritorno (fonti, prompt della ricerca, errori). */
 export function backKeyboard(): InlineKeyboardMarkup {
   return { inline_keyboard: [[button("🔄 Aggiorna", "refresh"), button("🏠 Menù", "home")]] };
@@ -335,6 +349,8 @@ export function sectionTitle(section: string): string {
       return "Articoli e news";
     case "fonti":
       return "Fonti e raccolte";
+    case "vantaggio":
+      return "Vantaggio di tempistica";
     case "impostazioni":
       return "Impostazioni";
     case "filtri":

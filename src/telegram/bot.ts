@@ -15,6 +15,7 @@ import type { TelegramUpdate } from "./api.ts";
 import type { NotifyDeps } from "./digest.ts";
 import { regolamentoUrl } from "./digest.ts";
 import { localDateString, sourceLabel } from "./format.ts";
+import { leadHours, summarizeLead } from "../enrich/lead.ts";
 import { PAGE_SIZE } from "./keyboard.ts";
 import {
   applyIntent,
@@ -51,6 +52,12 @@ export interface BotDeps extends NotifyDeps {
 }
 
 const WEEK_MS = 7 * 86_400_000;
+/**
+ * Finestra della misura del vantaggio: 30 giorni. Abbastanza da avere casi, corta
+ * abbastanza da non raccontare una velocità che nel frattempo è cambiata (le fonti
+ * si accendono e si spengono, e l'anticipo di un mese fa non è quello di oggi).
+ */
+const VANTAGGIO_MS = 30 * 86_400_000;
 
 export function defaultPrefs(chatId: number): Prefs {
   return {
@@ -118,6 +125,9 @@ function intentForCommand(command: string, args: string): Intent | null {
     case "/fonti":
     case "/health":
       return { kind: "section", section: "fonti" };
+    case "/vantaggio":
+    case "/anticipo":
+      return { kind: "section", section: "vantaggio" };
     case "/impostazioni":
       return { kind: "section", section: "impostazioni" };
     case "/stop":
@@ -422,6 +432,15 @@ async function loadScreenData(
 
   const openItem = state.openItemId !== null ? await store.getItem(state.openItemId) : null;
   const decision = state.openItemId !== null ? await decisionFor(deps, chatId, state.openItemId) : null;
+  // Il vantaggio di tempistica si legge solo dove serve: una query sulle viste a
+  // ogni menù sarebbe sprecata. La scheda invece porta l'anticipo del SUO
+  // concorso — è il "per ogni concorso" della misura.
+  const lead =
+    state.section === "vantaggio"
+      ? summarizeLead(await store.listSightings(new Date(now.getTime() - VANTAGGIO_MS).toISOString()), now)
+      : null;
+  const leadDelConcorso =
+    state.openItemId !== null ? leadHours(await store.listItemSightings(state.openItemId)) : null;
   // 📡 Scegli le fonti: la lista delle fonti spegnibili (dalla configurazione,
   // che è dove vivono le categorie) si pagina come gli elenchi.
   const tutteLeFonti = state.section === "filtri-fonti" ? filterableSources() : [];
@@ -443,8 +462,13 @@ async function loadScreenData(
     openItem,
     decision,
     regolamentoUrl: openItem ? regolamentoUrl(openItem) : null,
-    sources: state.section === "fonti" ? await store.getSources() : ([] as SourceRow[]),
+    sources:
+      state.section === "fonti" || state.section === "vantaggio"
+        ? await store.getSources()
+        : ([] as SourceRow[]),
     runs: state.section === "fonti" ? await store.recentRuns(4) : [],
+    lead,
+    leadDelConcorso,
     prefs,
     archiveTotal,
     filterSources: tutteLeFonti.slice(paginaFonti * PAGE_SIZE, paginaFonti * PAGE_SIZE + PAGE_SIZE),

@@ -7,6 +7,7 @@ import type {
   Prefs,
   RobotsRow,
   RunRow,
+  Sighting,
   SourceRow,
   UiState,
 } from "../types.ts";
@@ -54,6 +55,18 @@ export interface Store {
    * Restituisce quante righe di `items` sono state davvero cancellate.
    */
   deleteItems(ids: number[]): Promise<number>;
+
+  // --- vantaggio di tempistica ---
+  /**
+   * La PRIMA vista di una fonte su un concorso. Idempotente: la seconda volta
+   * (stessa coppia url_key + fonte) non scrive niente, quindi la tabella non
+   * cresce a ogni giro di raccolta.
+   */
+  recordSighting(sighting: Sighting): Promise<void>;
+  /** Le viste registrate dal timestamp indicato, dalla più recente. */
+  listSightings(sinceIso: string, limit?: number): Promise<Sighting[]>;
+  /** Le viste di un solo concorso: serve alla riga di anticipo sulla scheda. */
+  listItemSightings(itemId: number): Promise<Sighting[]>;
 
   // --- preferenze / consegne ---
   getPrefs(chatId: number): Promise<Prefs | null>;
