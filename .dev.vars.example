@@ -1,0 +1,26 @@
+# Concorsi Radar — variabili di ambiente (template)
+#
+# Per lo sviluppo locale: copia questo file in `.dev.vars` e riempi i valori.
+# `wrangler dev` legge `.dev.vars` automaticamente.
+#
+# Per la produzione NON si usa un file: i valori vanno caricati come secret con
+#   npx wrangler secret put NOME
+# così restano cifrati e fuori dal repository.
+
+# 1) Token del bot, da @BotFather su Telegram (formato 123456789:AA...).
+TELEGRAM_BOT_TOKEN=
+
+# 2) Segreto condiviso con Telegram per il webhook.
+#    Genera il tuo con:
+#      node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+#    Deve essere lo stesso valore passato a /setup e a setWebhook.
+WEBHOOK_SECRET=
+
+# 3) Il tuo chat id: è l'admin che riceve gli avvisi di sistema (fonte in errore).
+#    Per scoprirlo scrivi al bot: se non sei autorizzato risponde con il tuo id.
+ADMIN_CHAT_ID=
+
+# 4) Chat autorizzati a usare il bot, separati da virgola: tu e la tua amica.
+#    Il primo id è anche l'admin se ADMIN_CHAT_ID resta vuoto.
+#    Esempio con due persone:
+ALLOWED_CHAT_IDS=

@@ -1,0 +1,15 @@
+node_modules/
+.wrangler/
+dist/
+coverage/
+*.log
+
+# Stato locale dell'editor, non fa parte del progetto
+.freebuff/
+
+# Segreti: mai in repository. `.dev.vars.example` è il template e va versionato.
+.dev.vars
+.dev.vars.local
+.env
+.env.local
+.env.*.local

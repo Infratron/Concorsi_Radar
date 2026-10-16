@@ -1,0 +1,31 @@
+name = "concorsi-radar"
+main = "src/index.ts"
+# Data di compatibilità: allineata al runtime di workerd installato da wrangler 3
+# (una data più recente fa solo un fallback con avviso in locale). Aggiorna
+# wrangler a v4 e poi puoi alzarla.
+compatibility_date = "2025-07-18"
+workers_dev = true
+
+# Workers AI: usata SOLO per gli item ambigui, con tetto giornaliero (10.000 Neurons/giorno sul piano Free).
+[ai]
+binding = "AI"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "concorsi-radar"
+# Sostituisci con l'id restituito da `npm run db:create`.
+database_id = "REPLACE_WITH_D1_DATABASE_ID"
+
+# 3 trigger (limite Free = 5 per account):
+#  - ingestione a rotazione ogni 15 minuti
+#  - due digest: 06:05 UTC (= 08:05 CEST / 07:05 CET) e 17:05 UTC (= 19:05 CEST / 18:05 CET)
+[triggers]
+crons = ["*/15 * * * *", "5 6 * * *", "5 17 * * *"]
+
+[observability]
+enabled = true
+
+# Secrets richiesti (mai nel file):
+#   wrangler secret put TELEGRAM_BOT_TOKEN
+#   wrangler secret put WEBHOOK_SECRET
+#   wrangler secret put ADMIN_CHAT_ID

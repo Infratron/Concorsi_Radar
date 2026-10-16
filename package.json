@@ -1,0 +1,33 @@
+{
+  "name": "concorsi-radar",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Radar dei concorsi a premi italiano: ingestione fonti, deduplica, scoring e digest su Telegram (Cloudflare Workers + D1).",
+  "scripts": {
+    "dev": "wrangler dev",
+    "dev:cron": "wrangler dev --test-scheduled",
+    "deploy": "wrangler deploy",
+    "db:create": "wrangler d1 create concorsi-radar",
+    "db:init": "wrangler d1 execute concorsi-radar --remote --file=./src/db/schema.sql",
+    "db:init:local": "wrangler d1 execute concorsi-radar --local --file=./src/db/schema.sql",
+    "db:seed": "node --experimental-strip-types scripts/seed-sources.ts && wrangler d1 execute concorsi-radar --remote --file=./.wrangler/sources-seed.sql",
+    "secrets:token": "wrangler secret put TELEGRAM_BOT_TOKEN",
+    "secrets:webhook": "wrangler secret put WEBHOOK_SECRET",
+    "secrets:admin": "wrangler secret put ADMIN_CHAT_ID",
+    "secrets:chats": "wrangler secret put ALLOWED_CHAT_IDS",
+    "db:seed:local": "node --experimental-strip-types scripts/seed-sources.ts && wrangler d1 execute concorsi-radar --local --file=./.wrangler/sources-seed.sql",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "dry-run": "node --experimental-strip-types scripts/dry-run.ts",
+    "bench:cpu": "node --experimental-strip-types scripts/bench-cpu.ts"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250109.0",
+    "@types/node": "^22.10.2",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8",
+    "wrangler": "^3.99.0"
+  }
+}

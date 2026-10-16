@@ -1,0 +1,253 @@
+import { describe, expect, it } from "vitest";
+import { createMemoryStore } from "../src/db/memory.ts";
+import { extractDeadline, extractParticipation, extractPrize, extractTags, enrichWithRules } from "../src/enrich/rules.ts";
+import { SCORE_WEIGHTS, applyWeights, baseScore, scoreItem } from "../src/enrich/score.ts";
+import { MAX_NEURONS_PER_DAY, enrichWithAi, mergeInsight, needsAi } from "../src/enrich/ai.ts";
+import type { AiBinding, Insight, RawItem } from "../src/types.ts";
+
+const NOW = new Date("2026-10-16T12:00:00.000Z");
+
+describe("estrazione della scadenza", () => {
+  it("legge una data con il mese scritto e l'anno esplicito", () => {
+    expect(extractDeadline("Il concorso scade il 30 novembre 2026", NOW)).toBe("2026-11-30");
+  });
+
+  it("legge una data numerica", () => {
+    expect(extractDeadline("Partecipa entro il 15/12/2026", NOW)).toBe("2026-12-15");
+  });
+
+  it("inferisce l'anno quando manca", () => {
+    expect(extractDeadline("Partecipa entro il 15 dicembre", NOW)).toBe("2026-12-15");
+  });
+
+  it("accetta l'anno a due cifre", () => {
+    expect(extractDeadline("Scade il 05/01/27", NOW)).toBe("2027-01-05");
+  });
+
+  it("sceglie la data di chiusura quando il testo cita anche l'inizio", () => {
+    expect(extractDeadline("Il concorso è partito il 1 ottobre e si chiude il 30 novembre 2026", NOW)).toBe("2026-11-30");
+  });
+
+  it("scarta le date impossibili", () => {
+    expect(extractDeadline("Scade il 31/02/2026", NOW)).toBeNull();
+  });
+
+  it("scarta le scadenze già passate", () => {
+    expect(extractDeadline("Il concorso si è chiuso il 10/01/2026", NOW)).toBeNull();
+  });
+
+  it("non scambia un importo per una data", () => {
+    expect(extractDeadline("In palio 1.000 euro di buoni spesa", NOW)).toBeNull();
+  });
+
+  it("restituisce null quando non c'è alcuna data", () => {
+    expect(extractDeadline("Concorso senza indicazioni", NOW)).toBeNull();
+  });
+});
+
+describe("estrazione del premio", () => {
+  it("riconosce gift card e ne stima il valore alto", () => {
+    const { prize, prizeValue } = extractPrize("In palio una gift card da 500 euro");
+    expect(prize).toContain("gift card");
+    expect(prizeValue).toBeGreaterThanOrEqual(0.9);
+  });
+
+  it("riconosce un'auto dalla marca, senza la parola auto", () => {
+    expect(extractPrize("In palio una Fiat Panda per te").prizeValue).toBe(1);
+  });
+
+  it("stima alto un premio in contanti consistente", () => {
+    expect(extractPrize("In palio 2000 euro in contanti").prizeValue).toBeGreaterThanOrEqual(0.85);
+  });
+
+  it("stima basso un gadget", () => {
+    expect(extractPrize("In palio gadget e campioni omaggio").prizeValue).toBeLessThanOrEqual(0.3);
+  });
+
+  it("senza indizi tiene un valore prudente e nessun testo premio", () => {
+    const { prize, prizeValue } = extractPrize("Concorso generico senza dettagli sui premi");
+    expect(prize).toBeNull();
+    expect(prizeValue).toBe(0.3);
+  });
+});
+
+describe("partecipazione e sforzo", () => {
+  it("un concorso gratuito senza acquisto risulta a sforzo massimo", () => {
+    const result = extractParticipation("Concorso gratuito senza obbligo di acquisto, basta iscriversi al sito");
+    expect(result.requiresPurchase).toBe(false);
+    expect(result.effort).toBe(1);
+    expect(result.participation).not.toBeNull();
+  });
+
+  it("uno scontrino abbassa lo sforzo e segnala l'acquisto", () => {
+    const result = extractParticipation("Serve lo scontrino di acquisto da conservare");
+    expect(result.requiresPurchase).toBe(true);
+    expect(result.effort).toBeLessThan(0.5);
+    expect(result.participation).toContain("acquisto");
+  });
+
+  it("un elaborato da inviare abbassa lo sforzo", () => {
+    expect(extractParticipation("Invia una foto del tuo piatto preferito").effort).toBeLessThan(0.5);
+  });
+});
+
+describe("tag", () => {
+  it("riconosce gift card, buoni spesa e gratis", () => {
+    const tags = extractTags("In palio una gift card e buoni spesa, concorso gratuito senza obbligo");
+    expect(tags).toContain("giftcard");
+    expect(tags).toContain("buoni_spesa");
+    expect(tags).toContain("gratis");
+  });
+
+  it("riconosce la raccolta punti", () => {
+    expect(extractTags("Raccolta punti Esselunga: in palio una e-bike")).toContain("raccolta_punti");
+  });
+
+  it("non inventa tag su un testo neutro", () => {
+    expect(extractTags("Comunicato stampa dell'azienda")).toEqual([]);
+  });
+});
+
+describe("enrichWithRules", () => {
+  it("unisce i tag della fonte a quelli del testo", () => {
+    const item: RawItem = {
+      sourceId: "soldissimi", url: "https://x/1", guid: null, publishedAt: null,
+      title: "In palio una gift card Amazon da 100 euro",
+      summary: "Concorso gratuito, scade il 30 novembre 2026, senza obbligo di acquisto.",
+    };
+    const insight = enrichWithRules(item, { tags: ["giftcard", "news"] }, NOW);
+    expect(insight.deadline).toBe("2026-11-30");
+    expect(insight.requiresPurchase).toBe(false);
+    expect(insight.tags).toContain("news");
+    expect(insight.tags).toContain("gratis");
+    expect(insight.aiUsed).toBe(false);
+  });
+
+  it("aggiunge il tag acquisto quando serve lo scontrino", () => {
+    const item: RawItem = {
+      sourceId: "x", url: "https://x/2", guid: null, publishedAt: null,
+      title: "Concorso Findus", summary: "Partecipa con lo scontrino: acquisto obbligatorio.",
+    };
+    expect(enrichWithRules(item, { tags: [] }, NOW).tags).toContain("acquisto");
+  });
+});
+
+function insight(overrides: Partial<Insight> = {}): Insight {
+  return {
+    deadline: null, prize: null, participation: null, prizeValue: 0.5, effort: 0.5,
+    requiresPurchase: false, tags: [], aiUsed: false, ...overrides,
+  };
+}
+
+describe("punteggio", () => {
+  it("premia un premio alto, gratuito e in scadenza", () => {
+    const alto = baseScore(
+      insight({ prizeValue: 1, effort: 1, deadline: "2026-10-20" }),
+      { title: "In palio una Fiat Panda", summary: "Concorso gratuito", publishedAt: NOW.toISOString() },
+      NOW,
+    );
+    const basso = baseScore(
+      insight({ prizeValue: 0.2, effort: 0.1, deadline: "2027-06-30", requiresPurchase: true }),
+      { title: "Gadget omaggio", summary: "", publishedAt: NOW.toISOString() },
+      NOW,
+    );
+    expect(alto).toBeGreaterThan(basso + 30);
+  });
+
+  it("dà più punti a una scadenza imminente che a una lontana", () => {
+    const vicina = baseScore(insight({ deadline: "2026-10-18" }), { title: "Concorso Esselunga", summary: "x" }, NOW);
+    const lontana = baseScore(insight({ deadline: "2027-01-30" }), { title: "Concorso Esselunga", summary: "x" }, NOW);
+    // Solo la scadenza entro 3 giorni prende il bonus pieno; la lontana nessuno.
+    expect(vicina - lontana).toBe(SCORE_WEIGHTS.deadlineSoon);
+  });
+
+  it("penalizza le scadenze passate", () => {
+    const scaduta = baseScore(insight({ deadline: "2026-10-10" }), { title: "Concorso Esselunga", summary: "x" }, NOW);
+    const senza = baseScore(insight({ deadline: null }), { title: "Concorso Esselunga", summary: "x" }, NOW);
+    expect(scaduta).toBeLessThan(senza);
+  });
+
+  it("applica i pesi appresi e resta nei limiti 0-100", () => {
+    expect(applyWeights(50, ["giftcard"], { giftcard: 3 })).toBe(59);
+    expect(applyWeights(50, ["giftcard"], { giftcard: -5 })).toBe(35);
+    expect(applyWeights(99, ["giftcard"], { giftcard: 5 })).toBe(100);
+    expect(applyWeights(2, ["giftcard"], { giftcard: -5 })).toBe(0);
+  });
+
+  it("ignora i pesi non numerici o assenti", () => {
+    expect(applyWeights(50, ["giftcard"], {})).toBe(50);
+    expect(applyWeights(50, [], { giftcard: 5 })).toBe(50);
+  });
+
+  it("scoreItem somma punteggio base e pesi", () => {
+    const base = baseScore(insight(), { title: "Concorso Esselunga", summary: "x" }, NOW);
+    expect(scoreItem(insight(), { title: "Concorso Esselunga", summary: "x" }, { giftcard: 0 }, NOW)).toBe(base);
+  });
+});
+
+describe("arricchimento AI (con tetto e senza eccezioni)", () => {
+  const testo = "Concorso promosso da un'azienda alimentare con premi interessanti per i clienti finali.";
+
+  it("decide quando serve l'AI", () => {
+    expect(needsAi(insight({ deadline: null }), { title: "x", summary: testo })).toBe(true);
+    expect(needsAi(insight({ deadline: "2026-11-30", prize: "un buono spesa" }), { title: "x", summary: testo })).toBe(false);
+    expect(needsAi(insight({ deadline: null }), { title: "x", summary: "Troppo breve" })).toBe(false);
+  });
+
+  it("usa la risposta del modello quando è JSON valido", async () => {
+    const store = createMemoryStore();
+    const ai: AiBinding = {
+      async run() {
+        return {
+          response:
+            '{"deadline":"2026-11-30","prize":"gift card da 500 euro","participation":"iscrizione online",' +
+            '"requires_purchase":false,"prize_value":0.9,"effort":1,"tags":["giftcard"]}',
+        };
+      },
+    };
+    const patch = await enrichWithAi({ title: "Concorso", summary: testo }, { ai, store, now: NOW });
+    expect(patch?.deadline).toBe("2026-11-30");
+    expect(patch?.prizeValue).toBe(0.9);
+    expect(patch?.tags).toEqual(["giftcard"]);
+    expect(await store.aiUsage("2026-10-16")).toBeGreaterThan(0);
+  });
+
+  it("scarta una scadenza non valida senza applicare nulla", async () => {
+    const store = createMemoryStore();
+    const ai: AiBinding = { async run() { return { response: '{"deadline":"2020-01-01"}' }; } };
+    expect(await enrichWithAi({ title: "Concorso", summary: testo }, { ai, store, now: NOW })).toBeNull();
+  });
+
+  it("non fa nulla se il modello risponde senza JSON", async () => {
+    const store = createMemoryStore();
+    const ai: AiBinding = { async run() { return { response: "Non posso aiutarti con questa richiesta." }; } };
+    expect(await enrichWithAi({ title: "Concorso", summary: testo }, { ai, store, now: NOW })).toBeNull();
+  });
+
+  it("non lancia eccezioni quando il modello fallisce", async () => {
+    const store = createMemoryStore();
+    const ai: AiBinding = { async run() { throw new Error("4970 rate limited"); } };
+    expect(await enrichWithAi({ title: "Concorso", summary: testo }, { ai, store, now: NOW })).toBeNull();
+  });
+
+  it("rispetta il tetto giornaliero di Neurons", async () => {
+    const store = createMemoryStore();
+    await store.addAiUsage("2026-10-16", 99, MAX_NEURONS_PER_DAY);
+    const ai: AiBinding = { async run() { return { response: '{"prize":"x"}' }; } };
+    expect(await enrichWithAi({ title: "Concorso", summary: testo }, { ai, store, now: NOW })).toBeNull();
+  });
+
+  it("non chiama nulla senza binding AI", async () => {
+    const store = createMemoryStore();
+    expect(await enrichWithAi({ title: "Concorso", summary: testo }, { ai: null, store, now: NOW })).toBeNull();
+  });
+
+  it("mergeInsight riempie solo i buchi delle regole", () => {
+    const base = insight({ deadline: "2026-11-30", prize: null, tags: ["gratis"] });
+    const merged = mergeInsight(base, { deadline: "2027-01-01", prize: "buono spesa", tags: ["giftcard"], aiUsed: true });
+    expect(merged.deadline).toBe("2026-11-30");
+    expect(merged.prize).toBe("buono spesa");
+    expect(merged.tags).toEqual(["gratis", "giftcard"]);
+    expect(merged.aiUsed).toBe(true);
+  });
+});
