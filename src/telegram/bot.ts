@@ -5,6 +5,7 @@ import {
   PRIZE_QUICK_FILTERS,
   TAG_FILTERS,
   activeFilterCount,
+  archivioKindFor,
   defaultFilters,
   filterChangeLabel,
   filterableSources,
@@ -20,7 +21,7 @@ import { mergedBrands, mergedWeights } from "../pipeline.ts";
 import type { TelegramUpdate } from "./api.ts";
 import type { NotifyDeps } from "./digest.ts";
 import { regolamentoUrl } from "./digest.ts";
-import { localDateString, sourceLabel } from "./format.ts";
+import { localDateString, sourceLabel, startOfLocalDay } from "./format.ts";
 import { leadHours, summarizeLead } from "../enrich/lead.ts";
 import { BRANDS_PAGE_SIZE, PAGE_SIZE } from "./keyboard.ts";
 import { SCORE_MAX, SCORE_MIN, hourLabel, parseQuietRange, toggleDigestHour } from "./prefs-config.ts";
@@ -178,6 +179,10 @@ function intentForCommand(command: string, args: string): Intent | null {
     case "/gratis":
     case "/gratuiti":
       return { kind: "section", section: "gratis" };
+    // L'archivio completo: tutto quello che è passato dal bot, chiusi compresi.
+    case "/archivio":
+    case "/passati":
+      return { kind: "section", section: "archivio" };
     case "/vinti":
       return { kind: "section", section: "vinti" };
     case "/scaduti":
@@ -414,9 +419,14 @@ function baseSectionQuery(section: string, now: Date, lastCheckAt: string | null
       orderBy: "score",
     };
   }
+  // 📋 Oggi è il giorno di CALENDARIO, non le ultime 24 ore: alle 01:00 deve
+  // mostrare quello che è arrivato da mezzanotte, non tutta la giornata di ieri.
+  // La finestra che scorreva teneva in elenco il giorno prima fino a sera
+  // inoltrata, e il nome della sezione prometteva un'altra cosa — chi vuole i due
+  // giorni li ha in 📅 7 giorni.
   if (section === "oggi") {
     return {
-      since: new Date(now.getTime() - 86_400_000).toISOString(),
+      since: startOfLocalDay(now),
       statuses: ATTIVI,
       kinds: CONCORSI,
       orderBy: "score",
@@ -447,17 +457,34 @@ function baseSectionQuery(section: string, now: Date, lastCheckAt: string | null
     // ieri deve essere già consultabile nello storico.
     return { kinds: CONCORSI, deadlineBefore: shiftDate(localDateString(now), -1), orderBy: "deadline_desc" };
   }
-  // La ricerca guarda tutto — anche gli articoli, marcati 📰 nell'elenco:
-  // "cerca nutella" deve trovare sia il concorso sia il pezzo che ne parla.
-  return { keyword: section.slice("cerca:".length), orderBy: "score", statuses: ATTIVI };
+  // 📚 Archivio: TUTTO quello che è passato dal bot, di qualunque tipo e in
+  // qualunque stato — compresi i concorsi chiusi e i coupon scaduti, che dalle
+  // altre sezioni escono (giustamente: lì si sta scegliendo cosa fare adesso) ma
+  // restano la memoria del radar. "L'abbiamo mai visto?" è una domanda sul
+  // passato, quindi l'ordine è quello di arrivo, dal più recente.
+  //
+  // I filtri della chat NON valgono qui, come in 🔍 Cerca: un coupon che non
+  // trovi più perché hai spento la sua fonte sarebbe la sorpresa peggiore di
+  // questa schermata (vedi SEZIONI_FILTRATE).
+  if (section === "archivio") return {};
+  const tipoArchivio = archivioKindFor(section);
+  if (tipoArchivio !== null) return { kinds: [tipoArchivio] };
+
+  // La ricerca guarda tutto — anche gli articoli, marcati 📰 nell'elenco — e
+  // adesso anche il passato: "cerca nutella" deve trovare il concorso, il pezzo
+  // che ne parla e quello che è già chiuso (marcato ⛔), perché "l'avevamo
+  // visto?" si chiede quasi sempre di qualcosa che non c'è più in elenco.
+  // Senza `statuses` la query non filtra sullo stato: è l'archivio intero.
+  return { keyword: section.slice("cerca:".length), orderBy: "score" };
 }
 
 /**
  * Le sezioni che rispettano i filtri della chat. Sono quelle che *suggeriscono*
  * cosa guardare: è lì che un filtro serve, ed è lì che l'utente si aspetta che
- * valga. Restano fuori ⭐ Watchlist, 🗂 Storico e 🔍 Cerca, che sono scelte
- * esplicite: un concorso salvato non deve sparire perché hai spento la sua
- * fonte, e una ricerca è già una domanda precisa.
+ * valga. Restano fuori ⭐ Watchlist, 🗂 Storico, 🔍 Cerca e 📚 Archivio, che sono
+ * scelte esplicite: un concorso salvato non deve sparire perché hai spento la
+ * sua fonte, e "l'abbiamo mai visto?" è una domanda a cui i filtri non devono
+ * rispondere al posto tuo.
  */
 const SEZIONI_FILTRATE = new Set([
   "nuovi", "oggi", "settimana", "scadenze", "news", "scaduti", "preferiti-lista", "coupon", "gratis",
@@ -501,7 +528,8 @@ function isListSection(section: string): boolean {
     section === "coupon" ||
     section === "gratis" ||
     section.startsWith("premi:") ||
-    section.startsWith("cerca:")
+    section.startsWith("cerca:") ||
+    section.startsWith("archivio")
   );
 }
 

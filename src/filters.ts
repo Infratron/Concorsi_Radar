@@ -1,6 +1,6 @@
 import { SOURCES } from "./config/sources.ts";
 import { brandLabel, isBrandId } from "./config/brands.ts";
-import type { Category, ChatFilters, ItemQuery } from "./types.ts";
+import type { Category, ChatFilters, ItemKind, ItemQuery } from "./types.ts";
 
 /**
  * I filtri di una chat, in un punto solo.
@@ -117,6 +117,32 @@ export interface PrizeQuickFilter {
  * con il vincolo sull'obbligo di acquisto. Duplicarla qui vorrebbe dire due
  * query e due testi da tenere allineati per lo stesso elenco.
  */
+/**
+ * 📚 Archivio: i tre tipi in cui si può restringere l'archivio completo, uno per
+ * riga dei bottoni. `archivio:<kind>` è una sezione come `premi:<tag>` — un
+ * prefisso nella sezione, nessuna preferenza toccata — e la validazione del
+ * tipo evita che una sezione inventata legga tutto per sbaglio (vedi
+ * isKnownSection).
+ */
+export interface ArchivioKind {
+  kind: ItemKind;
+  /** Sezione che apre il bottone ("archivio:coupon"). */
+  section: string;
+  emoji: string;
+  label: string;
+}
+
+export const ARCHIVIO_KINDS: ArchivioKind[] = [
+  { kind: "contest", section: "archivio:contest", emoji: "🎁", label: "Concorsi" },
+  { kind: "coupon", section: "archivio:coupon", emoji: "💶", label: "Coupon" },
+  { kind: "news", section: "archivio:news", emoji: "📰", label: "Articoli" },
+];
+
+/** Il tipo di questa sezione dell'archivio, oppure null se è l'archivio intero. */
+export function archivioKindFor(section: string): ItemKind | null {
+  return ARCHIVIO_KINDS.find((voce) => voce.section === section)?.kind ?? null;
+}
+
 export const PRIZE_QUICK_FILTERS: PrizeQuickFilter[] = [
   { tag: "giftcard", section: "premi:giftcard", emoji: "💳", label: "Gift card" },
   { tag: "auto", section: "premi:auto", emoji: "🚗", label: "Auto e moto" },

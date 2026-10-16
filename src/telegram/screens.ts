@@ -4,6 +4,7 @@ import { GRUPPI_DIAGNOSI, type Diagnosi, type RiepilogoDiagnosi } from "../sourc
 import {
   CATEGORY_LABELS,
   PRIZE_QUICK_FILTERS,
+  archivioKindFor,
   isSeeingAll,
   mutedSourceIds,
   onlyFavoriteBrands,
@@ -19,6 +20,7 @@ import { runOrigin } from "../schedule.ts";
 import {
   BRANDS_PAGE_SIZE,
   PAGE_SIZE,
+  archivioKeyboard,
   backKeyboard,
   cardKeyboard,
   diagnosticaKeyboard,
@@ -117,6 +119,7 @@ export const SECTIONS = [
   "coupon",
   "gratis",
   "premi",
+  "archivio",
   "diagnostica",
   "log",
 ] as const;
@@ -124,6 +127,10 @@ export const SECTIONS = [
 export function isKnownSection(section: string): boolean {
   if ((SECTIONS as readonly string[]).includes(section)) return true;
   if (section.startsWith("cerca:")) return true;
+  // `archivio:<tipo>` si accetta solo per i tre tipi veri: una sezione inventata
+  // non leggerebbe niente, mentre un tipo sbagliato letto come "tutto" darebbe
+  // l'elenco completo credendo di averne chiesto una fetta (vedi archivioKindFor).
+  if (section.startsWith("archivio:")) return archivioKindFor(section) !== null;
   // `premi:<tag>` si accetta solo se il tag è uno di quelli offerti: una sezione
   // inventata non leggerebbe niente, e sarebbe un elenco vuoto senza spiegazione.
   return prizeFilterFor(section) !== null;
@@ -329,6 +336,11 @@ function headerLines(state: UiState, data: ScreenData, now: Date): string[] {
 
 function listScreen(state: UiState, data: ScreenData, now: Date): Screen {
   const title = sectionTitle(state.section);
+  // 📚 Archivio: le sue fette sono sezioni con un prefisso (`archivio:coupon`), e
+  // per il nome delle voci e per i messaggi da elenco vuoto contano come una
+  // sezione sola.
+  const sezioneArchivio = state.section === "archivio" || state.section.startsWith("archivio:");
+  const chiave = sezioneArchivio ? "archivio" : state.section;
   const pagine = Math.max(1, Math.ceil(data.total / PAGE_SIZE));
   // Un `page` fuori intervallo (messaggio vecchio, o lista che si è accorciata)
   // non deve mostrare una pagina vuota: si riporta dentro e si ri-renderizza.
@@ -337,6 +349,8 @@ function listScreen(state: UiState, data: ScreenData, now: Date): Screen {
   // Sostantivo giusto per la sezione: nella news non si "tocca un concorso", e
   // nello storico non si sta guardando qualcosa da fare adesso.
   const nomi: Record<string, [string, string]> = {
+    // L'archivio mescola i tre tipi: "concorsi" sarebbe una bugia sui coupon.
+    archivio: ["item", "item"],
     news: ["articolo", "articoli"],
     salvati: ["concorso in watchlist", "concorsi in watchlist"],
     vinti: ["concorso vinto", "concorsi vinti"],
@@ -345,7 +359,7 @@ function listScreen(state: UiState, data: ScreenData, now: Date): Screen {
     // "un coupon" e "12 coupon": la parola non cambia al plurale.
     coupon: ["coupon", "coupon"],
   };
-  const [singolare, plurale] = nomi[state.section] ?? ["concorso", "concorsi"];
+  const [singolare, plurale] = nomi[chiave] ?? ["concorso", "concorsi"];
   if (data.items.length === 0) {
     const vuoti: Record<string, string> = {
       salvati: "La watchlist è vuota: apri un concorso e tocca ⭐ Watchlist per non perderlo di vista.",
@@ -356,9 +370,11 @@ function listScreen(state: UiState, data: ScreenData, now: Date): Screen {
       "preferiti-lista":
         "Non segui ancora nessuna marca, quindi non c'è niente da mostrare qui: aprine una in 🏷 Preferiti per marca.",
       coupon:
-        "Nessun coupon in archivio: i buoni sconto e i rimborsi arrivano dalle fonti di coupon, appena le trovano.",
+        "Nessun coupon valido adesso: qui restano solo quelli ancora spendibili — i buoni scaduti sono in 📚 Archivio — e i nuovi arrivano appena le fonti li trovano.",
       gratis:
         "Nessun concorso senza acquisto qui: per ora tutti quelli in archivio chiedono uno scontrino, un codice o una spesa minima.",
+      archivio:
+        "L'archivio è vuoto: qui finisce tutto quello che il bot ha visto e vedrà, quindi si riempie alla prima raccolta.",
       ...Object.fromEntries(
         PRIZE_QUICK_FILTERS.filter((voce) => voce.tag !== null).map((voce) => [
           voce.section,
@@ -366,11 +382,13 @@ function listScreen(state: UiState, data: ScreenData, now: Date): Screen {
         ]),
       ),
     };
-    const filtrata = data.counts.filtri > 0;
+    // Nell'archivio i filtri non contano (si vede tutto per definizione):
+    // attribuire a loro un elenco vuoto sarebbe la spiegazione sbagliata.
+    const filtrata = data.counts.filtri > 0 && !sezioneArchivio;
     const righeVuote = [
       `📭 <b>${escapeHtml(title)}</b>`,
       "",
-      vuoti[state.section] ?? "Nessun concorso qui. Tocca 🔄 Aggiorna più tardi.",
+      vuoti[chiave] ?? "Nessun concorso qui. Tocca 🔄 Aggiorna più tardi.",
     ];
     // Un elenco vuoto può voler dire due cose opposte: non c'è niente, oppure i
     // filtri hanno lasciato fuori tutto. Dirlo è la differenza fra "aspetto" e
@@ -402,11 +420,21 @@ function listScreen(state: UiState, data: ScreenData, now: Date): Screen {
         ? "Ordinati per scadenza: chi chiude prima sta in cima. Ti avviso 3 giorni e 1 giorno prima — e molto prima per le raccolte punti e i premi da richiedere, dove scontrini e bollini si mettono via durante la raccolta."
         : state.section === "preferiti-lista"
           ? "Solo le marche che segui, dal punteggio più alto: è il motivo per cui le trovi qui in cima."
+        : sezioneArchivio
+          ? "Tutto quello che è passato da qui, dal più recente: concorsi chiusi e coupon scaduti compresi, marcati ⛔. I filtri di 🎛 Cosa vedi non valgono in archivio — se l'abbiamo visto, si trova."
           : "Tocca un concorso per aprirlo:",
   ];
   return {
     text: righe.join("\n"),
-    keyboard: listKeyboard(data.items, now, { index: page, total: pagine }, stellePer(data, state.section)),
+    keyboard: sezioneArchivio
+      ? archivioKeyboard(data.items, now, { index: page, total: pagine }, {
+          sezione: state.section,
+          totale: data.archiveTotal,
+          concorsi: data.counts.contestTotal,
+          coupon: data.counts.couponTotal,
+          articoli: data.counts.newsTotal,
+        })
+      : listKeyboard(data.items, now, { index: page, total: pagine }, stellePer(data, state.section)),
   };
 }
 
@@ -864,11 +892,17 @@ export function renderScreen(state: UiState, data: ScreenData, now: Date): Scree
         text: [
           "🗂 <b>Storico</b>",
           "",
-          `🏆 <b>${data.counts.vinti}</b> vinti · ⌛ <b>${data.counts.scaduti}</b> chiusi · 🚫 <b>${data.counts.ignorati}</b> scartati`,
+          `🏆 <b>${data.counts.vinti}</b> vinti · ⌛ <b>${data.counts.scaduti}</b> chiusi · 🚫 <b>${data.counts.ignorati}</b> scartati · 📚 <b>${data.archiveTotal}</b> in archivio`,
           "",
           "Qui ritrovi quello che hai già visto: i concorsi a cui hai partecipato e vinto, quelli che hanno chiuso e quelli che avevi scartato.",
+          "📚 Archivio è un'altra cosa, ed è più grande: è la memoria completa del radar — tutto quello che è passato di qui, compresi i coupon scaduti e quello che non ti è mai stato consegnato.",
         ].join("\n"),
-        keyboard: storicoKeyboard(data.counts),
+        keyboard: storicoKeyboard({
+          vinti: data.counts.vinti,
+          scaduti: data.counts.scaduti,
+          ignorati: data.counts.ignorati,
+          archivio: data.archiveTotal,
+        }),
       };
     case "fonti":
       return sourcesScreen(data);

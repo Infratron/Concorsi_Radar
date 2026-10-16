@@ -56,6 +56,46 @@ export function localTimeShort(now: Date): string {
   return `${get("hour")}:${get("minute")}`;
 }
 
+/**
+ * L'ora locale italiana come istante UTC: la differenza con l'istante vero è lo
+ * scostamento del fuso in vigore in quel momento.
+ */
+function localWallClockMs(now: Date): number {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: ROME,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  }).formatToParts(now);
+  const get = (type: string): string => parts.find((part) => part.type === type)?.value ?? "00";
+  // Alcune implementazioni di ICU scrivono "24" per la mezzanotte: la stessa
+  // difesa di localHour, altrimenti il giorno comincerebbe un giorno dopo.
+  const hour = get("hour") === "24" ? "00" : get("hour");
+  return Date.parse(`${get("year")}-${get("month")}-${get("day")}T${hour}:${get("minute")}:${get("second")}.000Z`);
+}
+
+/**
+ * Quando è cominciato il giorno italiano (mezzanotte a Roma), in ISO UTC: è il
+ * confine di 📋 Oggi.
+ *
+ * Perché non "adesso meno 24 ore": quella è una finestra che scorre, e alle
+ * 01:00 contiene ancora tutto il giorno prima — cioè esattamente quello che non
+ * ci si aspetta da una sezione che si chiama "Oggi". Mezzanotte non è l'istante
+ * in cui il calendario dice zero: è dove comincia il giorno di chi legge.
+ *
+ * La notte del cambio d'ora il conto usa lo scostamento in vigore ORA, quindi il
+ * confine può spostarsi di un'ora: sui digest la stessa tolleranza è dichiarata,
+ * e per un elenco di concorsi è un'imprecisione che non costa niente.
+ */
+export function startOfLocalDay(now: Date): string {
+  const offsetMs = localWallClockMs(now) - now.getTime();
+  return new Date(Date.parse(`${localDateString(now)}T00:00:00.000Z`) - offsetMs).toISOString();
+}
+
 /** Data locale italiana come YYYY-MM-DD (per confronti con le scadenze). */
 export function localDateString(now: Date): string {
   const parts = new Intl.DateTimeFormat("en-CA", {

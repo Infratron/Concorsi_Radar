@@ -11,6 +11,7 @@ import {
   formatItemLine,
   localDateString,
   localHour,
+  startOfLocalDay,
 } from "../src/telegram/format.ts";
 import {
   BRANDS_PAGE_SIZE,
@@ -195,6 +196,14 @@ const lastWith = (calls: Call[], method: string): Call | undefined =>
 function lastKeyboard(calls: Call[]): InlineKeyboardMarkup | null {
   const call = lastWith(calls, "editMessageText") ?? lastWith(calls, "sendMessage");
   return (call?.payload.reply_markup as InlineKeyboardMarkup | undefined) ?? null;
+}
+
+/**
+ * Le etichette dei bottoni dell'ultima schermata, unite: gli item di un elenco
+ * stanno LÌ, non nel testo del messaggio (che porta testata e spiegazione).
+ */
+function etichette(calls: Call[]): string {
+  return (lastKeyboard(calls)?.inline_keyboard.flat().map((voce) => voce.text ?? "") ?? []).join(" | ");
 }
 
 /**
@@ -472,7 +481,7 @@ describe("interfaccia · un solo messaggio per chat", () => {
     expect(methods(calls)).not.toContain("sendMessage");
     const modifica = lastWith(calls, "editMessageText");
     expect(modifica?.payload.message_id).toBe(100);
-    expect(modifica?.payload.text).toContain("Ultime 24 ore");
+    expect(modifica?.payload.text).toContain("Oggi (dalle 00:00)");
     expect(methods(calls)).toContain("answerCallbackQuery");
   });
 
@@ -545,7 +554,7 @@ describe("interfaccia · un solo messaggio per chat", () => {
     calls.length = 0;
 
     await handleUpdate(tap(2, "s:oggi", 99999), deps(store, tg));
-    expect(lastWith(calls, "sendMessage")?.payload.text).toContain("Ultime 24 ore");
+    expect(lastWith(calls, "sendMessage")?.payload.text).toContain("Oggi (dalle 00:00)");
     expect((await store.getUiState(CHAT))?.messageId).not.toBe(99999);
   });
 
@@ -782,7 +791,7 @@ describe("interfaccia · un solo messaggio per chat", () => {
     await handleUpdate(tap(2, "s:oggi", 100), deps(store, tg));
 
     expect(calls.filter((call) => call.method === "editMessageText")).toHaveLength(0);
-    expect(lastWith(calls, "sendMessage")?.payload.text).toContain("Ultime 24 ore");
+    expect(lastWith(calls, "sendMessage")?.payload.text).toContain("Oggi (dalle 00:00)");
     const dopo = await store.getUiState(CHAT);
     expect(dopo?.messageId).toBe(101);
     // E l'ora si riaggiorna: dal tocco successivo si torna a un solo messaggio.
@@ -1360,7 +1369,7 @@ describe("filtri personali · due chat, due feed", () => {
 
     await handleUpdate(tapIn(CHAT, 3, "cfg:star:80", 100), entrambe(store, tg));
     expect((await store.getPrefs(CHAT))?.filters.minScore).toBe(80);
-    expect(schermata(calls, CHAT)).toContain("Ultime 24 ore"); // resta dove sei
+    expect(schermata(calls, CHAT)).toContain("Oggi (dalle 00:00)"); // resta dove sei
     expect(schermata(calls, CHAT)).toContain("1 concorso");
     expect(aperti()).toHaveLength(1);
     expect(aperti()[0]).toContain("ottimo");
@@ -2391,6 +2400,133 @@ describe("diagnostica delle fonti · quali valgono e quali no", () => {
     // E la schermata resta dentro il limite di Telegram: è un messaggio solo, che
     // si modifica sul posto, quindi non si può spezzare in due.
     expect(testo.length).toBeLessThanOrEqual(MAX_MESSAGE_CHARS);
+  });
+});
+
+describe("📋 Oggi · il giorno di calendario", () => {
+  it("non è una finestra di 24 ore: alle 01:00 non contiene più la giornata di ieri", async () => {
+    const store = createMemoryStore();
+    await store.upsertPrefs(prefs());
+    // NOW = 20/11/2026 11:00 a Roma, quindi la mezzanotte italiana è le 23:00Z del
+    // 19/11: il concorso arrivato alle 00:30 di oggi c'è, quello delle 23:30 di ieri
+    // no. Con la finestra che scorreva ci sarebbero stati tutti e due.
+    await seed(store, [
+      { title: "Concorso di stanotte", firstSeenAt: "2026-11-19T23:30:00.000Z" },
+      { title: "Concorso di ieri sera", firstSeenAt: "2026-11-19T22:30:00.000Z" },
+    ]);
+    const { tg, calls } = makeTg();
+
+    await handleUpdate(command(1, "/oggi"), deps(store, tg));
+
+    const testo = String(lastWith(calls, "sendMessage")?.payload.text ?? "");
+    // Gli item stanno nei bottoni (il messaggio è la testata + la spiegazione).
+    const bottoni = etichette(calls);
+    expect(testo).toContain("Oggi (dalle 00:00)");
+    expect(testo).toContain("· 1 concorso");
+    expect(bottoni).toContain("Concorso di stanotte");
+    expect(bottoni).not.toContain("Concorso di ieri sera");
+  });
+
+  it("mezzanotte è quella italiana, e d'estate si sposta di un'ora", () => {
+    // 20/11/2026 11:00 a Roma (CET, +1) → il giorno è cominciato alle 23:00Z del 19.
+    expect(startOfLocalDay(NOW)).toBe("2026-11-19T23:00:00.000Z");
+    // 1/7/2026 14:00 a Roma (CEST, +2) → mezzanotte italiana = 22:00Z del 30/6.
+    expect(startOfLocalDay(new Date("2026-07-01T12:00:00.000Z"))).toBe("2026-06-30T22:00:00.000Z");
+  });
+});
+
+describe("📚 Archivio · tutto quello che il bot ha visto", () => {
+  /** Un concorso aperto, uno chiuso, un coupon scaduto e un articolo vecchio. */
+  async function popolato(store: MemoryStore): Promise<void> {
+    await seed(store, [
+      { title: "Concorso aperto", status: "new", deadline: "2026-12-31" },
+      { title: "Concorso chiuso", status: "expired", deadline: "2026-11-01" },
+      { title: "Coupon scaduto", kind: "coupon", status: "expired", deadline: "2026-11-10" },
+      { title: "Articolo vecchio", kind: "news", status: "expired", deadline: null },
+    ]);
+  }
+
+  it("tiene anche chiusi e coupon scaduti, che dalle altre sezioni escono", async () => {
+    const store = createMemoryStore();
+    await store.upsertPrefs(prefs());
+    await popolato(store);
+    const { tg, calls } = makeTg();
+
+    await handleUpdate(command(1, "/archivio"), deps(store, tg));
+    const testo = String(lastWith(calls, "sendMessage")?.payload.text ?? "");
+    const bottoni = etichette(calls);
+    expect(testo).toContain("📚 Archivio</b> · 4 item");
+    expect(bottoni).toContain("Concorso aperto");
+    expect(bottoni).toContain("Concorso chiuso");
+    expect(bottoni).toContain("Coupon scaduto");
+    expect(bottoni).toContain("Articolo vecchio");
+    // E il segno che dice "non si partecipa più": senza, un concorso chiuso in
+    // mezzo agli altri sembra una cosa da fare adesso.
+    expect(bottoni).toContain("⛔");
+
+    // La prova che serve a qualcosa: 💶 Coupon non lo mostra più.
+    await handleUpdate(tap(2, "s:coupon", 100), deps(store, tg));
+    const coupon = String(lastWith(calls, "editMessageText")?.payload.text ?? "");
+    expect(coupon).toContain("Nessun coupon valido adesso");
+    expect(coupon).toContain("📚 Archivio");
+  });
+
+  it("si restringe a un tipo senza toccare niente, e i filtri della chat qui non valgono", async () => {
+    const store = createMemoryStore();
+    // La fonte di tutti gli item del test è spenta per questa chat: negli elenchi
+    // filtrati il concorso non compare, in archivio sì — altrimenti quello che
+    // non trovi è proprio quello che stavi cercando.
+    await store.upsertPrefs({ ...prefs(), filters: { ...defaultFilters(), mutedSources: ["premieconcorsi"] } });
+    await popolato(store);
+    const { tg, calls } = makeTg();
+
+    await handleUpdate(tap(1, "s:archivio:coupon", 100), deps(store, tg));
+    const testo = String(lastWith(calls, "sendMessage")?.payload.text ?? "");
+    const bottoniFetta = etichette(calls);
+    expect(testo).toContain("📚 Archivio · Coupon</b> · 1 item");
+    expect(testo).toContain("non valgono in archivio");
+    expect(bottoniFetta).toContain("Coupon scaduto");
+    expect(bottoniFetta).not.toContain("Concorso chiuso");
+    // La fetta attiva è segnata, come nelle altre schermate di scelta.
+    const bottoni = lastKeyboard(calls)?.inline_keyboard.flat() ?? [];
+    expect(bottoni.find((voce) => voce.callback_data === "s:archivio:coupon")?.text).toBe("• 💶 Coupon (1)");
+
+    await handleUpdate(tap(2, "s:archivio", 100), deps(store, tg));
+    expect(etichette(calls)).toContain("Concorso chiuso");
+
+    // Una fetta inventata non è una sezione: non legge tutto per sbaglio.
+    expect(parseCallback("s:archivio:pippo")).toEqual({ kind: "none" });
+  });
+
+  it("la ricerca guarda anche il passato, e dice che quello è chiuso", async () => {
+    const store = createMemoryStore();
+    await store.upsertPrefs(prefs());
+    await seed(store, [
+      { title: "Buono sconto Caffè Vergnano", kind: "coupon", status: "expired", deadline: "2026-11-01" },
+    ]);
+    const { tg, calls } = makeTg();
+
+    await handleUpdate(command(1, "/cerca"), deps(store, tg));
+    await handleUpdate(command(2, "vergnano"), deps(store, tg));
+
+    const bottoni = etichette(calls);
+    expect(bottoni).toContain("Buono sconto Caffè Vergnano");
+    // E il bottone dice che è chiuso: cercare non deve far sembrare aperto quello
+    // che non lo è.
+    expect(bottoni).toContain("⛔");
+  });
+
+  it("la porta sta in 🗂 Storico, con il numero di tutto quello che c'è", async () => {
+    const store = createMemoryStore();
+    await store.upsertPrefs(prefs());
+    await popolato(store);
+    const { tg, calls } = makeTg();
+
+    await handleUpdate(command(1, "/storico"), deps(store, tg));
+
+    const bottoni = lastKeyboard(calls)?.inline_keyboard.flat() ?? [];
+    expect(bottoni.find((voce) => voce.callback_data === "s:archivio")?.text).toBe("📚 Archivio (4)");
+    expect(String(lastWith(calls, "sendMessage")?.payload.text ?? "")).toContain("📚 <b>4</b> in archivio");
   });
 });
 

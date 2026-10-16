@@ -2,6 +2,7 @@ import type { ItemRow, Prefs } from "../types.ts";
 import type { BrandChoice } from "../config/brands.ts";
 import { truncate } from "../lib/text.ts";
 import {
+  ARCHIVIO_KINDS,
   CATEGORY_LABELS,
   PRIZE_QUICK_FILTERS,
   STAR_CHOICES,
@@ -51,6 +52,11 @@ function done(text: string): InlineKeyboardButton {
 export function itemButtonLabel(item: ItemRow, now: Date): string {
   const left = daysLeft(item.deadline, now);
   const urgenza = left !== null && left >= 0 && left <= 7 ? ` ⏳${left}gg` : "";
+  // ⛔ su chi non è più in gioco: dove si sceglie cosa fare adesso non compare
+  // quasi mai (l'archivio chiuso non entra in quelle sezioni), ma in 📚 Archivio
+  // e in 🔍 Cerca sì — e senza quel segno si tocca un concorso credendo di poterci
+  // ancora partecipare.
+  const chiuso = item.status === "expired" || (left !== null && left < 0) ? " ⛔" : "";
   // 📰 per un articolo e 💶 per un coupon, al posto di ⭐: in un elenco (e nella
   // ricerca, dove i tre tipi convivono) si vede subito che quello non è la pagina
   // su cui si partecipa.
@@ -60,7 +66,7 @@ export function itemButtonLabel(item: ItemRow, now: Date): string {
   // buono sconto non vuol dire niente — mostrarlo sarebbe un numero inventato.
   const segno = item.kind === "news" ? "📰" : item.kind === "coupon" ? "💶" : "⭐";
   const testa = item.kind === "coupon" ? segno : `${segno}${item.score}`;
-  return truncate(`${testa}${urgenza} · ${item.title}`, 52);
+  return truncate(`${testa}${urgenza}${chiuso} · ${item.title}`, 52);
 }
 
 /** Il menù principale: tutte le sezioni, con i conteggi addosso. */
@@ -234,14 +240,66 @@ export function storicoKeyboard(counts: {
   vinti: number;
   scaduti: number;
   ignorati: number;
+  /**
+   * Tutto quello che il bot ha visto: è il numero sulla porta 📚 Archivio. Non
+   * è la somma dei tre sopra — quelli sono le TUE decisioni, questo è la memoria
+   * del radar, che comprende anche quello che non ti è mai stato consegnato.
+   */
+  archivio: number;
 }): InlineKeyboardMarkup {
   return {
     inline_keyboard: [
       [button(`🏆 Vinti (${counts.vinti})`, "s:vinti"), button(`⌛ Scaduti (${counts.scaduti})`, "s:scaduti")],
-      [button(`🚫 Ignorati (${counts.ignorati})`, "s:ignorati"), button("🏠 Menù", "home")],
-      [button("🔄 Aggiorna", "refresh")],
+      [button(`🚫 Ignorati (${counts.ignorati})`, "s:ignorati"), button(`📚 Archivio (${counts.archivio})`, "s:archivio")],
+      [button("🔄 Aggiorna", "refresh"), button("🏠 Menù", "home")],
     ],
   };
+}
+
+/**
+ * 📚 Archivio: quattro modi di guardare la stessa memoria — tutto, oppure solo
+ * concorsi, coupon, articoli — più la porta alla ricerca, che adesso guarda anche
+ * qui dentro.
+ *
+ * I numeri sono quelli dell'archivio INTERO (ogni stato, ogni fonte): questa
+ * schermata non conosce i filtri della chat, quindi un numero diverso da quello
+ * delle altre sezioni non è un errore — è la differenza fra "cosa esiste" e
+ * "cosa vedi".
+ */
+export function archivioKeyboard(
+  items: ItemRow[],
+  now: Date,
+  pagina: { index: number; total: number },
+  info: {
+    /** Sezione attiva: "archivio", oppure "archivio:coupon" per una sola fetta. */
+    sezione: string;
+    totale: number;
+    concorsi: number;
+    coupon: number;
+    articoli: number;
+  },
+): InlineKeyboardMarkup {
+  // Prima le voci che si aprono, poi come si restringe l'elenco: la schermata
+  // serve a leggere l'archivio, i bottoni delle fette sono il modo di cambiare
+  // domanda — se stessero in cima, ogni pagina comincerebbe con sei bottoni di
+  // navigazione invece che con quello che sei venuto a cercare.
+  const rows: InlineKeyboardButton[][] = items.map((item) => [
+    button(itemButtonLabel(item, now), `open:${item.id}`),
+  ]);
+  if (pagina.total > 1) {
+    rows.push([
+      pagina.index > 0 ? button("⬅️ Prec", `page:${pagina.index - 1}`) : done("⬅️"),
+      done(`${pagina.index + 1}/${pagina.total}`),
+      pagina.index < pagina.total - 1 ? button("Succ ➡️", `page:${pagina.index + 1}`) : done("➡️"),
+    ]);
+  }
+  const voce = (sezione: string, testo: string): InlineKeyboardButton =>
+    button(sezione === info.sezione ? `• ${testo}` : testo, `s:${sezione}`);
+  rows.push([voce("archivio", `📚 Tutto (${info.totale})`), voce("archivio:contest", `🎁 Concorsi (${info.concorsi})`)]);
+  rows.push([voce("archivio:coupon", `💶 Coupon (${info.coupon})`), voce("archivio:news", `📰 Articoli (${info.articoli})`)]);
+  rows.push([button("🔍 Cerca in tutto", "s:cerca")]);
+  rows.push([button("🔄 Aggiorna", "refresh"), button("🏠 Menù", "home")]);
+  return { inline_keyboard: rows };
 }
 
 /**
@@ -551,13 +609,21 @@ export function sectionTitle(section: string): string {
     const premio = prizeFilterFor(section);
     if (premio) return `${premio.emoji} ${premio.label}`;
   }
+  // 📚 Archivio: il titolo dice anche la fetta, altrimenti "Archivio · 46 item"
+  // non si capisce se sono tutti o solo i coupon.
+  if (section === "archivio" || section.startsWith("archivio:")) {
+    const tipo = ARCHIVIO_KINDS.find((voce) => voce.section === section);
+    return tipo ? `📚 Archivio · ${tipo.label}` : "📚 Archivio";
+  }
   switch (section) {
     case "premi":
       return "Tipi di premio";
     case "nuovi":
       return "Nuovi dall'ultimo controllo";
     case "oggi":
-      return "Ultime 24 ore";
+      // Il titolo dice il confine: a mezzanotte questa sezione riparte da zero, e
+      // il giorno prima si guarda in 📅 7 giorni.
+      return "Oggi (dalle 00:00)";
     case "settimana":
       return "Ultimi 7 giorni";
     case "scadenze":
