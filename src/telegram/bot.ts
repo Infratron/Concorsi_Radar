@@ -90,7 +90,49 @@ function shiftDate(dateString: string, days: number): string {
 }
 
 function emptyState(chatId: number): UiState {
-  return { chatId, messageId: null, section: "menu", page: 0, openItemId: null, lastCheckAt: null };
+  return {
+    chatId,
+    messageId: null,
+    section: "menu",
+    page: 0,
+    openItemId: null,
+    lastCheckAt: null,
+    updatedAt: null,
+  };
+}
+
+/**
+ * Dopo quante ore di silenzio il messaggio salvato non è più quello che l'utente
+ * ha davanti.
+ *
+ * Perché non basta fidarsi dell'esito della modifica: dopo "Elimina
+ * conversazione" Telegram accetta la modifica di un messaggio che l'utente non
+ * vede più e risponde `ok`. Non c'è modo di distinguerlo da una modifica vera,
+ * quindi l'unica difesa è non provarci con un messaggio vecchio — un tocco su un
+ * avviso ricevuto la sera prima, con la chat svuotata nel frattempo, finiva in un
+ * messaggio invisibile e la chat restava muta finché non si scriveva /start.
+ *
+ * Sei ore: copre la notte e tutte e due le finestre del digest (8 e 19), mentre
+ * una conversazione vera — tocco dopo tocco, nella stessa sera — continua a
+ * modificare lo stesso messaggio, che è il punto dell'interfaccia. Non è una
+ * soglia di inattività dell'utente: è il tempo oltre il quale non si può più
+ * dare per scontato che quel messaggio esista ancora.
+ */
+export const STALE_CHAT_MS = 6 * 60 * 60 * 1000;
+
+/**
+ * true se lo stato salvato è troppo vecchio per essere modificato: meglio aprire
+ * un messaggio nuovo. Senza data ("non lo so": database scritto prima che il
+ * campo esistesse) la risposta è sì — un messaggio in più è un fastidio, uno
+ * schermo muto è un guasto.
+ */
+export function isStaleChat(updatedAt: string | null, now: Date): boolean {
+  if (updatedAt === null) return true;
+  const at = Date.parse(updatedAt);
+  if (!Number.isFinite(at)) return true;
+  // Un'ora nel futuro (orologi diversi fra Worker e richiesta) non rende la chat
+  // "fresca da sempre": si guarda solo il passato.
+  return now.getTime() - at > STALE_CHAT_MS;
 }
 
 /**
@@ -624,7 +666,9 @@ async function rescoreBrand(deps: BotDeps, brand: string, now: Date): Promise<nu
  *    invisibile.
  *  - tocco su un bottone: il messaggio lo si è appena toccato, quindi è visibile
  *    per definizione e si modifica sul posto (è il punto dell'interfaccia: un solo
- *    messaggio in chat).
+ *    messaggio in chat) — a meno che l'ultima interazione sia di ore fa: in quel
+ *    caso anche un tocco apre un messaggio nuovo (vedi STALE_CHAT_MS), perché il
+ *    messaggio salvato può essere stato cancellato insieme alla conversazione.
  *
  * La cancellazione del vecchio è "best effort": se non esiste più, l'errore non
  * cambia niente.
@@ -746,9 +790,24 @@ export async function handleUpdate(update: TelegramUpdate, deps: BotDeps): Promi
   // La pagina salvata è quella davvero mostrata: così anche uno stato vecchio
   // (per esempio dopo una pulizia dell'archivio) resta coerente.
   const normalized = { ...next, page: data.page };
-  const painted = await paint(deps, chatId, normalized, renderScreen(normalized, data, now), fresh);
+  // `fresh`: l'utente ha scritto, quindi la schermata va in un messaggio nuovo.
+  // `stale`: ha toccato un bottone, ma è passato troppo tempo perché quel
+  // messaggio sia ancora affidabile — vedi STALE_CHAT_MS.
+  const painted = await paint(
+    deps,
+    chatId,
+    normalized,
+    renderScreen(normalized, data, now),
+    fresh || isStaleChat(state.updatedAt, now),
+  );
   const visto = normalized.section === "nuovi" && normalized.openItemId === null;
-  await store.saveUiState(visto ? { ...painted, lastCheckAt: nowIso } : painted);
+  // L'ora dell'interazione si riscrive a ogni giro: è quella che dice, al tocco
+  // successivo, se il messaggio appena mandato è ancora quello in chat.
+  await store.saveUiState({
+    ...painted,
+    updatedAt: nowIso,
+    ...(visto ? { lastCheckAt: nowIso } : {}),
+  });
 
   if (notificationId !== null) await tg.deleteMessage(chatId, notificationId);
   if (callback) await tg.answerCallbackQuery(callback.id, toastFor(intent, prefs) ?? undefined);

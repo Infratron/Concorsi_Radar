@@ -403,6 +403,16 @@ export interface UiState {
   openItemId: number | null;
   /** Da quando contare i "nuovi" (ISO 8601). */
   lastCheckAt: string | null;
+  /**
+   * Quando la chat ha interagito l'ultima volta (ISO 8601), null se non si sa.
+   *
+   * Non è un dato di servizio: è quello che permette di capire se il messaggio
+   * salvato è ANCORA quello che l'utente ha davanti. Telegram accetta la modifica
+   * di un messaggio che l'utente non vede più (dopo "Elimina conversazione"
+   * risponde ok), quindi l'unico modo per non scrivere nel vuoto è non fidarsi di
+   * un messaggio vecchio: vedi isStaleChat in src/telegram/bot.ts.
+   */
+  updatedAt: string | null;
 }
 
 export interface RunRow {

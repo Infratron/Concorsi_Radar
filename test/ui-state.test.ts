@@ -64,8 +64,24 @@ function item(overrides: Partial<NewItem> = {}): NewItem {
   };
 }
 
+/**
+ * Uno stato dell'interfaccia con l'ora dichiarata: `updatedAt` è il campo che
+ * dice se il messaggio salvato è ancora quello in chat, quindi i test lo
+ * scrivono invece di lasciarlo al caso (l'ora vera del salvataggio).
+ */
+const ULTIMA_INTERAZIONE = "2026-10-16T12:00:00.000Z";
+
 function stato(chatId: number, overrides: Partial<UiState> = {}): UiState {
-  return { chatId, messageId: null, section: "menu", page: 0, openItemId: null, lastCheckAt: null, ...overrides };
+  return {
+    chatId,
+    messageId: null,
+    section: "menu",
+    page: 0,
+    openItemId: null,
+    lastCheckAt: null,
+    updatedAt: ULTIMA_INTERAZIONE,
+    ...overrides,
+  };
 }
 
 /** Le tre implementazioni dello stesso contratto, per confrontarle a parità di codice. */
@@ -108,6 +124,23 @@ describe.each(stores)("stato dell'interfaccia · $nome", ({ crea }) => {
     // Un salvataggio non deve toccare l'altra chat: `ui` ha una riga per chat.
     await store.saveUiState(stato(42, { messageId: 12 }));
     expect((await store.getUiState(99))?.messageId).toBe(20);
+  });
+
+  it("chi non dichiara l'ora dell'interazione la riceve dal salvataggio", async () => {
+    // La colonna è NOT NULL e il campo non può essere "non lo so" in archivio:
+    // l'ora del salvataggio è l'unico valore che non fa credere a una chat ferma
+    // da mesi. Le due implementazioni devono dirlo allo stesso modo.
+    const store = crea();
+    await store.saveUiState(stato(42, { updatedAt: null }));
+    const riletto = await store.getUiState(42);
+    expect(riletto?.updatedAt).not.toBeNull();
+    expect(Number.isFinite(Date.parse(String(riletto?.updatedAt)))).toBe(true);
+  });
+
+  it("l'ora dell'interazione si rilegge come è stata scritta", async () => {
+    const store = crea();
+    await store.saveUiState(stato(42, { updatedAt: "2026-10-16T09:30:00.000Z" }));
+    expect((await store.getUiState(42))?.updatedAt).toBe("2026-10-16T09:30:00.000Z");
   });
 
   it("accetta un item tornato a null dopo una cancellazione nell'app", async () => {

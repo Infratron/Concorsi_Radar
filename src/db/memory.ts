@@ -373,7 +373,9 @@ export function createMemoryStore(): MemoryStore {
     },
 
     async saveUiState(state: UiState): Promise<void> {
-      ui.set(state.chatId, clone(state));
+      // Come in D1: l'ora del salvataggio fa da rete per chi non la dichiara,
+      // altrimenti le due implementazioni racconterebbero due cose diverse.
+      ui.set(state.chatId, clone({ ...state, updatedAt: state.updatedAt ?? new Date().toISOString() }));
     },
 
     async listDeliveredItems(chatId: number, kind: string, limit = 50): Promise<ItemRow[]> {

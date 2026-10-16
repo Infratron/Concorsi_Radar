@@ -118,6 +118,7 @@ interface UiDbRow {
   page: number;
   open_item_id: number | null;
   last_check_at: string | null;
+  updated_at: string;
 }
 
 interface RunDbRow {
@@ -281,6 +282,10 @@ function rowToUiState(row: UiDbRow): UiState {
     page: row.page,
     openItemId: row.open_item_id,
     lastCheckAt: row.last_check_at,
+    // La colonna c'è dalla prima versione della tabella, ma il campo è stato
+    // letto solo adesso: un database scritto prima risponde `undefined`, e "non
+    // lo so" resta scritto come tale invece di diventare una data inventata.
+    updatedAt: row.updated_at ?? null,
   };
 }
 
@@ -781,7 +786,10 @@ export function createD1Store(db: D1Like): Store {
           state.page,
           state.openItemId,
           state.lastCheckAt,
-          new Date().toISOString(),
+          // La colonna è NOT NULL: chi non dichiara l'ora (uno strumento, un test
+          // che scrive lo stato a mano) riceve quella del salvataggio, che è
+          // l'unico valore che non fa credere a una chat ferma da mesi.
+          state.updatedAt ?? new Date().toISOString(),
         )
         .run();
     },

@@ -27,7 +27,7 @@ import { SCORE_WEIGHTS } from "../src/enrich/score.ts";
 import { activeFilterCount, defaultFilters, filterableSources, parseFilters, withFilterChange } from "../src/filters.ts";
 import { applyIntent, parseCallback } from "../src/telegram/screens.ts";
 import { channelOf } from "../src/enrich/lead.ts";
-import { handleUpdate } from "../src/telegram/bot.ts";
+import { STALE_CHAT_MS, handleUpdate, isStaleChat } from "../src/telegram/bot.ts";
 import {
   isQuietHour,
   regolamentoUrl,
@@ -410,7 +410,9 @@ describe("intenti", () => {
   });
 
   it("aprire una sezione azzera pagina e scheda, indietro chiude solo la scheda", () => {
-    const stato = { chatId: 1, messageId: 10, section: "oggi", page: 3, openItemId: 9, lastCheckAt: null };
+    const stato = {
+      chatId: 1, messageId: 10, section: "oggi", page: 3, openItemId: 9, lastCheckAt: null, updatedAt: null,
+    };
     const sezione = applyIntent(stato, { kind: "section", section: "scadenze" }, NOW);
     expect(sezione).toMatchObject({ section: "scadenze", page: 0, openItemId: null });
     const scheda = applyIntent(sezione, { kind: "open", itemId: 4 }, NOW);
@@ -756,6 +758,57 @@ describe("interfaccia · un solo messaggio per chat", () => {
     expect(calls.filter((call) => call.method === "editMessageText")).toHaveLength(0);
     expect(lastWith(calls, "sendMessage")?.payload.text).toContain("Concorsi Radar");
     expect((await store.getUiState(CHAT))?.messageId).toBe(101);
+  });
+
+  it("dopo ore di silenzio anche un tocco apre un messaggio nuovo, non uno invisibile", async () => {
+    // Il caso che rendeva il bot muto: un tocco su un avviso della sera prima,
+    // con la conversazione svuotata nel frattempo. Telegram accetta la modifica
+    // del messaggio che non c'è più (risponde ok) e l'utente non vede niente —
+    // l'unica difesa è non modificare un messaggio vecchio (vedi STALE_CHAT_MS).
+    const { tg, calls, invisibili } = makeTg();
+    await handleUpdate(command(1, "/start"), deps(store, tg));
+    const stato = (await store.getUiState(CHAT))!;
+    expect(stato.messageId).toBe(100);
+    invisibili.add(100);
+    const ottoOre = new Date(NOW.getTime() - 8 * 3_600_000).toISOString();
+    await store.saveUiState({ ...stato, updatedAt: ottoOre });
+    calls.length = 0;
+
+    await handleUpdate(tap(2, "s:oggi", 100), deps(store, tg));
+
+    expect(calls.filter((call) => call.method === "editMessageText")).toHaveLength(0);
+    expect(lastWith(calls, "sendMessage")?.payload.text).toContain("Ultime 24 ore");
+    const dopo = await store.getUiState(CHAT);
+    expect(dopo?.messageId).toBe(101);
+    // E l'ora si riaggiorna: dal tocco successivo si torna a un solo messaggio.
+    expect(dopo?.updatedAt).toBe(NOW.toISOString());
+  });
+
+  it("dentro la stessa conversazione il tocco continua a modificare l'unico messaggio", async () => {
+    const { tg, calls } = makeTg();
+    await handleUpdate(command(1, "/start"), deps(store, tg));
+    const cinqueOre = new Date(NOW.getTime() - 5 * 3_600_000).toISOString();
+    await store.saveUiState({ ...(await store.getUiState(CHAT))!, updatedAt: cinqueOre });
+    calls.length = 0;
+
+    await handleUpdate(tap(2, "s:oggi", 100), deps(store, tg));
+
+    expect(calls.filter((call) => call.method === "sendMessage")).toHaveLength(0);
+    expect(lastWith(calls, "editMessageText")?.payload.message_id).toBe(100);
+  });
+
+  it("la soglia è di sei ore, e senza data si apre un messaggio nuovo", () => {
+    const iso = (ms: number): string => new Date(NOW.getTime() + ms).toISOString();
+    // Sulla soglia esatta si modifica ancora: la chat è "vecchia" solo oltre.
+    expect(isStaleChat(iso(-STALE_CHAT_MS), NOW)).toBe(false);
+    expect(isStaleChat(iso(-STALE_CHAT_MS + 60_000), NOW)).toBe(false);
+    expect(isStaleChat(iso(-STALE_CHAT_MS - 60_000), NOW)).toBe(true);
+    // "Non lo so" non è una prova che il messaggio esista: si apre uno nuovo.
+    expect(isStaleChat(null, NOW)).toBe(true);
+    expect(isStaleChat("non una data", NOW)).toBe(true);
+    // Un orologio avanti (Worker e richiesta non sono la stessa macchina) non
+    // deve rendere la chat fresca per sempre.
+    expect(isStaleChat(iso(60_000), NOW)).toBe(false);
   });
 
   it("il contatore dei nuovi riparte dopo aver visto la sezione", async () => {

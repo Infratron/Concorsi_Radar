@@ -382,9 +382,19 @@ visibile — tipicamente dopo aver svuotato la chat con *Elimina conversazione*.
 In quel caso Telegram accetta la modifica di quel messaggio (risponde ok) ma non
 lo mostra più: fidarsi di quell'esito lascerebbe la chat muta, con il comando
 cancellato e nessun menù. Per questo un comando scritto **toglie il messaggio
-vecchio e ne manda uno nuovo**, mentre un tocco su un bottone modifica sul posto:
-lì il messaggio è visibile per definizione, perché lo stai toccando. In entrambi i
-casi in chat resta un messaggio solo.
+vecchio e ne manda uno nuovo**. In entrambi i casi in chat resta un messaggio solo.
+
+Lo stesso vale per un **tocco su un bottone dopo molte ore** di silenzio. Un tocco
+modifica il messaggio sul posto — è visibile per definizione, lo stai toccando —
+ma solo se quel messaggio è ancora quello che hai davanti: se nel frattempo hai
+svuotato la chat, l'avviso di ieri sera che stai toccando punterebbe a un
+messaggio che non c'è più, e la chat resterebbe muta. Per questo il bot ricorda
+l'ora dell'ultima interazione (`updatedAt` nello stato della chat) e, dopo
+**sei ore** di silenzio, apre un messaggio nuovo anche per un tocco
+([src/telegram/bot.ts](src/telegram/bot.ts), `STALE_CHAT_MS`). Sei ore coprono la
+notte e tutte e due le finestre del digest, mentre una conversazione vera continua
+a usare un messaggio solo — e una chat svuotata si riprende da sola, senza
+scrivere `/start`.
 
 ```
 📡 Concorsi Radar
@@ -1165,11 +1175,13 @@ La tabella `runs` in D1 conserva la nota di ogni esecuzione: quelle con
   Worker: costanti e helper di schedulazione vivono in
   [src/schedule.ts](src/schedule.ts), altrimenti workerd non avvia.
 - **La schermata in chat è un solo messaggio per chat**, e il suo id sta nella
-  tabella `ui` di D1. Conseguenze pratiche: dopo l'aggiornamento serve `npm run
-  db:init` (crea la tabella, è idempotente); se cancelli a mano quel messaggio il
-  bot ne manda uno nuovo al tocco successivo, e comunque `/start` ne apre sempre
-  uno fresco togliendo il precedente; aprendo il bot da due dispositivi
-  con lo stesso account la schermata è la stessa, perché è la stessa chat.
+  tabella `ui` di D1, insieme all'ora dell'ultima interazione (`updated_at`).
+  Conseguenze pratiche: dopo l'aggiornamento serve `npm run db:init` (crea la
+  tabella, è idempotente); se cancelli a mano quel messaggio, o se tocchi un
+  bottone dopo sei ore di silenzio, il bot ne manda uno nuovo al posto di
+  modificarne uno che potresti non avere più davanti; aprendo il bot da due
+  dispositivi con lo stesso account la schermata è la stessa, perché è la stessa
+  chat.
 - **Aggiornando un archivio già esistente serve una riga di SQL a mano.** `npm
   run db:init` usa `CREATE TABLE IF NOT EXISTS`, quindi non tocca le tabelle già
   create: la colonna `kind` (concorso, offerta o articolo) va aggiunta con
