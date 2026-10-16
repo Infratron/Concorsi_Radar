@@ -268,18 +268,42 @@ async function loadScreenData(
 }
 
 /**
- * Applica la schermata all'unico messaggio della chat: modifica quello esistente e
- * solo se non c'è più (l'utente l'ha cancellato) ne manda uno nuovo.
+ * Applica la schermata all'unico messaggio della chat.
+ *
+ * Due strade, e la differenza conta:
+ *  - `fresh` (comando o testo scritto): si toglie il messaggio precedente e se ne
+ *    manda uno nuovo. Non si può modificare, perché non è detto che quel
+ *    messaggio sia ancora visibile: dopo "Elimina conversazione" Telegram accetta
+ *    la modifica di un messaggio che l'utente non vede più (risponde ok) e la chat
+ *    resta muta. Fidarsi di quell'esito è quello che rendeva il bot sordo a
+ *    /start: il comando veniva cancellato e il menù finiva in un messaggio
+ *    invisibile.
+ *  - tocco su un bottone: il messaggio lo si è appena toccato, quindi è visibile
+ *    per definizione e si modifica sul posto (è il punto dell'interfaccia: un solo
+ *    messaggio in chat).
+ *
+ * La cancellazione del vecchio è "best effort": se non esiste più, l'errore non
+ * cambia niente.
  */
-async function paint(deps: BotDeps, chatId: number, state: UiState, screen: Screen): Promise<UiState> {
-  if (state.messageId !== null) {
+async function paint(
+  deps: BotDeps,
+  chatId: number,
+  state: UiState,
+  screen: Screen,
+  fresh: boolean,
+): Promise<UiState> {
+  if (!fresh && state.messageId !== null) {
     const edited = await deps.tg.editMessageText(chatId, state.messageId, screen.text, { keyboard: screen.keyboard });
     if (edited.ok) return state;
   }
+  if (state.messageId !== null) await deps.tg.deleteMessage(chatId, state.messageId);
   const sent = await deps.tg.sendMessage(chatId, screen.text, {
     keyboard: screen.keyboard,
     disablePreview: true,
   });
+  // Se l'invio non riesce (per esempio 429) non perdiamo il messaggio precedente:
+  // meglio riprovare a modificarlo che dimenticare dove sta la schermata.
+  if (!sent.ok) return state;
   return { ...state, messageId: sent.messageId };
 }
 
@@ -325,6 +349,8 @@ export async function handleUpdate(update: TelegramUpdate, deps: BotDeps): Promi
   if (message) await tg.deleteMessage(chatId, message.message_id);
 
   let intent: Intent;
+  // Un messaggio scritto apre un messaggio nuovo (vedi paint): i bottoni no.
+  const fresh = !callback;
   if (callback) {
     intent = parseCallback(conserva ? datiCallback.slice(2) : datiCallback);
   } else {
@@ -372,7 +398,7 @@ export async function handleUpdate(update: TelegramUpdate, deps: BotDeps): Promi
   // La pagina salvata è quella davvero mostrata: così anche uno stato vecchio
   // (per esempio dopo una pulizia dell'archivio) resta coerente.
   const normalized = { ...next, page: data.page };
-  const painted = await paint(deps, chatId, normalized, renderScreen(normalized, data, now));
+  const painted = await paint(deps, chatId, normalized, renderScreen(normalized, data, now), fresh);
   const visto = normalized.section === "nuovi" && normalized.openItemId === null;
   await store.saveUiState(visto ? { ...painted, lastCheckAt: nowIso } : painted);
 

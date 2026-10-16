@@ -48,6 +48,9 @@ function jsonResponse(payload: unknown, status = 200): Response {
 function makeTg() {
   const calls: Call[] = [];
   const testi = new Map<number, string>();
+  // Messaggi che Telegram accetta ancora di modificare ma che l'utente NON vede
+  // più: è il caso della chat svuotata con "Elimina conversazione".
+  const invisibili = new Set<number>();
   let nextMessageId = 100;
 
   const fetcher: FetchLike = async (input, init) => {
@@ -64,6 +67,12 @@ function makeTg() {
       const id = Number(payload.message_id);
       // Come l'API vera: un messaggio che non esiste più non si può modificare.
       if (!testi.has(id)) return jsonResponse({ ok: false, description: "Bad Request: message to edit not found" }, 400);
+      // Chat svuotata: la modifica riesce (e il contenuto cambia davvero lato
+      // server) ma per l'utente resta invisibile.
+      if (invisibili.has(id)) {
+        testi.set(id, String(payload.text));
+        return jsonResponse({ ok: true, result: { message_id: id } });
+      }
       if (testi.get(id) === String(payload.text)) {
         return jsonResponse({ ok: false, description: "Bad Request: message is not modified" }, 400);
       }
@@ -73,7 +82,7 @@ function makeTg() {
     return jsonResponse({ ok: true, result: true });
   };
 
-  return { tg: new TelegramClient("test-token", fetcher), calls };
+  return { tg: new TelegramClient("test-token", fetcher), calls, invisibili };
 }
 
 function makeItem(partial: Partial<NewItem> = {}): NewItem {
@@ -490,18 +499,52 @@ describe("interfaccia · un solo messaggio per chat", () => {
 
     await handleUpdate(command(3, "viaggio"), deps(store, tg));
     expect((await store.getUiState(CHAT))?.section).toBe("cerca:viaggio");
-    const testo = lastWith(calls, "editMessageText")?.payload.text ?? "";
+    const testo = lastWith(calls, "sendMessage")?.payload.text ?? "";
     expect(testo).toContain("Ricerca: viaggio");
     expect(methods(calls)).toContain("deleteMessage");
   });
 
-  it("fuori dalla ricerca un testo libero riapre il menù senza creare messaggi", async () => {
+  it("fuori dalla ricerca un testo libero riapre il menù in un messaggio nuovo", async () => {
     const { tg, calls } = makeTg();
     await handleUpdate(command(1, "/start"), deps(store, tg));
     calls.length = 0;
     await handleUpdate(command(2, "ciao"), deps(store, tg));
-    expect(methods(calls)).toEqual(["deleteMessage", "editMessageText"]);
-    expect(lastWith(calls, "editMessageText")?.payload.text).toContain("Concorsi Radar");
+    // Prima sparisce il testo scritto, poi la vecchia schermata, poi arriva il menù:
+    // in chat resta un messaggio solo.
+    expect(methods(calls)).toEqual(["deleteMessage", "deleteMessage", "sendMessage"]);
+    expect(calls[0]?.payload.message_id).toBe(2);
+    expect(calls[1]?.payload.message_id).toBe(100);
+    expect(lastWith(calls, "sendMessage")?.payload.text).toContain("Concorsi Radar");
+  });
+
+  it("due /start di fila lasciano un solo menù in chat", async () => {
+    const { tg, calls } = makeTg();
+    await handleUpdate(command(1, "/start"), deps(store, tg));
+    calls.length = 0;
+    await handleUpdate(command(2, "/start"), deps(store, tg));
+
+    expect(calls.filter((call) => call.method === "editMessageText")).toHaveLength(0);
+    expect(calls.filter((call) => call.method === "deleteMessage").map((call) => call.payload.message_id)).toEqual([
+      2, 100,
+    ]);
+    expect((await store.getUiState(CHAT))?.messageId).toBe(101);
+  });
+
+  it("/start riapre il menù anche se la chat è stata svuotata", async () => {
+    const { tg, calls, invisibili } = makeTg();
+    await handleUpdate(command(1, "/start"), deps(store, tg));
+    expect((await store.getUiState(CHAT))?.messageId).toBe(100);
+
+    // L'utente ha eliminato la conversazione: Telegram accetta ancora la modifica
+    // di quel messaggio (risponde ok) ma non lo mostra più. Se il bot si fidasse di
+    // quell'ok, il comando sparirebbe e il menù non arriverebbe mai.
+    invisibili.add(100);
+    calls.length = 0;
+    await handleUpdate(command(2, "/start"), deps(store, tg));
+
+    expect(calls.filter((call) => call.method === "editMessageText")).toHaveLength(0);
+    expect(lastWith(calls, "sendMessage")?.payload.text).toContain("Concorsi Radar");
+    expect((await store.getUiState(CHAT))?.messageId).toBe(101);
   });
 
   it("il contatore dei nuovi riparte dopo aver visto la sezione", async () => {
@@ -640,9 +683,15 @@ describe("interfaccia · un solo messaggio per chat", () => {
   it("i comandi restano scorciatoie: /scadenze apre la sezione giusta", async () => {
     const { tg, calls } = makeTg();
     await handleUpdate(command(1, "/start"), deps(store, tg));
+    calls.length = 0;
     await handleUpdate(command(2, "/scadenze"), deps(store, tg));
     expect((await store.getUiState(CHAT))?.section).toBe("scadenze");
-    expect(lastWith(calls, "deleteMessage")?.payload.message_id).toBe(2);
+    // Il comando sparisce, la schermata precedente viene tolta, la nuova arriva:
+    // la scorciatoia non lascia messaggi appesi.
+    expect(calls.filter((call) => call.method === "deleteMessage").map((call) => call.payload.message_id)).toEqual([
+      2, 100,
+    ]);
+    expect(lastWith(calls, "sendMessage")?.payload.text).toContain("In scadenza");
   });
 });
 

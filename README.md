@@ -57,8 +57,12 @@ Decisioni di progetto che contano:
 - **In chat si tocca, non si scrive.** Il bot è un menù a pulsanti e tiene **un
   solo messaggio** per chat: aprirlo, cambiare sezione o pagina, tornare indietro
   sono modifiche di quel messaggio, e il comando che hai scritto viene cancellato.
+  I comandi *scritti* (`/start` compreso) fanno eccezione a metà: tolgono il
+  messaggio precedente e ne mandano uno nuovo, perché un comando può arrivare
+  quando quello vecchio non è più visibile (vedi la sezione 5).
   Vedi la sezione 5; il perché tecnico sta in
-  [src/telegram/screens.ts](src/telegram/screens.ts).
+  [src/telegram/screens.ts](src/telegram/screens.ts) e
+  [src/telegram/bot.ts](src/telegram/bot.ts).
 - **Google News è la fonte più fresca** (batte gli aggregatori di ore), ma porta
   anche rumore: le sue notizie passano un filtro di pertinenza prima di entrare.
 - **Al primo giro in assoluto nessun avviso immediato**: si riempirebbe
@@ -254,7 +258,7 @@ scegli il repository e imposta:
 | Deploy command | `npx wrangler deploy` |
 | Preview builds | **disattivate** (vedi sotto) |
 
-Il *build command* è la rete di sicurezza: se il typecheck o uno dei 218 test
+Il *build command* è la rete di sicurezza: se il typecheck o uno dei 220 test
 fallisce, la build si ferma e **il deploy non parte**. `npm ci` serve a rendere
 l'installazione riproducibile dal `package-lock.json`.
 
@@ -289,10 +293,20 @@ database D1).
 ## 5. Come si usa: bottoni, non comandi
 
 Il bot è un **menù a pulsanti**: si tocca, non si scrive. La differenza visibile è
-che in chat resta **un solo messaggio**, sempre lo stesso: aprire una sezione, una
-scheda o una pagina *modifica* quel messaggio invece di mandarne un altro, e il
-messaggio che hai scritto tu viene cancellato subito. Non ci sono catene di
-messaggi da scorrere.
+che in chat resta **un solo messaggio**: aprire una sezione, una scheda o una
+pagina *modifica* quel messaggio invece di mandarne un altro, e il messaggio che
+hai scritto tu viene cancellato subito. Non ci sono catene di messaggi da
+scorrere.
+
+I **comandi scritti** (`/start`, `/oggi`, …) sono l'unica eccezione, e per un
+motivo preciso: un comando può arrivare quando il messaggio precedente non è più
+visibile — tipicamente dopo aver svuotato la chat con *Elimina conversazione*.
+In quel caso Telegram accetta la modifica di quel messaggio (risponde ok) ma non
+lo mostra più: fidarsi di quell'esito lascerebbe la chat muta, con il comando
+cancellato e nessun menù. Per questo un comando scritto **toglie il messaggio
+vecchio e ne manda uno nuovo**, mentre un tocco su un bottone modifica sul posto:
+lì il messaggio è visibile per definizione, perché lo stai toccando. In entrambi i
+casi in chat resta un messaggio solo.
 
 ```
 📡 Concorsi Radar
@@ -529,7 +543,7 @@ per leggere il numero della piattaforma serve `npx wrangler tail` su un deploy.
 curl "https://<worker>/health?secret=WEBHOOK_SECRET"   # esecuzioni e stato fonti
 npm run dry-run                                        # cosa verrebbe inviato, senza inviare
 npm run ingest                                         # raccolta vera, come su Actions
-npm test                                               # 218 test
+npm test                                               # 220 test
 npm run typecheck
 ```
 
@@ -575,7 +589,8 @@ La tabella `runs` in D1 conserva la nota di ogni esecuzione: quelle con
 - **La schermata in chat è un solo messaggio per chat**, e il suo id sta nella
   tabella `ui` di D1. Conseguenze pratiche: dopo l'aggiornamento serve `npm run
   db:init` (crea la tabella, è idempotente); se cancelli a mano quel messaggio il
-  bot ne manda uno nuovo al tocco successivo; aprendo il bot da due dispositivi
+  bot ne manda uno nuovo al tocco successivo, e comunque `/start` ne apre sempre
+  uno fresco togliendo il precedente; aprendo il bot da due dispositivi
   con lo stesso account la schermata è la stessa, perché è la stessa chat.
 
 ## 12. Mappa del progetto
@@ -607,7 +622,7 @@ scripts/
   dry-run.ts               prova generale senza inviare nulla
   bench-cpu.ts             stessa misura su Node, con le fonti vere
   seed-sources.ts          genera l'SQL di sincronizzazione delle fonti
-test/                      12 file, 218 test (vitest, nessuna rete)
+test/                      12 file, 220 test (vitest, nessuna rete)
 ```
 
 Il tratto che tiene insieme tutto: **una sola copia dell'SQL**. `src/db/d1.ts`
