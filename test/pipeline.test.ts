@@ -336,6 +336,44 @@ describe("pipeline · concorsi e contenitori", () => {
     const concorsi = await store.queryItems({ kinds: ["contest"], limit: 10 });
     expect(concorsi.map((row) => row.title)).toEqual(["Concorso Lievital"]);
   });
+
+  it("lo stesso concorso da sitemap e feed resta una riga sola, col nome migliore", async () => {
+    // Il caso reale di Scontrino Felice: la sitemap dà lo slug, il feed il titolo
+    // completo, e le due fonti parlano degli stessi URL. Prima vinceva quella che
+    // capitava per prima, quindi in chat poteva restare il nome mozzo.
+    const store = createMemoryStore();
+    const listino = source("scontrinofelice-sitemap", "Sitemap · Scontrino Felice", "https://www.scontrinofelice.it/sitemap_index.xml");
+    listino.kind = "sitemap";
+    listino.includePattern = "/concorsi-con-acquisto/";
+    const feed = source("scontrinofelice-acquisto", "Scontrino Felice · concorsi con acquisto", "https://www.scontrinofelice.it/concorsi-con-acquisto/feed/");
+    store.seedSources([listino, feed]);
+    await store.upsertPrefs(prefs(200));
+
+    const url = "https://www.scontrinofelice.it/concorsi-con-acquisto/concorso-lievital/";
+    const pagine = {
+      "https://www.scontrinofelice.it/sitemap_index.xml": sitemap([{ loc: url, lastmod: "2026-10-15" }]),
+      "https://www.scontrinofelice.it/concorsi-con-acquisto/feed/": rssFeed([
+        {
+          title: "Concorso Lievital: vinci Forni e Scaldavivande",
+          link: url,
+          description: "Concorso con acquisto: scade il 20 dicembre 2026. In palio forni e scaldavivande.",
+        },
+      ]),
+    };
+
+    const primo = await runIngest({ store, ai: null, fetcher: fetcherFor(pagine) }, NOW, { maxSources: 2, includeSynthesized: false, cpuBudgetMs: 1000 });
+    const items = await store.queryItems({ limit: 10 });
+    expect(items).toHaveLength(1);
+    expect(items[0].title).toBe("Concorso Lievital: vinci Forni e Scaldavivande");
+    expect(primo.duplicates).toBe(1);
+    expect(primo.itemsNew).toBe(1);
+
+    // Al giro dopo sono tutti duplicati, e non nasce nessuna seconda riga.
+    const secondo = await runIngest({ store, ai: null, fetcher: fetcherFor(pagine) }, new Date(NOW.getTime() + 1_800_000), { maxSources: 2, includeSynthesized: false, cpuBudgetMs: 1000 });
+    expect(secondo.itemsNew).toBe(0);
+    expect(secondo.duplicates).toBe(2);
+    expect(await store.queryItems({ limit: 10 })).toHaveLength(1);
+  });
 });
 
 describe("pipeline · notifiche", () => {

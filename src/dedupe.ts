@@ -8,6 +8,7 @@ import {
   simhash,
   stripBoilerplate,
   stripSourceTokens,
+  tokens,
   truncate,
   urlKey,
 } from "./lib/text.ts";
@@ -63,6 +64,56 @@ export async function prepareItem(
     simhash: simhash(title),
     kind: classifyKind({ url: canonical, title, sourceKind }),
   };
+}
+
+/**
+ * Il titolo migliore dello stesso concorso.
+ *
+ * Perché serve: lo stesso concorso arriva da più fonti con nomi diversi, e
+ * l'ordine di arrivo decideva quale restava in archivio. Il caso misurato il
+ * 16/10/2026: la sitemap di Scontrino Felice usa lo slug ("Concorso Lievital"),
+ * il suo feed RSS il titolo vero ("Concorso Lievital: vinci Forni e
+ * Scaldavivande"). Se capitava prima la sitemap, in chat restava il nome mozzo.
+ *
+ * Vince il candidato quando è più completo (contiene tutte le parole del titolo
+ * salvato e ne ha altre) oppure, a parità di parole, quando è scritto meglio
+ * (meno urlato). In ogni altro caso il titolo in archivio non si tocca: meglio
+ * un nome imperfetto che un nome sostituito con uno peggiore.
+ */
+export function isBetterTitle(stored: string, candidate: string): boolean {
+  if (stored === candidate) return false;
+  const attuale = tokens(stored);
+  const nuovo = tokens(candidate);
+  if (attuale.length === 0 || nuovo.length === 0) return false;
+
+  if (nuovo.length > attuale.length && attuale.every((word) => nuovo.includes(word))) return true;
+
+  const stesseParole =
+    attuale.length === nuovo.length && attuale.every((word, index) => word === nuovo[index]);
+  return stesseParole && shoutRatio(candidate) <= shoutRatio(stored);
+}
+
+/** Quota di lettere maiuscole: è la misura di quanto un titolo sia urlato. */
+function shoutRatio(input: string): number {
+  const letters = input.match(/\p{L}/gu) ?? [];
+  if (letters.length === 0) return 0;
+  const upper = letters.filter((letter) => letter === letter.toUpperCase() && letter !== letter.toLowerCase()).length;
+  return upper / letters.length;
+}
+
+/**
+ * Migliora il titolo di una riga già in archivio, se questa copia lo scrive
+ * meglio. Titolo e simhash si aggiornano insieme: il simhash è la firma di
+ * quel titolo, e lasciarlo vecchio renderebbe la deduplica meno precisa.
+ */
+export async function upgradeTitle(
+  store: Store,
+  existing: ItemRow,
+  prepared: PreparedItem,
+): Promise<boolean> {
+  if (!isBetterTitle(existing.title, prepared.title)) return false;
+  await store.updateItem(existing.id, { title: prepared.title, simhash: prepared.simhash });
+  return true;
 }
 
 /**

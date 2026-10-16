@@ -148,6 +148,13 @@ export interface NewItem {
 /** Patch parziale applicata a un item esistente (deduplica, arricchimento, stato). */
 export interface ItemPatch {
   lastSeenAt?: string;
+  /**
+   * Titolo e simhash si aggiornano INSIEME, e solo per migliorare: lo stesso
+   * concorso arriva da più fonti, e capita che una di queste lo nomini meglio
+   * dell'altra (la sitemap di un sito usa lo slug, il suo feed il titolo vero).
+   */
+  title?: string;
+  simhash?: string;
   /** Serve a riclassificare una riga già in archivio. */
   kind?: ItemKind;
   deadline?: string | null;

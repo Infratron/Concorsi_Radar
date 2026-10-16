@@ -14,6 +14,7 @@ import {
   prepareItem,
   toNewItem,
   touchDuplicate,
+  upgradeTitle,
 } from "./dedupe.ts";
 import { fnv1a32, sourceNameTokens } from "./lib/text.ts";
 
@@ -299,6 +300,9 @@ export async function runIngest(
 
         if (existing) {
           duplicates++;
+          // Un duplicato non crea una seconda riga, ma può portare un nome
+          // migliore: la copia con il titolo più completo lo sostituisce.
+          await upgradeTitle(deps.store, existing, prepared);
           // Percorso caldo del regime: se è già completo si evita del tutto
           // l'arricchimento (è la voce più costosa per item).
           if (isFullyEnriched(existing)) {

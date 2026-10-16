@@ -389,6 +389,8 @@ export function createD1Store(db: D1Like): Store {
       };
 
       if (patch.lastSeenAt !== undefined) push("last_seen_at", patch.lastSeenAt);
+      if (patch.title !== undefined) push("title", patch.title);
+      if (patch.simhash !== undefined) push("simhash", patch.simhash);
       if (patch.kind !== undefined) push("kind", patch.kind);
       if (patch.deadline !== undefined) push("deadline", patch.deadline);
       if (patch.prize !== undefined) push("prize", patch.prize);

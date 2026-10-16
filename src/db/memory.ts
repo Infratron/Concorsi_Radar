@@ -65,6 +65,8 @@ export function createMemoryStore(): MemoryStore {
 
   const applyPatch = (row: ItemRow, patch: ItemPatch): void => {
     if (patch.lastSeenAt !== undefined) row.lastSeenAt = patch.lastSeenAt;
+    if (patch.title !== undefined) row.title = patch.title;
+    if (patch.simhash !== undefined) row.simhash = patch.simhash;
     if (patch.kind !== undefined) row.kind = patch.kind;
     if (patch.deadline !== undefined) row.deadline = patch.deadline;
     if (patch.prize !== undefined) row.prize = patch.prize;

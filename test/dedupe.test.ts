@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createMemoryStore } from "../src/db/memory.ts";
-import { findDuplicate, prepareItem, toNewItem } from "../src/dedupe.ts";
+import { findDuplicate, isBetterTitle, prepareItem, toNewItem, upgradeTitle } from "../src/dedupe.ts";
 import { enrichWithRules } from "../src/enrich/rules.ts";
 import { baseScore } from "../src/enrich/score.ts";
 import type { RawItem } from "../src/types.ts";
@@ -92,5 +92,50 @@ describe("findDuplicate · decisione finale", () => {
     const { store } = await storeWith(raw("Concorso Barilla: vinci una Fiat Panda", "https://a.example/6"));
     const candidate = await prepareItem(raw("Titolo completamente diverso scritto dopo", "https://a.example/6"));
     expect((await findDuplicate(store, candidate, NOW))?.id).toBe(1);
+  });
+});
+
+describe("il titolo migliore vince", () => {
+  it("preferisce il titolo più completo a quello mozzo dello slug", () => {
+    expect(isBetterTitle("Concorso Lievital", "Concorso Lievital: vinci Forni e Scaldavivande")).toBe(true);
+    // Al contrario non si peggiora mai.
+    expect(isBetterTitle("Concorso Lievital: vinci Forni e Scaldavivande", "Concorso Lievital")).toBe(false);
+  });
+
+  it("a parità di parole preferisce la forma scritta meglio", () => {
+    expect(isBetterTitle("LA CACCIA AL TESORO DEL CAPITANO", "La Caccia al Tesoro del Capitano")).toBe(true);
+    expect(isBetterTitle("La Caccia al Tesoro del Capitano", "LA CACCIA AL TESORO DEL CAPITANO")).toBe(false);
+    expect(isBetterTitle("Concorso Barilla", "Concorso Barilla")).toBe(false);
+  });
+
+  it("non tocca un titolo quando il candidato è solo diverso", () => {
+    expect(isBetterTitle("Vinci con Cupper", "Concorso Cupper a premi")).toBe(false);
+    expect(isBetterTitle("Concorso Lidl: buoni spesa", "Vinci buoni spesa con Penny")).toBe(false);
+  });
+
+  it("aggiorna la riga in archivio con il titolo e la sua firma", async () => {
+    // Il caso reale: la sitemap di Scontrino Felice usa lo slug, il feed il
+    // titolo completo — e se capita prima la sitemap, in chat restava il mozzo.
+    const { store, inserted } = await storeWith(
+      raw("Concorso Lievital", "https://www.scontrinofelice.it/concorsi-con-acquisto/concorso-lievital/"),
+    );
+    const candidate = await prepareItem(
+      raw(
+        "Concorso Lievital: vinci Forni e Scaldavivande",
+        "https://www.scontrinofelice.it/concorsi-con-acquisto/concorso-lievital/",
+      ),
+    );
+
+    expect(await findDuplicate(store, candidate, NOW)).not.toBeNull();
+    expect(await upgradeTitle(store, inserted.item, candidate)).toBe(true);
+
+    const row = await store.getItem(inserted.item.id);
+    expect(row?.title).toBe("Concorso Lievital: vinci Forni e Scaldavivande");
+    expect(row?.simhash).toBe(candidate.simhash);
+    // Un solo concorso in archivio: il duplicato non crea una seconda riga.
+    expect(await store.queryItems({ limit: 10 })).toHaveLength(1);
+
+    // E la seconda volta non riscrive niente (è già il titolo migliore).
+    expect(await upgradeTitle(store, row!, candidate)).toBe(false);
   });
 });
