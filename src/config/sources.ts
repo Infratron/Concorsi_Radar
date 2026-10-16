@@ -186,7 +186,10 @@ export const SOURCES: SourceConfig[] = [
     url: "https://www.scontrinofelice.it/spendi-e-riprendi/feed/",
     category: "coupon",
     tags: ["coupon", "cashback"],
-    cadenceMin: 60,
+    // Trenta minuti come gli aggregatori di concorsi: sono la stessa specie di
+    // fonte (un blog che pubblica quando esce una promo), e un coupon ha senso
+    // solo finché è fresco. Sessanta minuti erano un residuo del primo taglio.
+    cadenceMin: 30,
     enabled: true,
     // 20 item e 5 ms di parsing (misurato): il feed è ricco, e tagliare a 15
     // perderebbe le code che invece sono offerte ancora valide.
@@ -199,7 +202,7 @@ export const SOURCES: SourceConfig[] = [
     url: "https://www.scontrinofelice.it/buoni-sconto/feed/",
     category: "coupon",
     tags: ["coupon"],
-    cadenceMin: 60,
+    cadenceMin: 30,
     enabled: true,
     maxItems: 25,
   },
@@ -210,7 +213,7 @@ export const SOURCES: SourceConfig[] = [
     url: "https://www.dimmicosacerchi.it/cashback/feed",
     category: "coupon",
     tags: ["coupon", "cashback"],
-    cadenceMin: 60,
+    cadenceMin: 30,
     enabled: true,
     // 15 item (misurato): è il tetto che il feed dà da sé.
     maxItems: 15,
@@ -222,7 +225,7 @@ export const SOURCES: SourceConfig[] = [
     url: "https://www.dimmicosacerchi.it/buoni-sconto-da-stampare/feed",
     category: "coupon",
     tags: ["coupon"],
-    cadenceMin: 60,
+    cadenceMin: 30,
     enabled: true,
     maxItems: 15,
   },
@@ -233,7 +236,7 @@ export const SOURCES: SourceConfig[] = [
     url: "https://www.scontomaggio.com/cashback/feed/",
     category: "coupon",
     tags: ["coupon", "cashback"],
-    cadenceMin: 60,
+    cadenceMin: 30,
     enabled: true,
     maxItems: 20,
   },
@@ -244,7 +247,7 @@ export const SOURCES: SourceConfig[] = [
     url: "https://www.scontomaggio.com/coupon/feed/",
     category: "coupon",
     tags: ["coupon"],
-    cadenceMin: 60,
+    cadenceMin: 30,
     enabled: true,
     maxItems: 20,
   },
