@@ -2,7 +2,7 @@ import type { Store } from "../db/store.ts";
 import type { ItemRow, Prefs } from "../types.ts";
 import type { TelegramClient } from "./api.ts";
 import { daysLeft, formatDigest, formatItemCard, localHour, type DigestSection } from "./format.ts";
-import { itemKeyboard, itemKeyboardWithRegolamento } from "./keyboard.ts";
+import { instantKeyboard } from "./keyboard.ts";
 
 /**
  * Digest programmati e avvisi istantanei.
@@ -96,6 +96,8 @@ export async function sendDigests(deps: NotifyDeps): Promise<{ chats: number; me
   for (const chatId of await store.listChats()) {
     const prefs = await store.getPrefs(chatId);
     if (!prefs || !prefs.active) continue;
+    // Digest spenti dalle impostazioni: gli avvisi immediati continuano ad arrivare.
+    if (prefs.digestHours.length === 0) continue;
     // In fascia di silenzio gli item restano 'new': li prende il digest successivo.
     if (isQuietHour(prefs, now)) continue;
 
@@ -166,11 +168,8 @@ export async function sendInstantAlerts(deps: NotifyDeps): Promise<{ sent: numbe
       if (await store.isDelivered(chatId, item.id, "digest")) continue;
       if (await store.isDelivered(chatId, item.id, "ignored")) continue;
 
-      const regolamento = regolamentoUrl(item);
       const result = await tg.sendMessage(chatId, formatItemCard(item, now), {
-        keyboard: regolamento
-          ? itemKeyboardWithRegolamento(item.id, item.url, regolamento)
-          : itemKeyboard(item.id, item.url),
+        keyboard: instantKeyboard(item, regolamentoUrl(item)),
         disablePreview: true,
       });
       if (!result.ok) continue;

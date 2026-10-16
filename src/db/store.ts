@@ -8,6 +8,7 @@ import type {
   RobotsRow,
   RunRow,
   SourceRow,
+  UiState,
 } from "../types.ts";
 
 /**
@@ -55,6 +56,16 @@ export interface Store {
   recordDelivery(chatId: number, itemId: number, kind: string, at: string): Promise<void>;
   lastDeliveryAt(chatId: number, kind: string): Promise<string | null>;
   bumpWeights(chatId: number, delta: Record<string, number>): Promise<void>;
+
+  // --- interfaccia in chat ---
+  /** Stato del messaggio unico della chat; null la prima volta. */
+  getUiState(chatId: number): Promise<UiState | null>;
+  /** Salva lo stato del messaggio unico (upsert su chat_id). */
+  saveUiState(state: UiState): Promise<void>;
+  /** Item consegnati a questa chat con quel tipo ("saved", "won", "ignored"), dal più recente. */
+  listDeliveredItems(chatId: number, kind: string, limit?: number): Promise<ItemRow[]>;
+  /** Numero di item che soddisfano la query, senza caricare le righe. */
+  countItems(query: ItemQuery): Promise<number>;
 
   // --- diagnostica ---
   recordRun(run: RunRow): Promise<void>;

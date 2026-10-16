@@ -142,7 +142,22 @@ export class TelegramClient {
       parse_mode: "HTML",
     };
     if (opts.keyboard) payload.reply_markup = opts.keyboard;
-    return toSendResult(await this.call("editMessageText", payload));
+    const result = toSendResult(await this.call("editMessageText", payload));
+    // "message is not modified" arriva quando l'utente tocca due volte lo stesso
+    // bottone: il messaggio è già come lo vogliamo, non è un errore da gestire.
+    if (!result.ok && result.error !== null && /not modified/i.test(result.error)) {
+      return { ...result, ok: true, error: null };
+    }
+    return result;
+  }
+
+  /**
+   * Cancella un messaggio. Serve a tenere la chat pulita: il bot cancella il
+   * comando appena scritto dall'utente (e le notifiche già gestite) invece di
+   * accumulare righe su righe.
+   */
+  async deleteMessage(chatId: number, messageId: number): Promise<SendResult> {
+    return toSendResult(await this.call("deleteMessage", { chat_id: chatId, message_id: messageId }));
   }
 
   async answerCallbackQuery(callbackQueryId: string, text?: string): Promise<SendResult> {
@@ -152,20 +167,12 @@ export class TelegramClient {
   }
 
   async setMyCommands(): Promise<SendResult> {
-    const commands = [
-      { command: "oggi", description: "Concorsi trovati nelle ultime 24 ore" },
-      { command: "settimana", description: "Concorsi degli ultimi 7 giorni" },
-      { command: "scadenze", description: "Concorsi che scadono entro 7 giorni" },
-      { command: "cerca", description: "Cerca per parola chiave" },
-      { command: "salva", description: "Salva un concorso per id" },
-      { command: "vinto", description: "Segna un concorso come vinto" },
-      { command: "ignora", description: "Ignora un concorso per id" },
-      { command: "fonti", description: "Stato delle fonti monitorate" },
-      { command: "health", description: "Stato delle ultime esecuzioni" },
-      { command: "stop", description: "Sospendi le notifiche" },
-      { command: "start", description: "Riattiva le notifiche" },
-      { command: "help", description: "Elenco dei comandi" },
-    ];
+    // Un solo comando: il bot si guida con i BOTTONI sotto il messaggio, non con
+    // la tendina dei comandi. `/start` resta perché è quello che Telegram mostra
+    // a chi apre il bot per la prima volta. Tutto il resto vive nel menù
+    // (src/telegram/keyboard.ts); i comandi vecchi funzionano ancora, ma non
+    // vengono pubblicizzati qui.
+    const commands = [{ command: "start", description: "Apri il menù" }];
     return toSendResult(await this.call("setMyCommands", { commands, language_code: "it" }));
   }
 

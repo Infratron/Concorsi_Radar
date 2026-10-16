@@ -96,3 +96,15 @@ CREATE TABLE IF NOT EXISTS robots (
   body       TEXT NOT NULL,
   fetched_at TEXT NOT NULL
 );
+
+-- Stato dell'interfaccia in chat: il bot tiene UN messaggio per chat e lo modifica
+-- (menù, sezioni, schede), invece di accumulare messaggi.
+CREATE TABLE IF NOT EXISTS ui (
+  chat_id       INTEGER PRIMARY KEY,
+  message_id    INTEGER,
+  section       TEXT NOT NULL DEFAULT 'menu',
+  page          INTEGER NOT NULL DEFAULT 0,
+  open_item_id  INTEGER,
+  last_check_at TEXT,
+  updated_at    TEXT NOT NULL
+);

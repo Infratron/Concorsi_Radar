@@ -9,6 +9,7 @@ import type {
   RobotsRow,
   RunRow,
   SourceRow,
+  UiState,
 } from "../types.ts";
 import { DUP_CANDIDATE_MAX_HAMMING, hammingHex } from "../lib/text.ts";
 
@@ -84,6 +85,15 @@ interface PrefsDbRow {
   min_score_instant: number;
   quiet_hours: string;
   digest_hours: string;
+}
+
+interface UiDbRow {
+  chat_id: number;
+  message_id: number | null;
+  section: string;
+  page: number;
+  open_item_id: number | null;
+  last_check_at: string | null;
 }
 
 interface RunDbRow {
@@ -196,6 +206,17 @@ function rowToPrefs(row: PrefsDbRow): Prefs {
   };
 }
 
+function rowToUiState(row: UiDbRow): UiState {
+  return {
+    chatId: row.chat_id,
+    messageId: row.message_id,
+    section: row.section,
+    page: row.page,
+    openItemId: row.open_item_id,
+    lastCheckAt: row.last_check_at,
+  };
+}
+
 function rowToRun(row: RunDbRow): RunRow {
   return {
     startedAt: row.started_at,
@@ -222,6 +243,52 @@ const ORDER_BY: Record<string, string> = {
   // NULL messi in fondo, così l'ordine coincide con l'implementazione in-memory.
   deadline: "deadline IS NULL ASC, deadline ASC, score DESC",
 };
+
+/**
+ * Clausola WHERE delle query su items, scritta in un punto solo: countItems deve
+ * contare esattamente le righe che queryItems restituirebbe, e due copie della
+ * stessa logica divergono alla prima aggiunta di un filtro.
+ */
+function buildWhere(query: ItemQuery): { sql: string; params: unknown[] } {
+  const where: string[] = [];
+  const params: unknown[] = [];
+
+  if (query.since) {
+    where.push("first_seen_at >= ?");
+    params.push(query.since);
+  }
+  if (query.until) {
+    where.push("first_seen_at <= ?");
+    params.push(query.until);
+  }
+  if (query.statuses && query.statuses.length > 0) {
+    where.push(`status IN (${query.statuses.map(() => "?").join(", ")})`);
+    params.push(...query.statuses);
+  }
+  if (typeof query.minScore === "number") {
+    where.push("score >= ?");
+    params.push(query.minScore);
+  }
+  const keyword = query.keyword?.trim().toLowerCase();
+  if (keyword) {
+    where.push("(LOWER(title) LIKE ? OR LOWER(summary) LIKE ?)");
+    params.push(`%${keyword}%`, `%${keyword}%`);
+  }
+  if (query.deadlineBefore) {
+    where.push("deadline IS NOT NULL AND deadline <= ?");
+    params.push(query.deadlineBefore);
+  }
+  if (query.deadlineAfter) {
+    where.push("deadline IS NOT NULL AND deadline >= ?");
+    params.push(query.deadlineAfter);
+  }
+  if (query.excludeIds && query.excludeIds.length > 0) {
+    where.push(`id NOT IN (${query.excludeIds.map(() => "?").join(", ")})`);
+    params.push(...query.excludeIds);
+  }
+
+  return { sql: where.length > 0 ? `WHERE ${where.join(" AND ")}` : "", params };
+}
 
 export function createD1Store(db: D1Like): Store {
   return {
@@ -328,44 +395,23 @@ export function createD1Store(db: D1Like): Store {
     },
 
     async queryItems(query: ItemQuery): Promise<ItemRow[]> {
-      const where: string[] = [];
-      const params: unknown[] = [];
-
-      if (query.since) {
-        where.push("first_seen_at >= ?");
-        params.push(query.since);
-      }
-      if (query.until) {
-        where.push("first_seen_at <= ?");
-        params.push(query.until);
-      }
-      if (query.statuses && query.statuses.length > 0) {
-        where.push(`status IN (${query.statuses.map(() => "?").join(", ")})`);
-        params.push(...query.statuses);
-      }
-      if (typeof query.minScore === "number") {
-        where.push("score >= ?");
-        params.push(query.minScore);
-      }
-      const keyword = query.keyword?.trim().toLowerCase();
-      if (keyword) {
-        where.push("(LOWER(title) LIKE ? OR LOWER(summary) LIKE ?)");
-        params.push(`%${keyword}%`, `%${keyword}%`);
-      }
-      if (query.deadlineBefore) {
-        where.push("deadline IS NOT NULL AND deadline <= ?");
-        params.push(query.deadlineBefore);
-      }
-      if (query.excludeIds && query.excludeIds.length > 0) {
-        where.push(`id NOT IN (${query.excludeIds.map(() => "?").join(", ")})`);
-        params.push(...query.excludeIds);
-      }
-
+      const filter = buildWhere(query);
       const limit = Math.min(Math.max(Math.trunc(query.limit ?? 20), 1), 200);
       const order = ORDER_BY[query.orderBy ?? "first_seen"] ?? ORDER_BY.first_seen;
-      const sql = `SELECT * FROM items ${where.length > 0 ? `WHERE ${where.join(" AND ")}` : ""} ORDER BY ${order} LIMIT ?`;
-      const result = await db.prepare(sql).bind(...params, limit).all<ItemDbRow>();
+      const sql = `SELECT * FROM items ${filter.sql} ORDER BY ${order} LIMIT ?`;
+      const result = await db.prepare(sql).bind(...filter.params, limit).all<ItemDbRow>();
       return (result.results ?? []).map(rowToItem);
+    },
+
+    async countItems(query: ItemQuery): Promise<number> {
+      // COUNT senza idratazione: i conteggi del menù non devono costare quanto
+      // caricare le righe (su Workers Free la CPU è il vincolo).
+      const filter = buildWhere(query);
+      const row = await db
+        .prepare(`SELECT COUNT(*) AS n FROM items ${filter.sql}`)
+        .bind(...filter.params)
+        .first<{ n: number }>();
+      return row?.n ?? 0;
     },
 
     async setStatus(id: number, status: ItemStatus): Promise<void> {
@@ -464,6 +510,53 @@ export function createD1Store(db: D1Like): Store {
           new Date().toISOString(),
         )
         .run();
+    },
+
+    async getUiState(chatId: number): Promise<UiState | null> {
+      const row = await db.prepare("SELECT * FROM ui WHERE chat_id = ?").bind(chatId).first<UiDbRow>();
+      return row ? rowToUiState(row) : null;
+    },
+
+    async saveUiState(state: UiState): Promise<void> {
+      await db
+        .prepare(
+          `INSERT INTO ui (chat_id, message_id, section, page, open_item_id, last_check_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(chat_id) DO UPDATE SET
+             message_id = excluded.message_id,
+             section = excluded.section,
+             page = excluded.page,
+             open_item_id = excluded.open_item_id,
+             last_check_at = excluded.last_check_at,
+             updated_at = excluded.updated_at`,
+        )
+        .bind(
+          state.chatId,
+          state.messageId,
+          state.section,
+          state.page,
+          state.openItemId,
+          state.lastCheckAt,
+          new Date().toISOString(),
+        )
+        .run();
+    },
+
+    async listDeliveredItems(chatId: number, kind: string, limit = 50): Promise<ItemRow[]> {
+      // Una JOIN invece di due giri: la scheda "salvati" vuole gli item interi,
+      // e chiederli per id costerebbe una query in più per ogni riga.
+      const capped = Math.min(Math.max(Math.trunc(limit), 1), 200);
+      const result = await db
+        .prepare(
+          `SELECT i.* FROM deliveries d
+             JOIN items i ON i.id = d.item_id
+            WHERE d.chat_id = ? AND d.kind = ?
+            ORDER BY d.sent_at DESC
+            LIMIT ?`,
+        )
+        .bind(chatId, kind, capped)
+        .all<ItemDbRow>();
+      return (result.results ?? []).map(rowToItem);
     },
 
     async recordRun(run: RunRow): Promise<void> {

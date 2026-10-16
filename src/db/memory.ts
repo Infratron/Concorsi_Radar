@@ -9,6 +9,7 @@ import type {
   RobotsRow,
   RunRow,
   SourceRow,
+  UiState,
 } from "../types.ts";
 import { DUP_CANDIDATE_MAX_HAMMING, hammingHex } from "../lib/text.ts";
 
@@ -59,6 +60,7 @@ export function createMemoryStore(): MemoryStore {
   const updates = new Set<number>();
   const aiUsage = new Map<string, { calls: number; neurons: number }>();
   const robots = new Map<string, RobotsRow>();
+  const ui = new Map<number, UiState>();
   let nextItemId = 1;
 
   const applyPatch = (row: ItemRow, patch: ItemPatch): void => {
@@ -88,6 +90,9 @@ export function createMemoryStore(): MemoryStore {
     }
     if (query.deadlineBefore) {
       if (row.deadline === null || row.deadline > query.deadlineBefore) return false;
+    }
+    if (query.deadlineAfter) {
+      if (row.deadline === null || row.deadline < query.deadlineAfter) return false;
     }
     if (query.excludeIds && query.excludeIds.length > 0 && query.excludeIds.includes(row.id)) return false;
     return true;
@@ -176,6 +181,10 @@ export function createMemoryStore(): MemoryStore {
         .map((row) => clone(row));
     },
 
+    async countItems(query: ItemQuery): Promise<number> {
+      return items.filter((row) => matchesQuery(row, query)).length;
+    },
+
     async setStatus(id: number, status: ItemStatus): Promise<void> {
       const row = items.find((candidate) => candidate.id === id);
       if (row) row.status = status;
@@ -232,6 +241,26 @@ export function createMemoryStore(): MemoryStore {
         weights[tag] = clampWeight((weights[tag] ?? 0) + value);
       }
       prefs.set(chatId, { ...current, weights });
+    },
+
+    async getUiState(chatId: number): Promise<UiState | null> {
+      const value = ui.get(chatId);
+      return value ? clone(value) : null;
+    },
+
+    async saveUiState(state: UiState): Promise<void> {
+      ui.set(state.chatId, clone(state));
+    },
+
+    async listDeliveredItems(chatId: number, kind: string, limit = 50): Promise<ItemRow[]> {
+      const capped = Math.min(Math.max(Math.trunc(limit), 1), 200);
+      return deliveries
+        .filter((row) => row.chatId === chatId && row.kind === kind)
+        .sort((a, b) => b.sentAt.localeCompare(a.sentAt))
+        .slice(0, capped)
+        .map((row) => items.find((item) => item.id === row.itemId))
+        .filter((item): item is ItemRow => item !== undefined)
+        .map((item) => clone(item));
     },
 
     async recordRun(run: RunRow): Promise<void> {

@@ -162,6 +162,8 @@ export interface ItemQuery {
   keyword?: string;
   /** deadline <= questa data (YYYY-MM-DD). */
   deadlineBefore?: string;
+  /** deadline >= questa data (YYYY-MM-DD): serve a mostrare solo le scadenze future. */
+  deadlineAfter?: string;
   /** Esclude gli item i cui id compaiono qui. */
   excludeIds?: number[];
   limit?: number;
@@ -177,6 +179,21 @@ export interface Prefs {
   /** "23-7" = silenzio dalle 23 alle 7 (ora locale Europe/Rome). */
   quietHours: string;
   digestHours: number[];
+}
+
+/** Stato dell'interfaccia in chat: il bot tiene UN messaggio e lo modifica. */
+export interface UiState {
+  chatId: number;
+  /** Id del messaggio da modificare; null la prima volta. */
+  messageId: number | null;
+  /** Sezione mostrata: "menu" | "nuovi" | "oggi" | "settimana" | "scadenze" | "salvati" | "fonti" | "impostazioni" | "cerca" | "cerca:<query>". */
+  section: string;
+  /** Pagina dell'elenco (0-based). */
+  page: number;
+  /** Item aperto in scheda sopra la sezione, null se si vede l'elenco. */
+  openItemId: number | null;
+  /** Da quando contare i "nuovi" (ISO 8601). */
+  lastCheckAt: string | null;
 }
 
 export interface RunRow {

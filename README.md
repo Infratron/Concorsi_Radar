@@ -54,6 +54,11 @@ Decisioni di progetto che contano:
   freno di CPU di prima. Raggiunge poche fonti — è la rete di Cloudflare a essere
   bloccata — ma sono più di zero, e la nota in `/health` dice che è scattata
   (`raccolta di riserva: …`). Quando Actions gira, il Worker non scarica nulla.
+- **In chat si tocca, non si scrive.** Il bot è un menù a pulsanti e tiene **un
+  solo messaggio** per chat: aprirlo, cambiare sezione o pagina, tornare indietro
+  sono modifiche di quel messaggio, e il comando che hai scritto viene cancellato.
+  Vedi la sezione 5; il perché tecnico sta in
+  [src/telegram/screens.ts](src/telegram/screens.ts).
 - **Google News è la fonte più fresca** (batte gli aggregatori di ore), ma porta
   anche rumore: le sue notizie passano un filtro di pertinenza prima di entrare.
 - **Al primo giro in assoluto nessun avviso immediato**: si riempirebbe
@@ -154,7 +159,9 @@ risponde elencandoli in `missing`: è il modo normale di accorgersene.
 
 Poi, **da entrambi gli account Telegram**, aprite il bot e premete `/start`:
 è quello che vi iscrive alle notifiche (il bot non può scrivere per primo a
-chi non ha mai avviato la conversazione). Verifica con `/help` e `/health`.
+chi non ha mai avviato la conversazione) e vi mostra il menù. Da lì si va a
+pulsanti: provate 📡 Fonti per vedere chi risponde e ⚙️ Impostazioni per soglia
+e orari (sezione 5).
 
 ### Prova in locale
 
@@ -247,7 +254,7 @@ scegli il repository e imposta:
 | Deploy command | `npx wrangler deploy` |
 | Preview builds | **disattivate** (vedi sotto) |
 
-Il *build command* è la rete di sicurezza: se il typecheck o uno dei 172 test
+Il *build command* è la rete di sicurezza: se il typecheck o uno dei 215 test
 fallisce, la build si ferma e **il deploy non parte**. `npm ci` serve a rendere
 l'installazione riproducibile dal `package-lock.json`.
 
@@ -279,24 +286,53 @@ che i Preview **non** ereditano i segreti di produzione e, con lo stesso
 `database_id`, condividono lo stesso database (per isolarli serve un secondo
 database D1).
 
-## 5. Comandi del bot
+## 5. Come si usa: bottoni, non comandi
 
-| Comando | Cosa fa |
+Il bot è un **menù a pulsanti**: si tocca, non si scrive. La differenza visibile è
+che in chat resta **un solo messaggio**, sempre lo stesso: aprire una sezione, una
+scheda o una pagina *modifica* quel messaggio invece di mandarne un altro, e il
+messaggio che hai scritto tu viene cancellato subito. Non ci sono catene di
+messaggi da scorrere.
+
+```
+📡 Concorsi Radar
+
+[🆕 Nuovi (3)]        [📋 Oggi (12)]
+[📅 7 giorni (40)]    [⏳ Scadenze (2)]
+[⭐ Salvati (1)]      [🔍 Cerca]
+[📡 Fonti]            [⚙️ Impostazioni]
+[🔄 Aggiorna]
+```
+
+| Sezione | Cosa mostra |
 |---|---|
-| `/start` `/stop` | attiva / sospende le **tue** notifiche |
-| `/oggi` `/settimana` | concorsi trovati nelle ultime 24 ore / 7 giorni |
-| `/scadenze` | concorsi che chiudono entro 7 giorni |
-| `/cerca gift card` | ricerca per parola chiave |
-| `/salva <id>` `/ignora <id>` `/vinto <id>` | gestione di un concorso |
-| `/fonti` | stato delle fonti (attiva, ultimo successo, errori di fila) |
-| `/health` | ultime esecuzioni |
-| `/help` | elenco comandi |
+| 🆕 Nuovi | quello che è arrivato **dall'ultimo controllo** (il numero è sulla voce del menù) |
+| 📋 Oggi / 📅 7 giorni | l'archivio recente, ordinato per punteggio |
+| ⏳ Scadenze | chi chiude entro 7 giorni e **non è già chiuso** |
+| ⭐ Salvati | i concorsi che hai salvato, con la scadenza più vicina in cima |
+| 🔍 Cerca | scrivi una parola: il bot cancella il tuo messaggio e mostra i risultati |
+| 📡 Fonti | quali fonti rispondono, quando, e le ultime raccolte |
+| ⚙️ Impostazioni | soglia degli avvisi, fascia di silenzio, orari dei digest |
+| 🔄 Aggiorna | rilegge tutto e dice se è arrivato qualcosa di nuovo |
 
-Sotto ogni concorso ci sono i bottoni ✅ Salva, 🚫 Non mi interessa, 🏆 Vinto e
-🔗 Apri (più 📄 Regolamento quando l'URL è nel testo). **Salva** e **Non mi
-interessa** addestrano i pesi: ogni tag dei concorsi che salvi guadagna punti e
-quelli che ignori li perde, quindi i punteggi si adattano ai tuoi gusti
-(clamp ±5 per tag).
+Gli elenchi sono **bottone per concorso** (`⭐85 ⏳3gg · Concorso Barilla…`):
+toccandone uno si apre la scheda, e da lì `⬅️ Torna all'elenco`. Nella scheda ci
+sono le decisioni ✅ Salva, 🚫 Non mi interessa, 🏆 Vinto (quella già presa resta
+visibile e inerte), 🔗 Apri e 📄 Regolamento quando l'URL è nel testo.
+
+**Salva** e **Non mi interessa** addestrano i pesi: ogni tag dei concorsi che
+salvi guadagna un punto, quelli che ignori ne perdono uno (clamp ±5 per tag),
+quindi i punteggi si spostano verso i tuoi gusti. Le decisioni sono **per
+persona**: se tu ignori un concorso, alla tua amica arriva lo stesso.
+
+Gli **avvisi immediati** sono l'eccezione: sono messaggi a sé (devono restare
+leggibili mentre fai altro), con gli stessi bottoni. Appena ne usi uno, il bot lo
+toglie di mezzo e aggiorna la schermata: in chat non resta niente di appeso.
+
+I comandi funzionano ancora ma sono scorciatoie, non il modo normale: `/start`
+(che è anche l'iscrizione, ed è l'unico pubblicato nel menù "/" di Telegram),
+`/menu`, `/nuovi`, `/oggi`, `/settimana`, `/scadenze`, `/salvati`, `/cerca`,
+`/fonti`, `/impostazioni`, `/stop` e `/salva|/vinto|/ignora <id>`.
 
 ## 6. Deduplica: perché è fatta così
 
@@ -357,8 +393,34 @@ Freni antispam, tutti attivi per default:
 
 Verificate il 16/10/2026 (feed leggibili senza login): Premi e Concorsi,
 Scontrino Felice (con acquisto + gratuiti), DimmiCosaCerchi, Soldissimi, Vincimi,
-più quattro query Google News e due sitemap. L'elenco completo con stato di
+più sei query Google News e alcune sitemap. L'elenco completo con stato di
 verifica è in [src/config/sources.ts](src/config/sources.ts).
+
+**I brand.** Gli aggregatori non coprono i concorsi che un'azienda pubblica solo
+sul proprio sito: l'unico modo è guardare le **sitemap e le pagine promozionali**
+dei marchi. Le fonti qui sotto sono state provate una per una con i parser veri
+(16/10/2026) e sono entrate in configurazione solo quelle che restituivano
+pagine di concorso: le altre (Barilla, Mulino Bianco, Perugina, McDonald's,
+Findus, Algida, Heineken, Trenitalia, TIM, WindTre, Esselunga…) rispondono 403,
+non hanno un elenco pubblico o lo costruiscono via JavaScript, quindi non sono
+monitorabili in modo affidabile — restano coperte dalle query Google News.
+
+| Fonte | Tipo | Cosa ha dato nella prova |
+|---|---|---|
+| Ferrero · promozioni | sitemap | 20 pagine (`/promozioni/...`: Nutella, Kinder, Rocher) |
+| Lavazza · promozioni | sitemap | 15 pagine |
+| Conad · collezioni e concorsi | sitemap | 20 pagine |
+| Burger King · regolamenti | sitemap | 15 pagine |
+| Eni Più Insieme · concorsi | sitemap | 6 concorsi |
+| PAYBACK · regolamenti | sitemap | 5 regolamenti (piattaforma usata da molti brand) |
+| Sammontana · gusta e vinci | sitemap | 3 pagine |
+| Coca-Cola · offerte e concorsi | pagina HTML | 5 campagne attive |
+| Google News · brand | query | Nutella, Kinder, Coca-Cola, Mulino Bianco, supermercati |
+| Google News · instant win | query | concorsi con codici sotto il tappo, "in palio" |
+
+Misura della prima raccolta completa con tutte le fonti (22 su 22, 16/10/2026):
+**267 item letti, 213 nuovi, 32 duplicati, 22 fuori tema, 0 errori**, in 9 secondi.
+Prima di queste fonti la stessa raccolta ne trovava 99.
 
 **Aggiungere una fonte**: aggiungi una voce in `SOURCES` (basta `id`, `name`,
 `kind`, `url`, `category`, `tags`, `cadenceMin`), poi `npm run db:seed` e
@@ -462,11 +524,12 @@ per leggere il numero della piattaforma serve `npx wrangler tail` su un deploy.
 curl "https://<worker>/health?secret=WEBHOOK_SECRET"   # esecuzioni e stato fonti
 npm run dry-run                                        # cosa verrebbe inviato, senza inviare
 npm run ingest                                         # raccolta vera, come su Actions
-npm test                                               # 172 test
+npm test                                               # 215 test
 npm run typecheck
 ```
 
-In chat: `/health` per le ultime esecuzioni, `/fonti` per lo stato delle fonti.
+In chat: 📡 **Fonti** per lo stato di ogni fonte e delle ultime raccolte, ⚙️
+**Impostazioni** per soglia, silenzio e digest.
 La tabella `runs` in D1 conserva la nota di ogni esecuzione: quelle con
 `trigger = actions` sono la raccolta su GitHub, le altre i tick del Worker.
 
@@ -504,6 +567,11 @@ La tabella `runs` in D1 conserva la nota di ogni esecuzione: quelle con
 - **Tutto ciò che è esportato da `src/index.ts` diventa un entry point** del
   Worker: costanti e helper di schedulazione vivono in
   [src/schedule.ts](src/schedule.ts), altrimenti workerd non avvia.
+- **La schermata in chat è un solo messaggio per chat**, e il suo id sta nella
+  tabella `ui` di D1. Conseguenze pratiche: dopo l'aggiornamento serve `npm run
+  db:init` (crea la tabella, è idempotente); se cancelli a mano quel messaggio il
+  bot ne manda uno nuovo al tocco successivo; aprendo il bot da due dispositivi
+  con lo stesso account la schermata è la stessa, perché è la stessa chat.
 
 ## 12. Mappa del progetto
 
@@ -515,6 +583,7 @@ wrangler.toml              Worker, binding D1, Workers AI, tre cron
 src/
   index.ts                 entry point: webhook, /setup, /health, /bench, scheduled()
   schedule.ts              cron → digest oppure avvisi e pulizia, finestra digest
+  telegram/screens.ts      intenti e schermate del bot (funzioni pure)
   pipeline.ts              scelta delle fonti, deduplica, arricchimento, punteggio
   dedupe.ts                preparazione item e decisione di duplicato
   types.ts                 tipi condivisi
@@ -526,14 +595,14 @@ src/
   ingest/                  rss.ts, sitemap.ts, httplist.ts, index.ts
   enrich/                  rules.ts, score.ts, ai.ts
   db/                      schema.sql, store.ts, d1.ts, d1-http.ts, memory.ts
-  telegram/                api.ts, format.ts, keyboard.ts, bot.ts, digest.ts
+  telegram/                api.ts, format.ts, keyboard.ts, screens.ts, bot.ts, digest.ts
   debug/bench.ts           misura della CPU per invocazione (Node e workerd)
 scripts/
   ingest.ts                la raccolta: stessa pipeline, store su API HTTP di D1
   dry-run.ts               prova generale senza inviare nulla
   bench-cpu.ts             stessa misura su Node, con le fonti vere
   seed-sources.ts          genera l'SQL di sincronizzazione delle fonti
-test/                      11 file, 172 test (vitest, nessuna rete)
+test/                      12 file, 215 test (vitest, nessuna rete)
 ```
 
 Il tratto che tiene insieme tutto: **una sola copia dell'SQL**. `src/db/d1.ts`
