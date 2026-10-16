@@ -193,6 +193,12 @@ export interface ItemQuery {
   withoutDeadline?: boolean;
   /** Esclude gli item i cui id compaiono qui. */
   excludeIds?: number[];
+  /** Tiene fuori gli item che vengono da queste fonti (filtri della chat). */
+  excludeSources?: string[];
+  /** Tiene fuori gli item che hanno uno di questi tag (filtri della chat). */
+  excludeTags?: string[];
+  /** Solo item senza obbligo di acquisto (filtro "solo gratis" della chat). */
+  withoutPurchase?: boolean;
   limit?: number;
   /**
    * Salta le prime N righe. È quello che rende VERE le pagine della chat: senza,
@@ -213,6 +219,29 @@ export interface Prefs {
   /** "23-7" = silenzio dalle 23 alle 7 (ora locale Europe/Rome). */
   quietHours: string;
   digestHours: number[];
+  /**
+   * Cosa vuole vedere QUESTA chat. Sta in `prefs` perché è una preferenza come
+   * le altre: due persone sullo stesso bot hanno due feed diversi, e nessun
+   * filtro è globale (vedi src/filters.ts).
+   */
+  filters: ChatFilters;
+}
+
+/**
+ * Filtri personali di una chat: cosa mostrare e cosa no.
+ * Sono tutti elenchi di ESCLUSIONI, non di inclusioni: una fonte nuova (o un
+ * tag nuovo) è visibile a tutti finché qualcuno non lo spegne. Con l'elenco
+ * inverso, una fonte aggiunta oggi resterebbe invisibile a chi non la conosce.
+ */
+export interface ChatFilters {
+  /** Id delle fonti che questa chat non vuole vedere. */
+  mutedSources: string[];
+  /** Categorie di fonte spente (le categorie stanno in src/config/sources.ts). */
+  mutedCategories: Category[];
+  /** Tipi di concorso spenti: sono i tag degli item ("raccolta_punti", "viaggio"…). */
+  mutedTags: string[];
+  /** true = solo concorsi senza obbligo di acquisto. */
+  freeOnly: boolean;
 }
 
 /** Stato dell'interfaccia in chat: il bot tiene UN messaggio e lo modifica. */

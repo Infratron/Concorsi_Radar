@@ -3,6 +3,7 @@ import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import { beforeEach, describe, expect, it } from "vitest";
 import { createD1Store, type D1Like, type D1LikeStatement } from "../src/db/d1.ts";
 import { DUP_CANDIDATE_MAX_HAMMING, hammingHex, simhash } from "../src/lib/text.ts";
+import { defaultFilters, filtersFor } from "../src/filters.ts";
 import type { NewItem } from "../src/types.ts";
 
 /**
@@ -223,9 +224,11 @@ describe("store D1 · SQL vero su SQLite", () => {
   it("gestisce preferenze, pesi con tetto e chat attive", async () => {
     await store.upsertPrefs({
       chatId: 111, active: true, weights: { giftcard: 1 }, minScoreInstant: 70, quietHours: "23-7", digestHours: [8, 19],
+      filters: defaultFilters(),
     });
     await store.upsertPrefs({
       chatId: 222, active: false, weights: {}, minScoreInstant: 80, quietHours: "0-0", digestHours: [9],
+      filters: { ...defaultFilters(), mutedTags: ["raccolta_punti"], freeOnly: true },
     });
 
     expect((await store.getPrefs(111))?.weights).toEqual({ giftcard: 1 });
@@ -301,5 +304,52 @@ describe("store D1 · SQL vero su SQLite", () => {
     expect(row.etag).toBe("etag-1");
     expect(row.failStreak).toBe(1);
     expect(row.lastRunAt).toBe("2026-10-16T08:15:00.000Z");
+  });
+
+  it("conserva i filtri della chat senza toccare le altre preferenze", async () => {
+    await store.upsertPrefs({
+      chatId: 111, active: true, weights: {}, minScoreInstant: 80, quietHours: "23-7", digestHours: [8, 19],
+      filters: { ...defaultFilters(), mutedTags: ["food"], mutedCategories: ["scontrino"], freeOnly: true },
+    });
+    const prefs = await store.getPrefs(111);
+    expect(prefs?.filters.mutedTags).toEqual(["food"]);
+    expect(prefs?.filters.mutedCategories).toEqual(["scontrino"]);
+    expect(prefs?.filters.freeOnly).toBe(true);
+
+    // Il percorso dei pesi riscrive la riga: i filtri devono restare.
+    await store.bumpWeights(111, { giftcard: 1 });
+    expect((await store.getPrefs(111))?.filters).toEqual(prefs?.filters);
+    expect((await store.getPrefs(111))?.quietHours).toBe("23-7");
+  });
+
+  it("i filtri escludono davvero: fonte, tag e obbligo di acquisto, in SQL", async () => {
+    await store.insertItem(item({ urlKey: "key-1", url: "https://a.example/1", sourceId: "vincimi", tags: ["giftcard"], requiresPurchase: false }));
+    await store.insertItem(
+      item({ urlKey: "key-2", url: "https://b.example/2", title: "Raccolta bollini Bennet", sourceId: "sitemap-conad", tags: ["raccolta_punti", "brand"], requiresPurchase: true }),
+    );
+    await store.insertItem(
+      item({ urlKey: "key-3", url: "https://c.example/3", title: "Concorso con moda", sourceId: "premieconcorsi", tags: ["moda"], requiresPurchase: false }),
+    );
+
+    expect(await store.countItems({})).toBe(3);
+    expect(await store.countItems({ excludeSources: ["vincimi"] })).toBe(2);
+    expect(await store.countItems({ excludeTags: ["raccolta_punti"] })).toBe(2);
+    expect(await store.countItems({ withoutPurchase: true })).toBe(2);
+    expect((await store.queryItems({ excludeTags: ["raccolta_punti"], limit: 10 })).map((row) => row.sourceId)).toEqual([
+      "premieconcorsi",
+      "vincimi",
+    ]);
+
+    // "moda" non deve escludere un eventuale "moda_bambini": è un confronto fra
+    // elementi dell'array JSON, non una ricerca per somiglianza.
+    await store.insertItem(
+      item({ urlKey: "key-4", url: "https://d.example/4", title: "Concorso bambini moda", sourceId: "vincimi", tags: ["moda_bambini"], requiresPurchase: false }),
+    );
+    expect(await store.countItems({ excludeTags: ["moda"] })).toBe(3);
+
+    // Le tre esclusioni insieme, come le manda una chat con i filtri accesi:
+    // restano il giftcard gratuito di Vincimi e il concorso "moda_bambini".
+    const filtri = { ...defaultFilters(), mutedSources: ["sitemap-conad"], mutedTags: ["moda"], freeOnly: true };
+    expect(await store.countItems(filtersFor(filtri, {}))).toBe(2);
   });
 });

@@ -4,6 +4,7 @@ import type { TelegramClient } from "./api.ts";
 import { daysLeft, formatDigest, formatItemCard, localDateString, localHour, type DigestSection } from "./format.ts";
 import { digestKeyboard, instantKeyboard } from "./keyboard.ts";
 import { staleItemReason } from "../enrich/freshness.ts";
+import { filtersFor } from "../filters.ts";
 
 /**
  * Digest programmati e avvisi istantanei.
@@ -129,12 +130,11 @@ export async function sendDigests(deps: NotifyDeps): Promise<{ chats: number; me
 
     // Nessun filtro sullo stato: lo stato è di sistema (new/sent/expired),
     // mentre "cosa ho già ricevuto" e "cosa ho scartato" sono per chat.
-    const candidates = await store.queryItems({
-      since,
-      kinds: SOLO_CONCORSI,
-      limit: 60,
-      orderBy: "score",
-    });
+    // I filtri personali invece valgono eccome: un concorso di una fonte che
+    // questa chat ha spento non merita una notifica.
+    const candidates = await store.queryItems(
+      filtersFor(prefs.filters, { since, kinds: SOLO_CONCORSI, limit: 60, orderBy: "score" }),
+    );
     const fresh = await undelivered(store, chatId, candidates, now);
     if (fresh.length === 0) continue;
 
@@ -229,12 +229,14 @@ export async function sendInstantAlerts(deps: NotifyDeps): Promise<{ sent: numbe
     const last = await store.lastDeliveryAt(chatId, "instant");
     if (last && now.getTime() - Date.parse(last) < INSTANT_MIN_GAP_MS) continue;
 
-    const candidates = await store.queryItems({
-      minScore: prefs.minScoreInstant,
-      kinds: SOLO_CONCORSI,
-      orderBy: "score",
-      limit: 5,
-    });
+    const candidates = await store.queryItems(
+      filtersFor(prefs.filters, {
+        minScore: prefs.minScoreInstant,
+        kinds: SOLO_CONCORSI,
+        orderBy: "score",
+        limit: 5,
+      }),
+    );
 
     for (const item of candidates) {
       if (sent >= INSTANT_MAX_PER_RUN) break;

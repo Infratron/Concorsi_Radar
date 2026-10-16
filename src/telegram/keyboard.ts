@@ -1,5 +1,6 @@
 import type { ItemRow, Prefs } from "../types.ts";
 import { truncate } from "../lib/text.ts";
+import { CATEGORY_LABELS, TAG_FILTERS, categoriesToOffer, type FilterSource } from "../filters.ts";
 import type { InlineKeyboardButton, InlineKeyboardMarkup } from "./api.ts";
 import { daysLeft } from "./format.ts";
 
@@ -48,6 +49,8 @@ export function menuKeyboard(counts: {
   scadenze: number;
   salvati: number;
   news: number;
+  /** Quanti filtri sono attivi: 0 = si vede tutto. */
+  filtri: number;
 }): InlineKeyboardMarkup {
   return {
     inline_keyboard: [
@@ -55,10 +58,88 @@ export function menuKeyboard(counts: {
       [button(`📅 7 giorni (${counts.settimana})`, "s:settimana"), button(`⏳ Scadenze (${counts.scadenze})`, "s:scadenze")],
       [button(`⭐ Watchlist (${counts.salvati})`, "s:salvati"), button(`📰 News (${counts.news})`, "s:news")],
       [button("🔍 Cerca", "s:cerca"), button("🗂 Storico", "s:storico")],
-      [button("📡 Fonti", "s:fonti"), button("⚙️ Impostazioni", "s:impostazioni")],
+      [button(filtriButtonLabel(counts.filtri), "s:filtri"), button("📡 Fonti", "s:fonti")],
+      [button("⚙️ Impostazioni", "s:impostazioni")],
       [button("🔄 Aggiorna", "refresh")],
     ],
   };
+}
+
+/**
+ * Etichetta del bottone dei filtri: il numero dice a colpo d'occhio che l'elenco
+ * che stai guardando NON è tutto l'archivio.
+ */
+export function filtriButtonLabel(quanti: number): string {
+  return quanti === 0 ? "🎛 Cosa vedi" : `🎛 Cosa vedi (${quanti})`;
+}
+
+/** Nome leggibile e corto di una fonte: in un bottone ci sta una riga sola. */
+export function sourceToggleLabel(source: FilterSource, muted: boolean): string {
+  const [testa, coda] = source.name.split("·").map((part) => part.trim());
+  const nome = coda && coda.length > 0 ? `${testa ?? ""} · ${coda}` : (testa ?? source.name);
+  return `${muted ? "🚫" : "✅"} ${truncate(nome, 40)}`;
+}
+
+/**
+ * 🎛 Cosa vedi: filtri personali della chat. Ogni riga è un interruttore — ✅
+ * mostra, 🚫 nasconde — e non c'è nessuna voce "altro": quello che non è
+ * spento si vede, comprese le fonti che arriveranno domani.
+ */
+export function filtriKeyboard(prefs: Prefs, info: { sources: number; spenti: number }): InlineKeyboardMarkup {
+  const filtro = prefs.filters;
+  const righe: InlineKeyboardButton[][] = [];
+
+  // Tipi di concorso: due per riga, sono etichette corte.
+  const tipi = TAG_FILTERS.map((entry) =>
+    button(`${filtro.mutedTags.includes(entry.tag) ? "🚫" : "✅"} ${entry.label}`, `cfg:tag:${entry.tag}`),
+  );
+  for (let index = 0; index < tipi.length; index += 2) righe.push(tipi.slice(index, index + 2));
+
+  // Categorie delle fonti: dove si partecipa (online, punto vendita, scontrino…).
+  const categorie = categoriesToOffer().map((categoria) =>
+    button(
+      `${filtro.mutedCategories.includes(categoria) ? "🚫" : "✅"} ${CATEGORY_LABELS[categoria]}`,
+      `cfg:cat:${categoria}`,
+    ),
+  );
+  for (let index = 0; index < categorie.length; index += 2) righe.push(categorie.slice(index, index + 2));
+
+  righe.push([
+    filtro.freeOnly
+      ? button("🎁 Solo senza acquisto: sì", "cfg:free:off")
+      : button("🎁 Solo senza acquisto: no", "cfg:free:on"),
+  ]);
+  righe.push([button(`📡 Scegli le fonti (${info.sources - info.spenti}/${info.sources})`, "s:filtri-fonti")]);
+  return { inline_keyboard: [...righe, ...navRows()] };
+}
+
+/**
+ * 📡 Scegli le fonti: un interruttore per fonte, a pagine (sono più di venti).
+ * La pagina vive nello stato della chat, quindi si sfoglia come gli elenchi.
+ */
+export function filtriFontiKeyboard(
+  sources: FilterSource[],
+  muted: string[],
+  pagina: { index: number; total: number },
+): InlineKeyboardMarkup {
+  const rows: InlineKeyboardButton[][] = sources.map((source) => [
+    button(sourceToggleLabel(source, muted.includes(source.id)), `cfg:src:${source.id}`),
+  ]);
+  if (pagina.total > 1) {
+    rows.push([
+      pagina.index > 0 ? button("⬅️ Prec", `page:${pagina.index - 1}`) : done("⬅️"),
+      done(`${pagina.index + 1}/${pagina.total}`),
+      pagina.index < pagina.total - 1 ? button("Succ ➡️", `page:${pagina.index + 1}`) : done("➡️"),
+    ]);
+  }
+  rows.push([button("♻️ Vedi di nuovo tutto", "cfg:reset:all")]);
+  rows.push([button("⬅️ Cosa vedi", "s:filtri"), button("🏠 Menù", "home")]);
+  return { inline_keyboard: rows };
+}
+
+/** Aggiorna + menù: la coda standard di ogni schermata. */
+function navRows(): InlineKeyboardButton[][] {
+  return [[button("🔄 Aggiorna", "refresh"), button("🏠 Menù", "home")]];
 }
 
 /**
@@ -190,6 +271,7 @@ export function settingsKeyboard(prefs: Prefs): InlineKeyboardMarkup {
       quiet,
       digest,
       [prefs.active ? button("⏸ Sospendi notifiche", "cfg:notify:off") : button("▶️ Riattiva notifiche", "cfg:notify:on")],
+      [button("🎛 Cosa vedi", "s:filtri")],
       [button("🔄 Aggiorna", "refresh"), button("🏠 Menù", "home")],
     ],
   };
@@ -228,6 +310,10 @@ export function sectionTitle(section: string): string {
       return "Fonti e raccolte";
     case "impostazioni":
       return "Impostazioni";
+    case "filtri":
+      return "Cosa vedi";
+    case "filtri-fonti":
+      return "Scegli le fonti";
     case "cerca":
       return "Cerca";
     default:

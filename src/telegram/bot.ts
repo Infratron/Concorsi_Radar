@@ -1,14 +1,26 @@
-import type { ItemKind, ItemQuery, ItemRow, Prefs, SourceRow, UiState } from "../types.ts";
+import type { ChatFilters, ItemKind, ItemQuery, ItemRow, Prefs, SourceRow, UiState } from "../types.ts";
 import { truncate } from "../lib/text.ts";
+import {
+  CATEGORY_ORDER,
+  TAG_FILTERS,
+  activeFilterCount,
+  defaultFilters,
+  filterChangeLabel,
+  filterableSources,
+  filtersFor,
+  withFilterChange,
+  type FilterChange,
+} from "../filters.ts";
 import type { TelegramUpdate } from "./api.ts";
 import type { NotifyDeps } from "./digest.ts";
 import { regolamentoUrl } from "./digest.ts";
-import { localDateString } from "./format.ts";
+import { localDateString, sourceLabel } from "./format.ts";
 import { PAGE_SIZE } from "./keyboard.ts";
 import {
   applyIntent,
   parseCallback,
   renderScreen,
+  type ConfigKey,
   type Intent,
   type Screen,
   type ScreenCounts,
@@ -48,6 +60,7 @@ export function defaultPrefs(chatId: number): Prefs {
     minScoreInstant: 80,
     quietHours: "23-7",
     digestHours: [8, 19],
+    filters: defaultFilters(),
   };
 }
 
@@ -122,8 +135,34 @@ function intentForCommand(command: string, args: string): Intent | null {
   }
 }
 
+/**
+ * Traduce un tocco sui filtri in un cambiamento, controllando che il valore
+ * esista davvero: il `callback_data` arriva dal client, quindi un id inventato
+ * non deve poter entrare in una preferenza.
+ */
+function filterChangeFor(key: ConfigKey, value: string): FilterChange | null {
+  if (key === "cat") {
+    return CATEGORY_ORDER.includes(value as (typeof CATEGORY_ORDER)[number])
+      ? { kind: "category", value: value as (typeof CATEGORY_ORDER)[number] }
+      : null;
+  }
+  if (key === "tag") {
+    return TAG_FILTERS.some((entry) => entry.tag === value) ? { kind: "tag", value } : null;
+  }
+  if (key === "src") {
+    return filterableSources().some((source) => source.id === value) ? { kind: "source", value } : null;
+  }
+  if (key === "free") return { kind: "free", value: value === "on" };
+  if (key === "reset") return { kind: "reset" };
+  return null;
+}
+
 /** Applica una preferenza scelta dalle impostazioni. Valori fuori elenco: ignorati. */
-function withConfig(prefs: Prefs, key: "score" | "quiet" | "digest" | "notify", value: string): Prefs {
+function withConfig(prefs: Prefs, key: ConfigKey, value: string): Prefs {
+  if (key === "cat" || key === "tag" || key === "src" || key === "free" || key === "reset") {
+    const change = filterChangeFor(key, value);
+    return change === null ? prefs : { ...prefs, filters: withFilterChange(prefs.filters, change) };
+  }
   switch (key) {
     case "score": {
       const score = Number.parseInt(value, 10);
@@ -149,11 +188,17 @@ function withConfig(prefs: Prefs, key: "score" | "quiet" | "digest" | "notify", 
     }
     case "notify":
       return { ...prefs, active: value === "on" };
+    default:
+      return prefs;
   }
 }
 
 /** Il messaggio in sovraimpressione: conferma l'effetto di ciò che hai toccato. */
 function toastFor(intent: Intent, prefs: Prefs): string | null {
+  if (intent.kind === "config") {
+    const change = filterChangeFor(intent.key, intent.value);
+    if (change !== null) return filterChangeLabel(prefs.filters, change, sourceLabel);
+  }
   switch (intent.kind) {
     case "decision":
       return intent.action === "save"
@@ -193,7 +238,7 @@ const ATTIVI: ItemQuery["statuses"] = ["new", "sent"];
 const CONCORSI: ItemKind[] = ["contest"];
 const ARTICOLI: ItemKind[] = ["news"];
 
-function sectionQuery(section: string, now: Date, lastCheckAt: string | null): ItemQuery {
+function baseSectionQuery(section: string, now: Date, lastCheckAt: string | null): ItemQuery {
   if (section === "news") return { kinds: ARTICOLI, statuses: ATTIVI };
   if (section === "nuovi") {
     return {
@@ -228,6 +273,20 @@ function sectionQuery(section: string, now: Date, lastCheckAt: string | null): I
   // La ricerca guarda tutto — anche gli articoli, marcati 📰 nell'elenco:
   // "cerca nutella" deve trovare sia il concorso sia il pezzo che ne parla.
   return { keyword: section.slice("cerca:".length), orderBy: "score", statuses: ATTIVI };
+}
+
+/**
+ * Le sezioni che rispettano i filtri della chat. Sono quelle che *suggeriscono*
+ * cosa guardare: è lì che un filtro serve, ed è lì che l'utente si aspetta che
+ * valga. Restano fuori ⭐ Watchlist, 🗂 Storico e 🔍 Cerca, che sono scelte
+ * esplicite: un concorso salvato non deve sparire perché hai spento la sua
+ * fonte, e una ricerca è già una domanda precisa.
+ */
+const SEZIONI_FILTRATE = new Set(["nuovi", "oggi", "settimana", "scadenze", "news", "scaduti"]);
+
+function sectionQuery(section: string, now: Date, lastCheckAt: string | null, filters: ChatFilters): ItemQuery {
+  const base = baseSectionQuery(section, now, lastCheckAt);
+  return SEZIONI_FILTRATE.has(section) ? filtersFor(filters, base) : base;
 }
 
 /** Sezioni il cui contenuto viene dalle decisioni di QUESTA chat, non da una query. */
@@ -282,8 +341,9 @@ async function loadScreenData(
   const { store } = deps;
   const settimanaFa = new Date(now.getTime() - WEEK_MS).toISOString();
   const sinceNuovi = state.lastCheckAt ?? settimanaFa;
-  const scadenza = sectionQuery("scadenze", now, null);
-  const scaduti = sectionQuery("scaduti", now, null);
+  const { filters } = prefs;
+  const scadenza = sectionQuery("scadenze", now, null, filters);
+  const scaduti = sectionQuery("scaduti", now, null, filters);
   // La watchlist è ordinata per scadenza: è la sua ragione d'essere.
   const salvati = sortByDeadline(await store.listDeliveredItems(chatId, "saved", 200));
   // Gli elenchi dello storico si leggono solo quando servono: nel menù di tutti i
@@ -294,19 +354,26 @@ async function loadScreenData(
 
   // I conteggi sono query SQL di conteggio: non caricano righe, quindi il menù
   // resta leggero anche con un archivio grande.
-  const [archiveTotal, contest, news, nuovi, oggi, settimana, scadenze, quantiScaduti] = await Promise.all([
-    store.countItems({}),
-    store.countItems({ kinds: CONCORSI }),
-    store.countItems({ kinds: ARTICOLI }),
-    store.countItems(sectionQuery("nuovi", now, sinceNuovi)),
-    store.countItems(sectionQuery("oggi", now, null)),
-    store.countItems(sectionQuery("settimana", now, null)),
-    store.countItems(scadenza),
-    // Il conteggio dei chiusi serve solo allo storico: fuori da lì resta a zero.
-    state.section === "storico" ? store.countItems(scaduti) : Promise.resolve(0),
-  ]);
+  // I conteggi sono quelli che la chat VEDE (filtri compresi): un numero nel
+  // menù che non corrisponde all'elenco è peggio di nessun numero. I totali
+  // senza filtri si contano solo per poter dire "vedi 12 di 40".
+  const [archiveTotal, contest, news, contestTotal, newsTotal, nuovi, oggi, settimana, scadenze, quantiScaduti] =
+    await Promise.all([
+      store.countItems({}),
+      store.countItems(filtersFor(filters, { kinds: CONCORSI })),
+      store.countItems(filtersFor(filters, { kinds: ARTICOLI })),
+      store.countItems({ kinds: CONCORSI }),
+      store.countItems({ kinds: ARTICOLI }),
+      store.countItems(sectionQuery("nuovi", now, sinceNuovi, filters)),
+      store.countItems(sectionQuery("oggi", now, null, filters)),
+      store.countItems(sectionQuery("settimana", now, null, filters)),
+      store.countItems(scadenza),
+      // Il conteggio dei chiusi serve solo allo storico: fuori da lì resta a zero.
+      state.section === "storico" ? store.countItems(scaduti) : Promise.resolve(0),
+    ]);
   const counts: ScreenCounts = {
-    nuovi, oggi, settimana, scadenze, news, contest,
+    nuovi, oggi, settimana, scadenze, news, contest, contestTotal, newsTotal,
+    filtri: activeFilterCount(filters),
     salvati: salvati.length, vinti: vinti.length, ignorati: ignorati.length, scaduti: quantiScaduti,
   };
 
@@ -324,7 +391,7 @@ async function loadScreenData(
           ? vinti
           : ignorati
       : null;
-    const query = sectionQuery(state.section, now, state.lastCheckAt);
+    const query = sectionQuery(state.section, now, state.lastCheckAt, filters);
     total = daConsegne ? daConsegne.length : await store.countItems(query);
     const pagine = Math.max(1, Math.ceil(total / PAGE_SIZE));
     const pagina = Math.min(Math.max(state.page, 0), pagine - 1);
@@ -335,7 +402,17 @@ async function loadScreenData(
 
   const openItem = state.openItemId !== null ? await store.getItem(state.openItemId) : null;
   const decision = state.openItemId !== null ? await decisionFor(deps, chatId, state.openItemId) : null;
-  const pagine = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  // 📡 Scegli le fonti: la lista delle fonti spegnibili (dalla configurazione,
+  // che è dove vivono le categorie) si pagina come gli elenchi.
+  const tutteLeFonti = state.section === "filtri-fonti" ? filterableSources() : [];
+  const pagineFonti = Math.max(1, Math.ceil(tutteLeFonti.length / PAGE_SIZE));
+  const paginaFonti = Math.min(Math.max(state.page, 0), pagineFonti - 1);
+
+  // La paginazione vale anche per le sezioni che non sono elenchi di item: il
+  // totale su cui si contano le pagine è il loro, altrimenti lo stato della
+  // pagina verrebbe riportato a 0 a ogni tocco.
+  const totalePagine = state.section === "filtri-fonti" ? tutteLeFonti.length : total;
+  const pagine = Math.max(1, Math.ceil(totalePagine / PAGE_SIZE));
   const page = Math.min(Math.max(state.page, 0), pagine - 1);
 
   return {
@@ -350,6 +427,8 @@ async function loadScreenData(
     runs: state.section === "fonti" ? await store.recentRuns(4) : [],
     prefs,
     archiveTotal,
+    filterSources: tutteLeFonti.slice(paginaFonti * PAGE_SIZE, paginaFonti * PAGE_SIZE + PAGE_SIZE),
+    filterSourcesTotal: tutteLeFonti.length,
   };
 }
 

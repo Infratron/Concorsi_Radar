@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { createMemoryStore, type MemoryStore } from "../src/db/memory.ts";
 import { dueSources, runIngest, type IngestSummary } from "../src/pipeline.ts";
 import { DIGEST_MAX_ITEMS, sendDigests, sendInstantAlerts } from "../src/telegram/digest.ts";
+import { defaultFilters } from "../src/filters.ts";
 import { MAX_MESSAGE_CHARS } from "../src/telegram/api.ts";
 import type { TelegramClient } from "../src/telegram/api.ts";
 import type { FetchLike, Prefs, SourceRow } from "../src/types.ts";
@@ -106,7 +107,15 @@ const SOLO_FONTI_DEL_TEST = { maxSources: 2, includeSynthesized: false, cpuBudge
 const UNA_FONTE_DEL_TEST = { maxSources: 1, includeSynthesized: false, cpuBudgetMs: 1000 } as const;
 
 function prefs(minScoreInstant: number): Prefs {
-  return { chatId: CHAT, active: true, weights: {}, minScoreInstant, quietHours: "23-7", digestHours: [8, 19] };
+  return {
+    chatId: CHAT,
+    active: true,
+    weights: {},
+    minScoreInstant,
+    quietHours: "23-7",
+    digestHours: [8, 19],
+    filters: defaultFilters(),
+  };
 }
 
 describe("pipeline · ingestione e deduplica cross-fonte", () => {
@@ -492,6 +501,47 @@ describe("pipeline · due utenti", () => {
     expect(suo).toContain("Fiat Panda"); // per lei è ancora nuovo
     expect(suo).toContain("Findus"); // la mia scelta non la penalizza
     expect(suo).toContain("gadget");
+  });
+
+  it("i filtri personali valgono anche nelle notifiche, e solo per la chat che li ha messi", async () => {
+    const store = createMemoryStore();
+    store.seedSources([
+      source("fonte-a", "Aggregatore A", "https://a.example/feed"),
+      source("fonte-b", "Aggregatore B", "https://b.example/feed"),
+    ]);
+    // Io: soglia altissima, quindi nessun avviso immediato e digest completo.
+    await store.upsertPrefs(prefs(200));
+    // Lei: niente viaggi e solo concorsi senza obbligo di acquisto.
+    await store.upsertPrefs({
+      ...prefs(80),
+      chatId: AMICA,
+      filters: { ...defaultFilters(), mutedTags: ["viaggio"], freeOnly: true },
+    });
+
+    await runIngest({ store, fetcher: fetcherFor(PAGES), ai: null }, NOW, {
+      maxSources: 2, includeSynthesized: false, cpuBudgetMs: 1000,
+    });
+
+    const { tg, byChat } = stubTelegram();
+    await sendInstantAlerts({ store, tg, now: NOW });
+    await sendDigests({ store, tg, now: new Date(NOW.getTime() + 30 * 60 * 1000) });
+
+    const mio = (byChat[CHAT] ?? []).join("\n");
+    const suo = (byChat[AMICA] ?? []).join("\n");
+
+    // Io non ho messo filtri: arrivano il viaggio in Sardegna e la spesa con scontrino.
+    expect(mio).toContain("Nutella");
+    expect(mio).toContain("Findus");
+
+    // A lei no: il viaggio è un tipo che ha spento, la spesa chiede l'acquisto.
+    expect(suo).not.toContain("Nutella");
+    expect(suo).not.toContain("Findus");
+    // Il gratuito invece le arriva: il suo filtro non è una gabbia.
+    expect(suo).toContain("Barilla");
+    // E la promo che chiede il codice sulla confezione resta fuori: "solo senza
+    // acquisto" vuol dire senza acquisto, anche quando non è scritto "acquisto".
+    expect(suo).not.toContain("gadget");
+    expect((await store.getPrefs(CHAT))?.filters).toEqual(defaultFilters());
   });
 
   it("i pesi appresi restano separati per utente", async () => {

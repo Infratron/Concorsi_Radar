@@ -12,7 +12,17 @@ import {
   localDateString,
   localHour,
 } from "../src/telegram/format.ts";
-import { cardKeyboard, itemButtonLabel, listKeyboard, menuKeyboard, settingsKeyboard } from "../src/telegram/keyboard.ts";
+import {
+  cardKeyboard,
+  filtriFontiKeyboard,
+  filtriKeyboard,
+  itemButtonLabel,
+  listKeyboard,
+  menuKeyboard,
+  settingsKeyboard,
+  sourceToggleLabel,
+} from "../src/telegram/keyboard.ts";
+import { activeFilterCount, defaultFilters, filterableSources, parseFilters, withFilterChange } from "../src/filters.ts";
 import { applyIntent, parseCallback } from "../src/telegram/screens.ts";
 import { handleUpdate } from "../src/telegram/bot.ts";
 import {
@@ -151,6 +161,7 @@ function prefs(partial: Partial<Prefs> = {}): Prefs {
     minScoreInstant: 80,
     quietHours: "23-7",
     digestHours: [8, 19],
+    filters: defaultFilters(),
     ...partial,
   };
 }
@@ -222,11 +233,11 @@ describe("format", () => {
 
 describe("bottoni · costruzione delle tastiere", () => {
   it("il menù porta a tutte le sezioni, con i conteggi", () => {
-    const keyboard = menuKeyboard({ nuovi: 3, oggi: 12, settimana: 40, scadenze: 2, salvati: 1, news: 7 });
+    const keyboard = menuKeyboard({ nuovi: 3, oggi: 12, settimana: 40, scadenze: 2, salvati: 1, news: 7, filtri: 0 });
     const bottoni = keyboard.inline_keyboard.flat();
     expect(bottoni.map((b) => b.callback_data)).toEqual([
       "s:nuovi", "s:oggi", "s:settimana", "s:scadenze", "s:salvati", "s:news", "s:cerca", "s:storico",
-      "s:fonti", "s:impostazioni", "refresh",
+      "s:filtri", "s:fonti", "s:impostazioni", "refresh",
     ]);
     expect(bottoni[0]?.text).toBe("🆕 Nuovi (3)");
     expect(bottoni[4]?.text).toBe("⭐ Watchlist (1)");
@@ -847,6 +858,206 @@ describe("interfaccia · un solo messaggio per chat", () => {
       2, 100,
     ]);
     expect(lastWith(calls, "sendMessage")?.payload.text).toContain("In scadenza");
+  });
+});
+
+describe("filtri personali · due chat, due feed", () => {
+  const AMICA = 777;
+
+  /** Comandi e tocchi per una chat qualsiasi: i filtri sono per chat. */
+  const cmd = (chatId: number, updateId: number, text: string): TelegramUpdate => ({
+    update_id: updateId,
+    message: { message_id: updateId, chat: { id: chatId }, text, from: { id: chatId } },
+  });
+  const tapIn = (chatId: number, updateId: number, data: string, messageId: number): TelegramUpdate => ({
+    update_id: updateId,
+    callback_query: { id: `cb-${updateId}`, data, message: { message_id: messageId, chat: { id: chatId } }, from: { id: chatId } },
+  });
+  const entrambe = (store: MemoryStore, tg: TelegramClient) => ({
+    store,
+    tg,
+    now: NOW,
+    adminChatId: CHAT,
+    allowedChatIds: [CHAT, AMICA],
+  });
+
+  /** Testo dell'ultimo messaggio spedito/modificato, per chat, senza i tag HTML. */
+  const schermata = (calls: Call[], chatId: number): string => {
+    const call = [...calls]
+      .reverse()
+      .find((entry) => (entry.method === "editMessageText" || entry.method === "sendMessage") && entry.payload.chat_id === chatId);
+    return String(call?.payload.text ?? "").replace(/<\/?b>/g, "");
+  };
+  const bottoni = (calls: Call[], chatId: number): { text: string; callback_data?: string }[][] => {
+    const call = [...calls]
+      .reverse()
+      .find((entry) => (entry.method === "editMessageText" || entry.method === "sendMessage") && entry.payload.chat_id === chatId);
+    const tastiera = call?.payload.reply_markup as { inline_keyboard: { text: string; callback_data?: string }[][] } | undefined;
+    return tastiera?.inline_keyboard ?? [];
+  };
+
+  async function dueChat(store: MemoryStore): Promise<void> {
+    await store.upsertPrefs(prefs());
+    await store.upsertPrefs({ ...prefs(), chatId: AMICA });
+  }
+
+  it("🎛 Cosa vedi spegne un tipo di concorso solo per chi lo tocca", async () => {
+    const store = createMemoryStore();
+    await dueChat(store);
+    await seed(store, [
+      { title: "Raccolta bollini Bennet", tags: ["raccolta_punti"] },
+      { title: "Concorso gift card", tags: ["giftcard"] },
+      { title: "Concorso viaggio a Parigi", tags: ["viaggio"] },
+    ]);
+    const { tg, calls } = makeTg();
+
+    await handleUpdate(cmd(CHAT, 1, "/start"), entrambe(store, tg));
+    await handleUpdate(tapIn(CHAT, 2, "s:filtri", 100), entrambe(store, tg));
+    expect(schermata(calls, CHAT)).toContain("Cosa vedi");
+    expect(schermata(calls, CHAT)).toContain("solo per te");
+
+    await handleUpdate(tapIn(CHAT, 3, "cfg:tag:raccolta_punti", 100), entrambe(store, tg));
+    expect((await store.getPrefs(CHAT))?.filters.mutedTags).toEqual(["raccolta_punti"]);
+    // Il messaggio in sovraimpressione dice cosa è successo, e la schermata resta
+    // quella dei filtri (non si torna al menù a ogni tocco).
+    const conferma = calls.filter((call) => call.method === "answerCallbackQuery").pop();
+    expect(String(conferma?.payload.text)).toContain("Raccolte punti");
+    expect(schermata(calls, CHAT)).toContain("Cosa vedi");
+
+    // L'elenco si accorcia e il numero in testa dice che è per via dei filtri.
+    await handleUpdate(tapIn(CHAT, 4, "s:oggi", 100), entrambe(store, tg));
+    expect(schermata(calls, CHAT)).toContain("2 concorsi");
+    const titoli = bottoni(calls, CHAT).flat().filter((b) => b.callback_data?.startsWith("open:")).map((b) => b.text);
+    expect(titoli.join("\n")).not.toContain("Raccolta bollini");
+    expect(titoli.join("\n")).toContain("gift card");
+
+    await handleUpdate(tapIn(CHAT, 5, "home", 100), entrambe(store, tg));
+    expect(schermata(calls, CHAT)).toContain("🎛 Filtri tuoi");
+    expect(schermata(calls, CHAT)).toContain("2 di 3 concorsi");
+
+    // L'altra persona non ha toccato niente: per lei l'archivio è quello intero.
+    expect((await store.getPrefs(AMICA))?.filters).toEqual(defaultFilters());
+    await handleUpdate(cmd(AMICA, 6, "/start"), entrambe(store, tg));
+    const suo = schermata(calls, AMICA);
+    expect(suo).toContain("3 concorsi");
+    expect(suo).not.toContain("Filtri tuoi");
+    await handleUpdate(tapIn(AMICA, 7, "s:oggi", 200), entrambe(store, tg));
+    const suoi = bottoni(calls, AMICA).flat().filter((b) => b.callback_data?.startsWith("open:")).map((b) => b.text);
+    expect(suoi.join("\n")).toContain("Raccolta bollini");
+  });
+
+  it("spegne una fonte e una categoria, e i loro concorsi escono dall'elenco", async () => {
+    const store = createMemoryStore();
+    await dueChat(store);
+    await seed(store, [
+      { title: "Concorso Vincimi", sourceId: "vincimi", tags: ["giftcard"] },
+      { title: "Concorso con scontrino", sourceId: "scontrinofelice-acquisto", tags: ["acquisto"] },
+      { title: "Concorso Ferrero", sourceId: "sitemap-ferrero", tags: ["brand"] },
+    ]);
+    const { tg, calls } = makeTg();
+    await handleUpdate(cmd(CHAT, 1, "/start"), entrambe(store, tg));
+
+    await handleUpdate(tapIn(CHAT, 2, "cfg:src:vincimi", 100), entrambe(store, tg));
+    expect((await store.getPrefs(CHAT))?.filters.mutedSources).toEqual(["vincimi"]);
+
+    await handleUpdate(tapIn(CHAT, 3, "cfg:cat:scontrino", 100), entrambe(store, tg));
+    expect((await store.getPrefs(CHAT))?.filters.mutedCategories).toEqual(["scontrino"]);
+
+    await handleUpdate(tapIn(CHAT, 4, "home", 100), entrambe(store, tg));
+    const menu = schermata(calls, CHAT);
+    expect(menu).toContain("1 di 3 concorsi");
+    await handleUpdate(tapIn(CHAT, 5, "s:oggi", 100), entrambe(store, tg));
+    const rimasti = bottoni(calls, CHAT).flat().filter((b) => b.callback_data?.startsWith("open:")).map((b) => b.text);
+    expect(rimasti.join("\n")).toContain("Ferrero");
+    expect(rimasti.join("\n")).not.toContain("Vincimi");
+    expect(rimasti.join("\n")).not.toContain("scontrino");
+  });
+
+  it("🎁 solo senza acquisto lascia fuori chi chiede la spesa", async () => {
+    const store = createMemoryStore();
+    await dueChat(store);
+    await seed(store, [
+      { title: "Concorso gratuito Kanzi", requiresPurchase: false },
+      { title: "Concorso con scontrino Conad", requiresPurchase: true },
+    ]);
+    const { tg, calls } = makeTg();
+    await handleUpdate(cmd(CHAT, 1, "/start"), entrambe(store, tg));
+    await handleUpdate(tapIn(CHAT, 2, "s:filtri", 100), entrambe(store, tg));
+    await handleUpdate(tapIn(CHAT, 3, "cfg:free:on", 100), entrambe(store, tg));
+    expect((await store.getPrefs(CHAT))?.filters.freeOnly).toBe(true);
+
+    await handleUpdate(tapIn(CHAT, 4, "s:oggi", 100), entrambe(store, tg));
+    expect(schermata(calls, CHAT)).toContain("1 concorso");
+    const titoli = bottoni(calls, CHAT).flat().filter((b) => b.callback_data?.startsWith("open:")).map((b) => b.text);
+    expect(titoli.join("\n")).toContain("Kanzi");
+    expect(titoli.join("\n")).not.toContain("Conad");
+  });
+
+  it("📡 Scegli le fonti si sfoglia a pagine e non torna indietro a ogni tocco", async () => {
+    const store = createMemoryStore();
+    await dueChat(store);
+    const { tg, calls } = makeTg();
+    await handleUpdate(cmd(CHAT, 1, "/start"), entrambe(store, tg));
+    await handleUpdate(tapIn(CHAT, 2, "s:filtri-fonti", 100), entrambe(store, tg));
+    expect(schermata(calls, CHAT)).toContain("pagina 1/");
+
+    const primaPagina = bottoni(calls, CHAT).flat().filter((b) => b.callback_data?.startsWith("cfg:src:"));
+    expect(primaPagina.length).toBeGreaterThan(0);
+    // Ogni bottone ha un id di fonte vero: sono quelli delle fonti accese.
+    const spegnibili = new Set(filterableSources().map((source) => `cfg:src:${source.id}`));
+    for (const bottone of primaPagina) expect(spegnibili.has(bottone.callback_data ?? "")).toBe(true);
+
+    await handleUpdate(tapIn(CHAT, 3, "page:1", 100), entrambe(store, tg));
+    expect(schermata(calls, CHAT)).toContain("pagina 2/");
+    const secondaPagina = bottoni(calls, CHAT).flat().filter((b) => b.callback_data?.startsWith("cfg:src:"));
+    expect(secondaPagina.length).toBeGreaterThan(0);
+    // Le due pagine non si sovrappongono.
+    const primi = primaPagina.map((b) => b.callback_data);
+    for (const bottone of secondaPagina) expect(primi).not.toContain(bottone.callback_data);
+
+    const scelta = secondaPagina[0];
+    await handleUpdate(tapIn(CHAT, 4, String(scelta.callback_data), 100), entrambe(store, tg));
+    expect((await store.getPrefs(CHAT))?.filters.mutedSources).toHaveLength(1);
+    // Il tocco non riporta alla prima pagina: si resta dove si era.
+    expect(schermata(calls, CHAT)).toContain("pagina 2/");
+    const cambiato = bottoni(calls, CHAT).flat().find((b) => b.callback_data === scelta.callback_data);
+    expect(cambiato?.text.startsWith("🚫")).toBe(true);
+  });
+
+  it("♻️ rimette tutto come prima", async () => {
+    const store = createMemoryStore();
+    await dueChat(store);
+    await seed(store, [
+      { title: "Raccolta bollini Bennet", tags: ["raccolta_punti"] },
+      { title: "Concorso viaggio a Parigi", tags: ["viaggio"] },
+    ]);
+    const { tg, calls } = makeTg();
+    await handleUpdate(cmd(CHAT, 1, "/start"), entrambe(store, tg));
+    await handleUpdate(tapIn(CHAT, 2, "s:filtri", 100), entrambe(store, tg));
+    await handleUpdate(tapIn(CHAT, 3, "cfg:tag:raccolta_punti", 100), entrambe(store, tg));
+    await handleUpdate(tapIn(CHAT, 4, "cfg:free:on", 100), entrambe(store, tg));
+    await handleUpdate(tapIn(CHAT, 5, "cfg:src:vincimi", 100), entrambe(store, tg));
+    expect(activeFilterCount((await store.getPrefs(CHAT))!.filters)).toBe(3);
+
+    await handleUpdate(tapIn(CHAT, 6, "cfg:reset:all", 100), entrambe(store, tg));
+    expect((await store.getPrefs(CHAT))?.filters).toEqual(defaultFilters());
+    expect(schermata(calls, CHAT)).toContain("tutto");
+
+    await handleUpdate(tapIn(CHAT, 7, "home", 100), entrambe(store, tg));
+    const menu = schermata(calls, CHAT);
+    expect(menu).toContain("2 concorsi");
+    expect(menu).not.toContain("Filtri tuoi");
+  });
+
+  it("un tocco con un valore inventato non entra nelle preferenze", async () => {
+    const store = createMemoryStore();
+    await dueChat(store);
+    const { tg } = makeTg();
+    await handleUpdate(cmd(CHAT, 1, "/start"), entrambe(store, tg));
+    await handleUpdate(tapIn(CHAT, 2, "cfg:src:fonte-che-non-esiste", 100), entrambe(store, tg));
+    await handleUpdate(tapIn(CHAT, 3, "cfg:tag:tag-inventato", 100), entrambe(store, tg));
+    await handleUpdate(tapIn(CHAT, 4, "cfg:cat:marzapane", 100), entrambe(store, tg));
+    expect((await store.getPrefs(CHAT))?.filters).toEqual(defaultFilters());
   });
 });
 

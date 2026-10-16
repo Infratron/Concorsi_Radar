@@ -342,7 +342,8 @@ casi in chat resta un messaggio solo.
 [📅 7 giorni (40)]    [⏳ Scadenze (2)]
 [⭐ Watchlist (1)]    [📰 News (7)]
 [🔍 Cerca]            [🗂 Storico]
-[📡 Fonti]            [⚙️ Impostazioni]
+[🎛 Cosa vedi]        [📡 Fonti]
+[⚙️ Impostazioni]
 [🔄 Aggiorna]
 ```
 
@@ -355,8 +356,9 @@ casi in chat resta un messaggio solo.
 | 📰 News | gli articoli e le pagine-elenco che parlano di concorsi: **non** sono concorsi, e il link porta al pezzo, non alla pagina ufficiale |
 | 🗂 Storico | cosa è successo a quello che hai visto: 🏆 vinti, ⌛ chiusi (chi ha chiuso per ultimo in cima) e 🚫 scartati, che da lì puoi riprendere |
 | 🔍 Cerca | scrivi una parola: il bot cancella il tuo messaggio e mostra i risultati (concorsi e news insieme, gli articoli marcati 📰) |
+| 🎛 Cosa vedi | i tuoi filtri: quali tipi di concorso, quali categorie di fonti e quali fonti vuoi vedere (qui sotto) |
 | 📡 Fonti | quali fonti rispondono, quando, e le ultime raccolte |
-| ⚙️ Impostazioni | soglia degli avvisi, fascia di silenzio, orari dei digest |
+| ⚙️ Impostazioni | soglia degli avvisi, fascia di silenzio, orari dei digest, e la porta ai filtri |
 | 🔄 Aggiorna | rilegge tutto e dice se è arrivato qualcosa di nuovo |
 
 Tutte le sezioni dei concorsi mostrano **solo i concorsi**: la pagina di un
@@ -375,6 +377,39 @@ l'URL è nel testo.
 Ogni elenco è **a pagine di sei**, con `⬅️ Prec` / `Succ ➡️` e il numero di
 pagina in mezzo: la pagina che vedi la legge il database con LIMIT/OFFSET, quindi
 si sfoglia tutto l'archivio, non solo le prime righe.
+
+### 🎛 Cosa vedi: i filtri sono tuoi
+
+Il bot è condiviso, il feed no: **ogni chat ha i suoi filtri**, e quello che
+spegni tu non cambia niente per l'altra persona (stessa regola delle consegne e
+dei pesi). I filtri stanno in `prefs.filters` in D1, una riga JSON per chat.
+
+Dentro 🎛 **Cosa vedi** ci sono tre gruppi di interruttori — ✅ mostra, 🚫
+nasconde:
+
+- **tipi di concorso**: raccolte punti, premio certo, gift card, viaggi,
+elettronica, casa, food, moda, bambini (sono i tag che le regole assegnano
+leggendo premio e testo);
+- **categorie di fonti**: online, punto vendita, scontrino, gift card — spegnere
+una categoria spegne tutte le fonti che la dichiarano;
+- **🎁 solo senza acquisto**, che lascia fuori chi chiede uno scontrino, un codice
+sulla confezione o un minimo di spesa;
+- **📡 Scegli le fonti**: l'elenco delle fonti accese, una per riga e a pagine,
+per spegnere quella singola che ti manda rumore.
+
+Sono **esclusioni, non inclusioni**: una fonte o un tipo nuovi si vedono finché
+non li spegni, quindi un archivio che cresce non ti resta invisibile. I filtri
+valgono nelle sezioni che *suggeriscono* cosa guardare (🆕 Nuovi, 📋 Oggi, 📅 7
+giorni, ⏳ Scadenze, 📰 News, ⌛ Scaduti), nei **numeri del menù** (che contano
+quello che vedi, con la riga `🎛 Filtri tuoi: 12 di 40 concorsi` a dire quanto
+stai lasciando fuori) e nelle **notifiche** — digest e avvisi immediati. Non
+valgono invece su ⭐ Watchlist, 🗂 Storico e 🔍 Cerca: lì hai scelto tu cosa
+guardare, e un concorso salvato non deve sparire perché hai spento la sua fonte.
+
+Misurato il 16/10/2026 con la chat vera sopra uno store D1 su SQLite: spegnendo
+le raccolte punti e la categoria scontrino, l'elenco passa da 3 a 2 concorsi, il
+digest di quella chat cambia e quello dell'altra no, e `♻️ Vedi di nuovo tutto`
+rimette l'archivio intero (31 controlli su 31).
 
 **⭐ Watchlist** è il posto dove tieni i concorsi che vuoi fare davvero. Due cose
 la rendono utile: l'ordine per scadenza (chi chiude prima è in cima) e il
@@ -624,12 +659,13 @@ npm run dry-run                                        # cosa verrebbe inviato, 
 npm run ingest                                         # raccolta vera, come su Actions
 npm run prune                                          # cosa non è più un concorso attivo (elenco)
 npm run prune -- --apply                               # e lo toglie dall'archivio
-npm test                                               # 243 test
+npm test                                               # 312 test
 npm run typecheck
 ```
 
 In chat: 📡 **Fonti** per lo stato di ogni fonte e delle ultime raccolte, ⚙️
-**Impostazioni** per soglia, silenzio e digest.
+**Impostazioni** per soglia, silenzio e digest, 🎛 **Cosa vedi** per i filtri
+personali.
 La tabella `runs` in D1 conserva la nota di ogni esecuzione: quelle con
 `trigger = actions` sono la raccolta su GitHub, le altre i tick del Worker.
 
@@ -691,6 +727,11 @@ La tabella `runs` in D1 conserva la nota di ogni esecuzione: quelle con
   `ALTER TABLE items ADD COLUMN kind TEXT NOT NULL DEFAULT 'contest';` — altrimenti
   il Worker nuovo non legge l'archivio. Le righe già dentro diventano concorsi,
   che è il valore giusto per un archivio nato prima della divisione.
+- **Stessa cosa per i filtri personali**: la colonna `filters` di `prefs` va
+  aggiunta con `ALTER TABLE prefs ADD COLUMN filters TEXT NOT NULL DEFAULT '{}';`
+  prima di pubblicare il codice che la usa (l'`ALTER` è già stato eseguito sul
+  database di produzione il 16/10/2026). Il valore `{}` significa "vedi tutto":
+  chi non ha mai aperto 🎛 Cosa vedi continua a vedere l'archivio intero.
 
 ## 12. Mappa del progetto
 
@@ -705,6 +746,7 @@ src/
   telegram/screens.ts      intenti e schermate del bot (funzioni pure)
   pipeline.ts              scelta delle fonti, deduplica, arricchimento, punteggio
   dedupe.ts                preparazione item e decisione di duplicato
+  filters.ts               i filtri di una chat: esclusioni, chiavi, etichette, query
   types.ts                 tipi condivisi
   config/sources.ts        fonti dichiarative + cap di sicurezza
   config/env.ts            allow-list chat, variabili mancanti

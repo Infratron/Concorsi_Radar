@@ -12,6 +12,7 @@ import type {
   UiState,
 } from "../types.ts";
 import { DUP_CANDIDATE_MAX_HAMMING, hammingHex } from "../lib/text.ts";
+import { defaultFilters } from "../filters.ts";
 
 /**
  * Store in-memory: stessa semantica di D1, senza database.
@@ -40,6 +41,7 @@ function defaultPrefs(chatId: number): Prefs {
     minScoreInstant: 80,
     quietHours: "23-7",
     digestHours: [...DEFAULT_DIGEST_HOURS],
+    filters: defaultFilters(),
   };
 }
 
@@ -100,6 +102,11 @@ export function createMemoryStore(): MemoryStore {
       if (row.deadline === null || row.deadline < query.deadlineAfter) return false;
     }
     if (query.excludeIds && query.excludeIds.length > 0 && query.excludeIds.includes(row.id)) return false;
+    if (query.excludeSources && query.excludeSources.includes(row.sourceId)) return false;
+    if (query.excludeTags && query.excludeTags.length > 0 && row.tags.some((tag) => query.excludeTags!.includes(tag))) {
+      return false;
+    }
+    if (query.withoutPurchase === true && row.requiresPurchase) return false;
     return true;
   };
 

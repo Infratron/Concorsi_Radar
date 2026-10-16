@@ -65,6 +65,11 @@ CREATE TABLE IF NOT EXISTS deliveries (
 
 CREATE INDEX IF NOT EXISTS idx_deliveries_sent ON deliveries (chat_id, sent_at DESC);
 
+-- `filters` sono i filtri personali della chat (fonti, categorie e tipi di
+-- concorso spenti, più "solo senza acquisto"): JSON, uno per chat, così due
+-- persone sullo stesso bot vedono due feed diversi. Su un database già creato la
+-- colonna va aggiunta a mano PRIMA di pubblicare il codice che la usa:
+--   ALTER TABLE prefs ADD COLUMN filters TEXT NOT NULL DEFAULT '{}';
 CREATE TABLE IF NOT EXISTS prefs (
   chat_id           INTEGER PRIMARY KEY,
   active            INTEGER NOT NULL DEFAULT 1,
@@ -72,6 +77,7 @@ CREATE TABLE IF NOT EXISTS prefs (
   min_score_instant INTEGER NOT NULL DEFAULT 80,
   quiet_hours       TEXT NOT NULL DEFAULT '23-7',
   digest_hours      TEXT NOT NULL DEFAULT '[8,19]',
+  filters           TEXT NOT NULL DEFAULT '{}',
   updated_at        TEXT NOT NULL
 );
 

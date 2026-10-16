@@ -1,10 +1,13 @@
 import type { ItemRow, Prefs, RunRow, SourceRow, UiState } from "../types.ts";
+import { CATEGORY_LABELS, isSeeingAll, mutedSourceIds, type FilterSource } from "../filters.ts";
 import type { InlineKeyboardMarkup } from "./api.ts";
 import { escapeHtml, formatDate, formatItemCard, sourceLabel } from "./format.ts";
 import {
   PAGE_SIZE,
   backKeyboard,
   cardKeyboard,
+  filtriKeyboard,
+  filtriFontiKeyboard,
   itemButtonLabel,
   listKeyboard,
   menuKeyboard,
@@ -29,6 +32,14 @@ export interface Screen {
   keyboard: InlineKeyboardMarkup;
 }
 
+/**
+ * Cosa cambia un tocco nelle impostazioni: le quattro preferenze di sempre più i
+ * filtri ("cosa vedi") di QUESTA chat.
+ */
+export type ConfigKey = "score" | "quiet" | "digest" | "notify" | "cat" | "tag" | "src" | "free" | "reset";
+
+const CONFIG_KEYS: readonly ConfigKey[] = ["score", "quiet", "digest", "notify", "cat", "tag", "src", "free", "reset"];
+
 /** Cosa vuole fare l'utente: i bottoni e i comandi si traducono tutti qui. */
 export type Intent =
   | { kind: "home" }
@@ -38,7 +49,7 @@ export type Intent =
   | { kind: "open"; itemId: number }
   | { kind: "back" }
   | { kind: "decision"; action: "save" | "ign" | "won"; itemId: number }
-  | { kind: "config"; key: "score" | "quiet" | "digest" | "notify"; value: string }
+  | { kind: "config"; key: ConfigKey; value: string }
   | { kind: "none" };
 
 /** Sezioni che si aprono dal menù (una pagina di elenco, non una scheda). */
@@ -57,6 +68,8 @@ export const SECTIONS = [
   "cerca",
   "fonti",
   "impostazioni",
+  "filtri",
+  "filtri-fonti",
 ] as const;
 
 export function isKnownSection(section: string): boolean {
@@ -99,12 +112,10 @@ export function parseCallback(data: string | undefined): Intent {
       return { kind: "decision", action: head === "save" ? "save" : head === "ign" ? "ign" : "won", itemId };
     }
     case "cfg": {
-      const key = first;
+      const key = first as ConfigKey;
       const value = rest.slice(1).join(":");
-      if (key === "score" || key === "quiet" || key === "digest" || key === "notify") {
-        return { kind: "config", key, value };
-      }
-      return { kind: "none" };
+      if (!CONFIG_KEYS.includes(key)) return { kind: "none" };
+      return { kind: "config", key, value };
     }
     default:
       return { kind: "none" };
@@ -152,6 +163,11 @@ export interface ScreenCounts {
   vinti: number;
   scaduti: number;
   ignorati: number;
+  /** Quanti filtri sono accesi in questa chat: 0 = vede tutto l'archivio. */
+  filtri: number;
+  /** Archivi interi, senza filtri: servono a dire "vedi X di Y". */
+  contestTotal: number;
+  newsTotal: number;
 }
 
 export interface ScreenData {
@@ -172,6 +188,10 @@ export interface ScreenData {
   runs: RunRow[];
   prefs: Prefs;
   archiveTotal: number;
+  /** Pagina di fonti da mostrare in 📡 Scegli le fonti (già ritagliata). */
+  filterSources: FilterSource[];
+  /** Quante fonti si possono spegnere in tutto (per la paginazione). */
+  filterSourcesTotal: number;
 }
 
 function oreMinuti(iso: string | null): string {
@@ -201,6 +221,13 @@ function headerLines(state: UiState, data: ScreenData, now: Date): string[] {
   righe.push(
     `🗂 <b>${data.counts.contest}</b> concorsi · <b>${data.counts.news}</b> news in archivio · controllati ${oreMinuti(state.lastCheckAt)}`,
   );
+  // Con i filtri accesi il numero di sopra è quello che VEDI, non quello che
+  // esiste: senza questa riga l'archivio sembrerebbe più piccolo di com'è.
+  if (data.counts.filtri > 0) {
+    righe.push(
+      `🎛 Filtri tuoi: <b>${data.counts.contest}</b> di <b>${data.counts.contestTotal}</b> concorsi · <b>${data.counts.news}</b> di <b>${data.counts.newsTotal}</b> news`,
+    );
+  }
   return righe;
 }
 
@@ -315,10 +342,57 @@ function settingsScreen(data: ScreenData): Screen {
     `🌙 Silenzio: <b>${silenzio}</b>`,
     `📬 Digest: <b>${digest}</b>`,
     `📣 Notifiche: <b>${prefs.active ? "attive" : "sospese"}</b>`,
+    `🎛 Cosa vedi: <b>${isSeeingAll(prefs.filters) ? "tutto" : `${data.counts.filtri} filtri attivi`}</b>`,
     "",
     "Valgono solo per te: l'altra persona ha le sue.",
   ];
   return { text: righe.join("\n"), keyboard: settingsKeyboard(prefs) };
+}
+
+function filtriScreen(data: ScreenData): Screen {
+  const { prefs } = data;
+  const filtro = prefs.filters;
+  const righe = [
+    "🎛 <b>Cosa vedi</b>",
+    "",
+    "✅ mostra · 🚫 nasconde. Vale <b>solo per te</b>: l'altra persona ha i suoi filtri, e anche gli avvisi seguono questi.",
+    "",
+  ];
+  if (isSeeingAll(filtro)) {
+    righe.push(`👁 Stai vedendo <b>tutto</b>: ${data.archiveTotal} item in archivio.`);
+  } else {
+    const pezzi: string[] = [];
+    if (filtro.mutedCategories.length > 0) {
+      pezzi.push(filtro.mutedCategories.map((categoria) => CATEGORY_LABELS[categoria]).join(", "));
+    }
+    if (filtro.mutedSources.length > 0) pezzi.push(`${filtro.mutedSources.length} fonti spente`);
+    if (filtro.mutedTags.length > 0) pezzi.push(`${filtro.mutedTags.length} tipi spenti`);
+    if (filtro.freeOnly) pezzi.push("solo senza acquisto");
+    righe.push(`👁 <b>${data.counts.contest}</b> di <b>${data.counts.contestTotal}</b> concorsi visibili.`);
+    righe.push(`🚫 Fuori: ${escapeHtml(pezzi.join(" · "))}`);
+  }
+  righe.push("", "Restano sempre complete ⭐ Watchlist, 🗂 Storico e 🔍 Cerca: lì hai scelto tu cosa guardare.");
+  return {
+    text: righe.join("\n"),
+    keyboard: filtriKeyboard(prefs, {
+      sources: data.filterSourcesTotal,
+      spenti: mutedSourceIds(filtro).length,
+    }),
+  };
+}
+
+function filtriFontiScreen(data: ScreenData): Screen {
+  const pagine = Math.max(1, Math.ceil(data.filterSourcesTotal / PAGE_SIZE));
+  const page = Math.min(Math.max(data.page, 0), pagine - 1);
+  const righe = [
+    `📡 <b>Scegli le fonti</b> · pagina ${page + 1}/${pagine}`,
+    "",
+    "Tocca una fonte per spegnerla: i suoi concorsi non arrivano più né negli elenchi né negli avvisi.",
+  ];
+  return {
+    text: righe.join("\n"),
+    keyboard: filtriFontiKeyboard(data.filterSources, mutedSourceIds(data.prefs.filters), { index: page, total: pagine }),
+  };
 }
 
 function searchPromptScreen(): Screen {
@@ -357,6 +431,10 @@ export function renderScreen(state: UiState, data: ScreenData, now: Date): Scree
       return sourcesScreen(data);
     case "impostazioni":
       return settingsScreen(data);
+    case "filtri":
+      return filtriScreen(data);
+    case "filtri-fonti":
+      return filtriFontiScreen(data);
     case "cerca":
       return searchPromptScreen();
     default:

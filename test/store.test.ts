@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { createMemoryStore, type MemoryStore } from "../src/db/memory.ts";
 import { DUP_CANDIDATE_MAX_HAMMING, hammingHex, simhash } from "../src/lib/text.ts";
+import { defaultFilters, filtersFor } from "../src/filters.ts";
 import type { NewItem, SourceRow } from "../src/types.ts";
 
 function makeSource(overrides: Partial<SourceRow> = {}): SourceRow {
@@ -296,10 +297,12 @@ describe("memory store · prefs, consegne e peso dei tag", () => {
       minScoreInstant: 75,
       quietHours: "23-7",
       digestHours: [8, 19],
+      filters: defaultFilters(),
     });
     const prefs = await store.getPrefs(999);
     expect(prefs?.minScoreInstant).toBe(75);
     expect(prefs?.weights).toEqual({ giftcard: 2 });
+    expect(prefs?.filters).toEqual(defaultFilters());
     expect(await store.listChats()).toEqual([999]);
 
     await store.upsertPrefs({ ...prefs!, active: false });
@@ -437,6 +440,39 @@ describe("memory store · fonti, run, ai e robots", () => {
     await store.addAiUsage("2026-10-16", 1, 250);
     expect(await store.aiUsage("2026-10-16")).toBe(750);
     expect(await store.aiUsage("2026-10-17")).toBe(0);
+  });
+
+  it("esclude fonte, tag e concorsi con acquisto, come fa D1 in SQL", async () => {
+    await store.insertItem(makeItem({ urlKey: "key-1", url: "https://a.example/1", sourceId: "vincimi", tags: ["giftcard"], requiresPurchase: false }));
+    await store.insertItem(
+      makeItem({ urlKey: "key-2", url: "https://b.example/2", title: "Raccolta bollini Bennet", sourceId: "sitemap-conad", tags: ["raccolta_punti", "brand"], requiresPurchase: true }),
+    );
+    await store.insertItem(
+      makeItem({ urlKey: "key-3", url: "https://c.example/3", title: "Concorso con moda", sourceId: "premieconcorsi", tags: ["moda"], requiresPurchase: false }),
+    );
+
+    expect(await store.countItems({})).toBe(3);
+    expect(await store.countItems({ excludeSources: ["vincimi"] })).toBe(2);
+    expect(await store.countItems({ excludeTags: ["raccolta_punti"] })).toBe(2);
+    expect(await store.countItems({ withoutPurchase: true })).toBe(2);
+    expect((await store.queryItems({ excludeTags: ["raccolta_punti"], limit: 10 })).map((row) => row.sourceId)).toEqual([
+      "premieconcorsi",
+      "vincimi",
+    ]);
+
+    // Un tag non è un prefisso: "moda" non esclude "moda_bambini".
+    await store.insertItem(
+      makeItem({ urlKey: "key-4", url: "https://d.example/4", title: "Concorso bambini moda", sourceId: "vincimi", tags: ["moda_bambini"], requiresPurchase: false }),
+    );
+    expect(await store.countItems({ excludeTags: ["moda"] })).toBe(3);
+
+    // I tre filtri insieme, come li manda una chat che li ha accesi.
+    const filtri = { ...defaultFilters(), mutedSources: ["sitemap-conad"], mutedTags: ["moda"], freeOnly: true };
+    expect(await store.countItems(filtersFor(filtri, {}))).toBe(2);
+    expect((await store.queryItems(filtersFor(filtri, { limit: 10 }))).map((row) => row.sourceId)).toEqual([
+      "vincimi",
+      "vincimi",
+    ]);
   });
 
   it("salva e ricarica robots.txt per origine", async () => {

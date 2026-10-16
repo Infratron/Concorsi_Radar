@@ -12,6 +12,7 @@ import type {
   UiState,
 } from "../types.ts";
 import { DUP_CANDIDATE_MAX_HAMMING, hammingHex } from "../lib/text.ts";
+import { defaultFilters, parseFilters } from "../filters.ts";
 
 /**
  * Implementazione dello Store su Cloudflare D1 (produzione).
@@ -86,6 +87,8 @@ interface PrefsDbRow {
   min_score_instant: number;
   quiet_hours: string;
   digest_hours: string;
+  /** JSON dei filtri della chat. Assente su un database antecedente alla colonna. */
+  filters?: string | null;
 }
 
 interface UiDbRow {
@@ -206,6 +209,7 @@ function rowToPrefs(row: PrefsDbRow): Prefs {
     minScoreInstant: row.min_score_instant,
     quietHours: row.quiet_hours,
     digestHours: parseNumberArray(row.digest_hours),
+    filters: parseFilters(row.filters ?? null),
   };
 }
 
@@ -302,6 +306,24 @@ function buildWhere(query: ItemQuery): { sql: string; params: unknown[] } {
   if (query.excludeIds && query.excludeIds.length > 0) {
     where.push(`id NOT IN (${query.excludeIds.map(() => "?").join(", ")})`);
     params.push(...query.excludeIds);
+  }
+  if (query.excludeSources && query.excludeSources.length > 0) {
+    where.push(`source_id NOT IN (${query.excludeSources.map(() => "?").join(", ")})`);
+    params.push(...query.excludeSources);
+  }
+  if (query.excludeTags && query.excludeTags.length > 0) {
+    // I tag sono un array JSON: si confrontano con json_each, non con LIKE.
+    // Con LIKE un tag "moda" escluderebbe anche "moda_bambini", e un carattere
+    // jolly dentro un tag cambierebbe la query invece di confrontarla.
+    where.push(
+      `NOT EXISTS (SELECT 1 FROM json_each(items.tags) AS tag WHERE tag.value IN (${query.excludeTags
+        .map(() => "?")
+        .join(", ")}))`,
+    );
+    params.push(...query.excludeTags);
+  }
+  if (query.withoutPurchase === true) {
+    where.push("requires_purchase = 0");
   }
 
   return { sql: where.length > 0 ? `WHERE ${where.join(" AND ")}` : "", params };
@@ -463,14 +485,15 @@ export function createD1Store(db: D1Like): Store {
     async upsertPrefs(prefs: Prefs): Promise<void> {
       await db
         .prepare(
-          `INSERT INTO prefs (chat_id, active, weights, min_score_instant, quiet_hours, digest_hours, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?)
+          `INSERT INTO prefs (chat_id, active, weights, min_score_instant, quiet_hours, digest_hours, filters, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(chat_id) DO UPDATE SET
              active = excluded.active,
              weights = excluded.weights,
              min_score_instant = excluded.min_score_instant,
              quiet_hours = excluded.quiet_hours,
              digest_hours = excluded.digest_hours,
+             filters = excluded.filters,
              updated_at = excluded.updated_at`,
         )
         .bind(
@@ -480,6 +503,7 @@ export function createD1Store(db: D1Like): Store {
           prefs.minScoreInstant,
           prefs.quietHours,
           JSON.stringify(prefs.digestHours),
+          JSON.stringify(prefs.filters),
           new Date().toISOString(),
         )
         .run();
@@ -520,7 +544,15 @@ export function createD1Store(db: D1Like): Store {
       const row = await db.prepare("SELECT * FROM prefs WHERE chat_id = ?").bind(chatId).first<PrefsDbRow>();
       const current = row
         ? rowToPrefs(row)
-        : { chatId, active: true, weights: {}, minScoreInstant: 80, quietHours: "23-7", digestHours: [8, 19] };
+        : {
+            chatId,
+            active: true,
+            weights: {},
+            minScoreInstant: 80,
+            quietHours: "23-7",
+            digestHours: [8, 19],
+            filters: defaultFilters(),
+          };
       const weights: Record<string, number> = { ...current.weights };
       for (const [tag, value] of Object.entries(delta)) {
         if (!Number.isFinite(value)) continue;
@@ -529,8 +561,8 @@ export function createD1Store(db: D1Like): Store {
 
       await db
         .prepare(
-          `INSERT INTO prefs (chat_id, active, weights, min_score_instant, quiet_hours, digest_hours, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?)
+          `INSERT INTO prefs (chat_id, active, weights, min_score_instant, quiet_hours, digest_hours, filters, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(chat_id) DO UPDATE SET weights = excluded.weights, updated_at = excluded.updated_at`,
         )
         .bind(
@@ -540,6 +572,7 @@ export function createD1Store(db: D1Like): Store {
           current.minScoreInstant,
           current.quietHours,
           JSON.stringify(current.digestHours),
+          JSON.stringify(current.filters),
           new Date().toISOString(),
         )
         .run();
