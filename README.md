@@ -230,8 +230,15 @@ database è raggiunto via API HTTP di D1. Servono tre *repository secret*
 | `CLOUDFLARE_API_TOKEN` | dashboard → My Profile → API Tokens → Create Token → template **D1 / Edit**, limitato al tuo account e a questo database |
 | `D1_DATABASE_ID` | lo stesso `database_id` che sta in `wrangler.toml` |
 
-Facoltativi, per l'avviso di fonte in errore su Telegram (senza, resta solo
-visibile in `/fonti`): `TELEGRAM_BOT_TOKEN` e `ADMIN_CHAT_ID`.
+Facoltativi, per gli avvisi su Telegram (senza, tutto resta visibile solo in
+`/fonti`): `TELEGRAM_BOT_TOKEN` e `ADMIN_CHAT_ID`.
+
+Se questi tre secret mancano, il radar non resta muto: il Worker se ne accorge e
+passa alla **raccolta di riserva**, e dopo **tre ore** senza una raccolta su
+GitHub arriva un **promemoria in chat all'admin** (`⚠️ Raccolta ferma da N ore`,
+con da quanto tace GitHub e quante fonti sta coprendo il Worker). Il promemoria
+si ripete al massimo ogni sei ore — un guasto lungo non deve suonare ogni quarto
+d'ora — e rispetta la fascia di silenzio: se è notte, parte al primo tick dopo.
 
 Con la [gh CLI](https://cli.github.com) si impostano dalla cartella del progetto
 (dalla UI è identico):
@@ -710,7 +717,7 @@ npm run dry-run                                        # cosa verrebbe inviato, 
 npm run ingest                                         # raccolta vera, come su Actions
 npm run prune                                          # cosa non è più un concorso attivo (elenco)
 npm run prune -- --apply                               # e lo toglie dall'archivio
-npm test                                               # 338 test
+npm test                                               # 357 test
 npm run typecheck
 ```
 
@@ -747,9 +754,12 @@ La tabella `runs` in D1 conserva la nota di ogni esecuzione: quelle con
   Worker.
 - **La raccolta dipende dai tre secret su GitHub**: senza, il job fallisce subito
   e per due ore il radar resta completamente fermo; poi il Worker riparte con la
-  raccolta di riserva (2 fonti su 12 da qui, contro 12 su 12 da Actions). Non è un
-  caso che venga notato tardi: la nota in `/health` e i log del job lo dicono, e
-  ogni raccolta riuscita riporta il `failStreak` delle fonti a zero.
+  raccolta di riserva (2 fonti su 12 da qui, contro 12 su 12 da Actions). Dopo tre
+  ore di silenzio arriva il promemoria in chat all'admin, quindi il guasto non
+  può più passare inosservato per giorni. Il limite che resta: il controllo gira
+  **dentro** il tick del Worker, quindi se è il Worker stesso a fermarsi (deploy
+  rotto, cron disattivato) non lo dice nessuno — per quello serve un battito
+  esterno, un servizio di uptime che chiami `/health` ogni ora.
 - **Google News** restituisce URL di redirect `news.google.com/rss/articles/...`:
   funzionano ma risultano meno leggibili in anteprima.
 - **Concorsi fisici/cartacei** restano invisibili se nessuno li pubblica online;
@@ -831,7 +841,7 @@ scripts/
   dry-run.ts               prova generale senza inviare nulla
   bench-cpu.ts             stessa misura su Node, con le fonti vere
   seed-sources.ts          genera l'SQL di sincronizzazione delle fonti
-test/                      18 file, 338 test (vitest, nessuna rete)
+test/                      19 file, 357 test (vitest, nessuna rete tranne i finti)
 ```
 
 Il tratto che tiene insieme tutto: **una sola copia dell'SQL**. `src/db/d1.ts`

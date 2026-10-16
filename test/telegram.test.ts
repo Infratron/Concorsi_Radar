@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { createMemoryStore, type MemoryStore } from "../src/db/memory.ts";
-import type { FetchLike, ItemRow, NewItem, Prefs } from "../src/types.ts";
+import type { FetchLike, ItemRow, NewItem, Prefs, RunRow } from "../src/types.ts";
 import { TelegramClient, MAX_MESSAGE_CHARS, type TelegramUpdate } from "../src/telegram/api.ts";
 import {
   daysLeft,
@@ -29,10 +29,12 @@ import { handleUpdate } from "../src/telegram/bot.ts";
 import {
   isQuietHour,
   regolamentoUrl,
+  sendCollectionReminder,
   sendDigests,
   sendInstantAlerts,
   sendWatchlistReminders,
 } from "../src/telegram/digest.ts";
+import { COLLECTION_REMINDER_MARK, NOTIFY_CRON } from "../src/schedule.ts";
 
 /**
  * Test dell'interfaccia: menù a pulsanti su UN solo messaggio.
@@ -1240,6 +1242,155 @@ describe("digest e avvisi", () => {
     const inviato = lastWith(calls, "sendMessage");
     const keyboard = inviato?.payload.reply_markup as { inline_keyboard: { callback_data?: string }[][] };
     expect(keyboard.inline_keyboard.flat().map((b) => b.callback_data)).toEqual([`d:open:${ids[0]}`, "d:home"]);
+  });
+});
+
+describe("promemoria · la raccolta ferma non resta invisibile", () => {
+  /** Una riga di `runs`: ore fa rispetto a NOW, con l'eventuale nota del tick. */
+  const run = (trigger: string, oreFa: number, note: string | null = null): RunRow => ({
+    startedAt: new Date(NOW.getTime() - oreFa * 3_600_000).toISOString(),
+    trigger,
+    sourcesOk: 1,
+    sourcesFail: 0,
+    itemsNew: 0,
+    ms: 100,
+    note,
+  });
+
+  /** Il tick del Worker, che gira anche quando GitHub tace. */
+  const tick = (oreFa: number, note: string | null = null): RunRow => run(NOTIFY_CRON, oreFa, note);
+
+  it("avvisa l'admin, dicendo da quanto tace GitHub e chi sta coprendo", async () => {
+    const store = createMemoryStore();
+    await store.upsertPrefs(prefs());
+    const { tg, calls } = makeTg();
+
+    const result = await sendCollectionReminder({
+      store,
+      tg,
+      now: NOW,
+      adminChatId: CHAT,
+      runs: [tick(0.25), run("actions", 4)],
+      fallback: { ok: 2, due: 4 },
+    });
+
+    expect(result.sent).toBe(1);
+    const testo = String(lastWith(calls, "sendMessage")?.payload.text ?? "");
+    expect(testo).toContain("Raccolta ferma da 4 ore");
+    expect(testo).toContain("L'ultima raccolta su GitHub è girata 4 ore fa");
+    expect(testo).toContain("2 fonti su 4");
+    expect(testo).toContain("CLOUDFLARE_API_TOKEN");
+  });
+
+  it("con una raccolta recente non dice niente", async () => {
+    const store = createMemoryStore();
+    await store.upsertPrefs(prefs());
+    const { tg, calls } = makeTg();
+
+    const result = await sendCollectionReminder({
+      store,
+      tg,
+      now: NOW,
+      adminChatId: CHAT,
+      runs: [tick(0.25), run("actions", 1)],
+      fallback: null,
+    });
+
+    expect(result.sent).toBe(0);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("non ripete lo stesso guasto a ogni tick", async () => {
+    const store = createMemoryStore();
+    await store.upsertPrefs(prefs());
+    const { tg, calls } = makeTg();
+
+    const result = await sendCollectionReminder({
+      store,
+      tg,
+      now: NOW,
+      adminChatId: CHAT,
+      // Il promemoria di due ore fa è nella nota del tick: è così che il giro
+      // successivo sa di aver già avvisato.
+      runs: [tick(0.25, COLLECTION_REMINDER_MARK), run("actions", 4)],
+      fallback: null,
+    });
+
+    expect(result.sent).toBe(0);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("non sveglia nessuno nella fascia di silenzio, ma la rispetta solo se c'è", async () => {
+    const store = createMemoryStore();
+    const notte = new Date("2026-11-20T22:30:00.000Z"); // 23:30 a Roma
+    const runs = (): RunRow[] => [
+      { ...tick(0.25), startedAt: new Date(notte.getTime() - 15 * 60_000).toISOString() },
+      { ...run("actions", 4), startedAt: new Date(notte.getTime() - 4 * 3_600_000).toISOString() },
+    ];
+
+    await store.upsertPrefs(prefs());
+    const zitto = makeTg();
+    expect(
+      await sendCollectionReminder({ store, tg: zitto.tg, now: notte, adminChatId: CHAT, runs: runs(), fallback: null }),
+    ).toEqual({ sent: 0 });
+    expect(zitto.calls).toHaveLength(0);
+
+    await store.upsertPrefs(prefs({ quietHours: "" }));
+    const sveglio = makeTg();
+    expect(
+      await sendCollectionReminder({ store, tg: sveglio.tg, now: notte, adminChatId: CHAT, runs: runs(), fallback: null }),
+    ).toEqual({ sent: 1 });
+  });
+
+  it("senza admin configurato non manda niente", async () => {
+    const store = createMemoryStore();
+    const { tg, calls } = makeTg();
+    expect(
+      await sendCollectionReminder({
+        store, tg, now: NOW, adminChatId: null, runs: [run("actions", 10)], fallback: null,
+      }),
+    ).toEqual({ sent: 0 });
+    expect(calls).toHaveLength(0);
+  });
+
+  it("se anche i tick del Worker sono vecchi lo dice: è un altro guasto", async () => {
+    const store = createMemoryStore();
+    await store.upsertPrefs(prefs());
+    const { tg, calls } = makeTg();
+
+    const result = await sendCollectionReminder({
+      store,
+      tg,
+      now: NOW,
+      adminChatId: CHAT,
+      runs: [tick(5), run("actions", 6)],
+      fallback: null,
+    });
+
+    expect(result.sent).toBe(1);
+    const testo = String(lastWith(calls, "sendMessage")?.payload.text ?? "");
+    expect(testo).toContain("anche i tick del Worker sono fermi da 5 ore");
+    expect(testo).toContain("niente di nuovo entra");
+  });
+
+  it("se la raccolta non è nella finestra non inventa una data", async () => {
+    const store = createMemoryStore();
+    await store.upsertPrefs(prefs());
+    const { tg, calls } = makeTg();
+
+    await sendCollectionReminder({
+      store,
+      tg,
+      now: NOW,
+      adminChatId: CHAT,
+      // Solo tick: della raccolta su GitHub non resta niente in questa finestra.
+      runs: [tick(0.25), tick(12)],
+      fallback: null,
+    });
+
+    const testo = String(lastWith(calls, "sendMessage")?.payload.text ?? "");
+    expect(testo).toContain("Raccolta ferma da più di 12 ore");
+    expect(testo).toContain("Su GitHub non risulta nessuna raccolta in questo periodo");
   });
 });
 

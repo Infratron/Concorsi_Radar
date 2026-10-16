@@ -1,5 +1,6 @@
 import type { Store } from "../db/store.ts";
-import type { ItemKind, ItemRow, Prefs } from "../types.ts";
+import type { ItemKind, ItemRow, Prefs, RunRow } from "../types.ts";
+import { COLLECTION_SILENCE_MS, collectionCheck } from "../schedule.ts";
 import type { TelegramClient } from "./api.ts";
 import { daysLeft, formatDigest, formatItemCard, localDateString, localHour, type DigestSection } from "./format.ts";
 import { digestKeyboard, instantKeyboard } from "./keyboard.ts";
@@ -213,6 +214,79 @@ export async function sendWatchlistReminders(deps: NotifyDeps): Promise<{ sent: 
   }
 
   return { sent };
+}
+
+/** Ore in parole: in chat "4 ore" dice tutto, "4,2 ore" non dice niente. */
+function oreInParole(ore: number): string {
+  const quante = Math.max(1, Math.round(ore));
+  return quante === 1 ? "un'ora" : `${quante} ore`;
+}
+
+export interface CollectionReminderDeps extends NotifyDeps {
+  /** Le ultime esecuzioni: il tick le ha già lette per la raccolta di riserva. */
+  runs: RunRow[];
+  /** Chi deve controllare GitHub; null = nessun admin, e allora non si avvisa. */
+  adminChatId: number | null;
+  /** Esito della raccolta di riserva di QUESTO tick, se è partita. */
+  fallback: { ok: number; due: number } | null;
+}
+
+/**
+ * "La raccolta su GitHub non gira" — il guasto che nessuno vedeva.
+ *
+ * Perché serve: quando Actions smette di raccogliere, il radar continua a
+ * consegnare quello che ha già in archivio, quindi dall'esterno sembra tutto
+ * normale; l'unico segnale era la raccolta di riserva che partiva in silenzio, e
+ * in /fonti bisognava saperlo leggere. Qui lo dice l'admin chat, una volta ogni
+ * sei ore al massimo, con i due dati che servono a capire: da quanto tace GitHub
+ * e se il Worker sta coprendo.
+ *
+ * Rispetta la fascia di silenzio: un promemoria ricorrente non deve suonare
+ * alle tre di notte. Se la fascia è attiva, il messaggio parte al primo tick
+ * dopo la fascia — la raccolta ferma resta ferma nel frattempo.
+ */
+export async function sendCollectionReminder(deps: CollectionReminderDeps): Promise<{ sent: number }> {
+  const { store, tg, now, runs, adminChatId, fallback } = deps;
+  if (adminChatId === null) return { sent: 0 };
+
+  const check = collectionCheck(runs, now);
+  if (!check.avvisare) return { sent: 0 };
+
+  const prefs = await store.getPrefs(adminChatId);
+  // Senza preferenze salvate non c'è nessuna fascia da rispettare: l'admin non ha
+  // mai aperto il bot, e un allarme tecnico vale più del silenzio.
+  if (prefs && isQuietHour(prefs, now)) return { sent: 0 };
+
+  // La soglia vale anche nel messaggio: se l'ultima raccolta non è nella finestra
+  // si può affermare "più di" le ore che la finestra copre, non di più.
+  const sogliaOre = COLLECTION_SILENCE_MS / 3_600_000;
+  const titolo =
+    check.oreDaRaccolta !== null
+      ? `⚠️ <b>Raccolta ferma da ${oreInParole(check.oreDaRaccolta)}</b>`
+      : `⚠️ <b>Raccolta ferma da più di ${oreInParole(Math.max(sogliaOre, check.finestraOre ?? sogliaOre))}</b>`;
+  const quando =
+    check.oreDaRaccolta === null
+      ? "Su GitHub non risulta nessuna raccolta in questo periodo."
+      : `L'ultima raccolta su GitHub è girata ${oreInParole(check.oreDaRaccolta)} fa.`;
+  const copertura = fallback
+    ? `Il radar non è fermo: questo tick ha raccolto di riserva (${fallback.ok} fonti su ${fallback.due}). Da qui però passano poche fonti, sono quelle che la rete di Cloudflare raggiunge.`
+    : "Il radar non è fermo: gli item già in archivio continuano a essere consegnati, ma niente di nuovo entra.";
+
+  const righe = [titolo, "", quando, copertura];
+  // Un tick vecchio vuol dire che anche il Worker è fermo: è un guasto diverso, e
+  // dirlo evita di andare a cercare i secret di GitHub per niente.
+  if (check.oreDalTick !== null && check.oreDalTick > 1) {
+    righe.push(
+      `Attenzione: anche i tick del Worker sono fermi da ${oreInParole(check.oreDalTick)} — il problema non è solo GitHub.`,
+    );
+  }
+  righe.push(
+    "",
+    "Da controllare: i tre secret del repository (CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_API_TOKEN, D1_DATABASE_ID), e che il workflow non sia stato disattivato per inattività.",
+  );
+
+  const risultato = await tg.sendMessage(adminChatId, righe.join("\n"), { disablePreview: true });
+  return { sent: risultato.ok ? 1 : 0 };
 }
 
 export async function sendInstantAlerts(deps: NotifyDeps): Promise<{ sent: number }> {

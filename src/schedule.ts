@@ -49,3 +49,80 @@ export function shouldFallbackIngest(runs: RunRow[], now: Date): boolean {
   const at = Date.parse(ultima.startedAt);
   return !Number.isFinite(at) || now.getTime() - at > FALLBACK_INGEST_AFTER_MS;
 }
+
+/**
+ * Il promemoria quando la raccolta non gira: tre ore di silenzio e nessuno se ne
+ * accorge, perché il radar continua a consegnare quello che ha già in archivio.
+ * È il guasto più insidioso dei due: una fonte rotta si vede in /fonti, un job di
+ * GitHub fermo no — l'unico segnale era la raccolta di riserva che partiva in
+ * silenzio.
+ */
+export const COLLECTION_SILENCE_MS = 3 * 60 * 60 * 1000;
+/**
+ * Distanza minima fra due promemoria. Un guasto che dura giorni non deve suonare
+ * ogni quarto d'ora: quattro volte al giorno basta per non perderlo di vista, e
+ * chi vuole sapere lo stato lo trova in 📡 Fonti.
+ */
+export const COLLECTION_REMINDER_GAP_MS = 6 * 60 * 60 * 1000;
+/**
+ * Il segno che il promemoria lascia nella nota dell'esecuzione, e il suo
+ * contrario. Due stringhe diverse di proposito: il tick scrive una nota a ogni
+ * giro, quindi un segno sempre presente falserebbe il controllo — il promemoria
+ * risulterebbe "già inviato" per sempre. Si cerca solo `... inviato`.
+ */
+export const COLLECTION_REMINDER_MARK = "promemoria raccolta: inviato";
+export const COLLECTION_REMINDER_SKIP = "promemoria raccolta: no";
+
+export interface CollectionCheck {
+  /** Ore dall'ultima raccolta su GitHub; null se non compare nella finestra. */
+  oreDaRaccolta: number | null;
+  /** Ore dall'ultima esecuzione in assoluto: il tick del Worker più recente. */
+  oreDalTick: number | null;
+  /** Quante ore copre la finestra di esecuzioni esaminate. */
+  finestraOre: number | null;
+  /** true = la raccolta su GitHub tace da più di COLLECTION_SILENCE_MS. */
+  ferma: boolean;
+  /** true = un promemoria è già partito da meno di COLLECTION_REMINDER_GAP_MS. */
+  ripetuto: boolean;
+  /** true = va mandato adesso: la raccolta è ferma e non l'abbiamo già detto. */
+  avvisare: boolean;
+}
+
+/**
+ * Decide se vale la pena avvisare che la raccolta non gira.
+ *
+ * Perché guarda una FINESTRA di esecuzioni e non una query mirata: i tick da 15
+ * minuti riempiono `runs` in fretta, quindi una raccolta di dieci ore fa non è
+ * nella finestra di 50 righe (circa dodici ore di tick). In quel caso il dato
+ * esatto non c'è e il codice lo dice (`oreDaRaccolta: null`) invece di inventare
+ * "mai girata": si riporta da quante ore copre la finestra, che è il massimo che
+ * si può affermare, ed è già più che sufficiente per far scattare l'allarme.
+ */
+export function collectionCheck(runs: RunRow[], now: Date): CollectionCheck {
+  const ore = (iso: string | null): number | null => {
+    if (iso === null) return null;
+    const at = Date.parse(iso);
+    return Number.isFinite(at) ? (now.getTime() - at) / 3_600_000 : null;
+  };
+
+  const raccolta = runs.find((run) => run.trigger === "actions") ?? null;
+  const tick = runs[0] ?? null;
+  const ultima = runs[runs.length - 1] ?? null;
+  const oreDaRaccolta = raccolta ? ore(raccolta.startedAt) : null;
+  const oreDalTick = tick ? ore(tick.startedAt) : null;
+  const finestraOre = ultima ? ore(ultima.startedAt) : null;
+  const promemoria = runs.find((run) => (run.note ?? "").includes(COLLECTION_REMINDER_MARK)) ?? null;
+  const oreDalPromemoria = promemoria ? ore(promemoria.startedAt) : null;
+
+  const ferma = oreDaRaccolta === null || oreDaRaccolta * 3_600_000 > COLLECTION_SILENCE_MS;
+  const ripetuto = oreDalPromemoria !== null && oreDalPromemoria * 3_600_000 < COLLECTION_REMINDER_GAP_MS;
+
+  return {
+    oreDaRaccolta,
+    oreDalTick,
+    finestraOre,
+    ferma,
+    ripetuto,
+    avvisare: ferma && !ripetuto,
+  };
+}

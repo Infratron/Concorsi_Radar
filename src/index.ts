@@ -5,8 +5,8 @@ import { expireOldItems, resolveSource, runIngest, type IngestSummary } from "./
 import type { TelegramUpdate } from "./telegram/api.ts";
 import { TelegramClient } from "./telegram/api.ts";
 import { handleUpdate } from "./telegram/bot.ts";
-import { sendDigests, sendInstantAlerts, sendWatchlistReminders } from "./telegram/digest.ts";
-import { jobFor, shouldFallbackIngest } from "./schedule.ts";
+import { sendCollectionReminder, sendDigests, sendInstantAlerts, sendWatchlistReminders } from "./telegram/digest.ts";
+import { COLLECTION_REMINDER_MARK, COLLECTION_REMINDER_SKIP, jobFor, shouldFallbackIngest } from "./schedule.ts";
 import { USER_AGENT } from "./config/sources.ts";
 import { benchDedupeLookup, benchSource, downloadBodies, summarise } from "./debug/bench.ts";
 import { jsonResponse } from "./lib/http.ts";
@@ -66,8 +66,13 @@ async function runCron(env: Env, cron: string, now: Date): Promise<void> {
   let sourcesFail = 0;
   let itemsNew = 0;
   let skipInstant = false;
+  // Le ultime esecuzioni servono a due cose: capire se la raccolta su Actions
+  // tace (raccolta di riserva) e se vale la pena ricordarlo all'admin. Una sola
+  // lettura per entrambe — 50 righe coprono circa dodici ore di tick da 15 minuti.
+  const runs = await store.recentRuns(50);
+  let fallback: { ok: number; due: number } | null = null;
 
-  if (shouldFallbackIngest(await store.recentRuns(20), now)) {
+  if (shouldFallbackIngest(runs, now)) {
     // Raccolta di riserva: la rete di Cloudflare raggiunge poche fonti, ma
     // meglio poche che nessuna. Il freno di CPU resta quello prudente del piano
     // Free (budget 6 ms), quindi la rotazione continua a valere qui.
@@ -76,6 +81,7 @@ async function runCron(env: Env, cron: string, now: Date): Promise<void> {
     sourcesFail = summary.sourcesFail;
     itemsNew = summary.itemsNew;
     note.push(`raccolta di riserva: ${summary.itemsNew} nuovi, ${summary.sourcesOk}/${summary.sourcesDue} fonti ok`);
+    fallback = { ok: summary.sourcesOk, due: summary.sourcesDue };
     note.push(...summary.notes.slice(0, 2));
     // Come al primo giro in assoluto: niente avvisi immediati su un archivio che
     // si sta riempiendo di concorsi vecchi.
@@ -92,10 +98,16 @@ async function runCron(env: Env, cron: string, now: Date): Promise<void> {
   // concorso che l'utente ha salvato. È l'utility che evita di perdere proprio
   // quello che si teneva d'occhio.
   const reminders = skipInstant ? 0 : (await sendWatchlistReminders({ store, tg, now })).sent;
+  // Il promemoria non dipende dagli avvisi: se la raccolta è ferma lo dice anche
+  // in un giro in cui non c'era niente da notificare (anzi, soprattutto in quello).
+  const raccolta = await sendCollectionReminder({ store, tg, now, runs, adminChatId, fallback });
   const expired = await expireOldItems(store, now);
   note.push(
     `avvisi: ${instant} istantanei`,
     `promemoria watchlist: ${reminders}`,
+    // Il segno nella nota è il modo in cui il tick successivo sa di aver già
+    // avvisato: per questo si scrive solo quando il messaggio è partito davvero.
+    raccolta.sent > 0 ? COLLECTION_REMINDER_MARK : COLLECTION_REMINDER_SKIP,
     `${expired} scaduti archiviati`,
   );
 
