@@ -15,7 +15,13 @@ import {
 import { cardKeyboard, itemButtonLabel, listKeyboard, menuKeyboard, settingsKeyboard } from "../src/telegram/keyboard.ts";
 import { applyIntent, parseCallback } from "../src/telegram/screens.ts";
 import { handleUpdate } from "../src/telegram/bot.ts";
-import { isQuietHour, regolamentoUrl, sendDigests, sendInstantAlerts } from "../src/telegram/digest.ts";
+import {
+  isQuietHour,
+  regolamentoUrl,
+  sendDigests,
+  sendInstantAlerts,
+  sendWatchlistReminders,
+} from "../src/telegram/digest.ts";
 
 /**
  * Test dell'interfaccia: menù a pulsanti su UN solo messaggio.
@@ -219,9 +225,11 @@ describe("bottoni · costruzione delle tastiere", () => {
     const keyboard = menuKeyboard({ nuovi: 3, oggi: 12, settimana: 40, scadenze: 2, salvati: 1, news: 7 });
     const bottoni = keyboard.inline_keyboard.flat();
     expect(bottoni.map((b) => b.callback_data)).toEqual([
-      "s:nuovi", "s:oggi", "s:settimana", "s:scadenze", "s:salvati", "s:news", "s:cerca", "s:fonti", "s:impostazioni", "refresh",
+      "s:nuovi", "s:oggi", "s:settimana", "s:scadenze", "s:salvati", "s:news", "s:cerca", "s:storico",
+      "s:fonti", "s:impostazioni", "refresh",
     ]);
     expect(bottoni[0]?.text).toBe("🆕 Nuovi (3)");
+    expect(bottoni[4]?.text).toBe("⭐ Watchlist (1)");
     expect(bottoni[5]?.text).toBe("📰 News (7)");
   });
 
@@ -253,7 +261,7 @@ describe("bottoni · costruzione delle tastiere", () => {
     const item = row({ id: 7 });
     const keyboard = cardKeyboard(item, "saved", "https://esempio.it/regolamento");
     const prima = keyboard.inline_keyboard[0] ?? [];
-    expect(prima[0]).toEqual({ text: "✅ Salvato", callback_data: "noop" });
+    expect(prima[0]).toEqual({ text: "⭐ In watchlist", callback_data: "noop" });
     expect(prima[1]?.callback_data).toBe("ign:7");
     expect(keyboard.inline_keyboard[1]?.map((b) => b.text)).toEqual(["🔗 Apri", "📄 Regolamento"]);
     expect(keyboard.inline_keyboard[2]?.map((b) => b.callback_data)).toEqual(["back", "refresh", "home"]);
@@ -373,9 +381,9 @@ describe("interfaccia · un solo messaggio per chat", () => {
     expect((await store.getPrefs(CHAT))?.weights.giftcard).toBe(1);
 
     const toast = lastWith(calls, "answerCallbackQuery")?.payload.text;
-    expect(toast).toBe("✅ Salvato");
+    expect(toast).toBe("⭐ In watchlist");
     const testo = lastWith(calls, "editMessageText")?.payload.text ?? "";
-    expect(testo).toContain("✅ <b>Salvato da te</b>");
+    expect(testo).toContain("⭐ <b>Nella tua watchlist</b>");
   });
 
   it("una decisione presa dall'avviso toglie l'avviso e aggiorna la schermata", async () => {
@@ -444,13 +452,43 @@ describe("interfaccia · un solo messaggio per chat", () => {
     expect(prima).toContain("8 concorsi");
     expect(prima).toContain("pagina 1/2");
 
+    const titoli = (call: Call | undefined): string[] =>
+      ((call?.payload.reply_markup as { inline_keyboard: { text: string; callback_data?: string }[][] } | undefined)
+        ?.inline_keyboard.flat() ?? [])
+        .filter((bottone) => bottone.callback_data?.startsWith("open:"))
+        .map((bottone) => bottone.text);
+    const primaPagina = titoli(lastWith(calls, "editMessageText"));
+    expect(primaPagina).toHaveLength(6);
+
     await handleUpdate(tap(3, "page:1", 100), deps(store2, tg));
     const seconda = lastWith(calls, "editMessageText")?.payload.text ?? "";
     expect(seconda).toContain("pagina 2/2");
-    const keyboard = lastWith(calls, "editMessageText")?.payload.reply_markup as {
-      inline_keyboard: { text: string }[][];
-    };
-    expect(keyboard.inline_keyboard[0]?.[0]?.text).toContain("Concorso lungo numero 7");
+    const secondaPagina = titoli(lastWith(calls, "editMessageText"));
+    expect(secondaPagina).toHaveLength(2);
+    // Le due pagine non si sovrappongono: è la prova che la pagina si legge dal
+    // database con OFFSET, non ritagliando le prime righe caricate.
+    for (const titolo of secondaPagina) expect(primaPagina).not.toContain(titolo);
+  });
+
+  it("sfoglia anche oltre le prime righe caricate in memoria", async () => {
+    const store2 = createMemoryStore();
+    await store2.upsertPrefs(prefs());
+    await seed(
+      store2,
+      Array.from({ length: 70 }, (_, index) => ({ title: `Concorso numero ${index + 1}` })),
+    );
+    const { tg, calls } = makeTg();
+    await handleUpdate(command(1, "/start"), deps(store2, tg));
+    await handleUpdate(tap(2, "s:oggi", 100), deps(store2, tg));
+    await handleUpdate(tap(3, "page:11", 100), deps(store2, tg));
+
+    const testo = lastWith(calls, "editMessageText")?.payload.text ?? "";
+    expect(testo).toContain("70 concorsi");
+    expect(testo).toContain("pagina 12/12");
+    const righe = (lastWith(calls, "editMessageText")?.payload.reply_markup as {
+      inline_keyboard: { text: string; callback_data?: string }[][]
+    }).inline_keyboard.filter((riga) => riga[0]?.callback_data?.startsWith("open:"));
+    expect(righe).toHaveLength(4);
   });
 
   it("una pagina fuori intervallo torna dentro e mostra contenuto", async () => {
@@ -644,12 +682,75 @@ describe("interfaccia · un solo messaggio per chat", () => {
     await handleUpdate(tap(4, "s:salvati", 100), deps(store, tg));
 
     const testo = lastWith(calls, "editMessageText")?.payload.text ?? "";
-    expect(testo).toContain("Salvati</b> · 2 concorsi");
+    expect(testo).toContain("Watchlist</b> · 2 concorsi in watchlist");
     const keyboard = lastWith(calls, "editMessageText")?.payload.reply_markup as {
       inline_keyboard: { text: string; callback_data?: string }[][];
     };
     const apribili = keyboard.inline_keyboard.map((riga) => riga[0]?.callback_data).filter((data) => data?.startsWith("open:"));
     expect(apribili.sort()).toEqual(["open:1", "open:2"]);
+  });
+
+  it("la watchlist è ordinata per scadenza, non per quando l'hai salvata", async () => {
+    const store2 = createMemoryStore();
+    await store2.upsertPrefs(prefs());
+    await seed(store2, [
+      { title: "Chiude a dicembre", deadline: "2026-12-20", score: 99 },
+      { title: "Chiude dopodomani", deadline: "2026-11-22", score: 30 },
+      { title: "Chiude tra un mese", deadline: "2027-01-10", score: 80 },
+    ]);
+    const { tg, calls } = makeTg();
+    await handleUpdate(command(1, "/start"), deps(store2, tg));
+    // Salvati nell'ordine peggiore possibile: il primo è quello che chiude più tardi.
+    for (const id of [1, 2, 3]) await handleUpdate(tap(10 + id, `save:${id}`, 100), deps(store2, tg));
+    await handleUpdate(tap(20, "s:salvati", 100), deps(store2, tg));
+
+    const testo = lastWith(calls, "editMessageText")?.payload.text ?? "";
+    expect(testo).toContain("3 concorsi in watchlist");
+    expect(testo).toContain("chiude prima sta in cima");
+    const titoli = (lastWith(calls, "editMessageText")?.payload.reply_markup as {
+      inline_keyboard: { text: string }[][]
+    }).inline_keyboard.map((riga) => riga[0]?.text ?? "");
+    expect(titoli[0]).toContain("Chiude dopodomani");
+    expect(titoli[1]).toContain("Chiude a dicembre");
+    expect(titoli[2]).toContain("Chiude tra un mese");
+  });
+
+  it("lo storico riunisce vinti, chiusi e scartati", async () => {
+    const store2 = createMemoryStore();
+    await store2.upsertPrefs(prefs());
+    await seed(store2, [
+      { title: "Concorso ancora aperto", deadline: "2026-12-20" },
+      { title: "Concorso chiuso ieri", deadline: "2026-11-19" },
+      { title: "Concorso chiuso a settembre", deadline: "2026-09-01" },
+      { title: "Concorso da vincere", deadline: "2026-11-25" },
+      { title: "Concorso scartato", deadline: "2026-11-26" },
+    ]);
+    const { tg, calls } = makeTg();
+    await handleUpdate(command(1, "/start"), deps(store2, tg));
+    await handleUpdate(tap(2, "won:4", 100), deps(store2, tg));
+    await handleUpdate(tap(3, "ign:5", 100), deps(store2, tg));
+
+    await handleUpdate(tap(4, "s:storico", 100), deps(store2, tg));
+    const menu = lastWith(calls, "editMessageText");
+    expect(menu?.payload.text).toContain("<b>1</b> vinti");
+    expect(menu?.payload.text).toContain("<b>2</b> chiusi");
+    expect(menu?.payload.text).toContain("<b>1</b> scartati");
+    expect((menu?.payload.reply_markup as { inline_keyboard: { callback_data?: string }[][] }).inline_keyboard
+      .flat().map((b) => b.callback_data)).toContain("s:scaduti");
+
+    await handleUpdate(tap(5, "s:scaduti", 100), deps(store2, tg));
+    const chiusi = lastWith(calls, "editMessageText")?.payload.text ?? "";
+    expect(chiusi).toContain("Concorsi chiusi");
+    expect(chiusi).toContain("2 concorsi chiusi");
+    const titoliChiusi = (lastWith(calls, "editMessageText")?.payload.reply_markup as {
+      inline_keyboard: { text: string }[][]
+    }).inline_keyboard.map((riga) => riga[0]?.text ?? "");
+    // Chi ha chiuso per ultimo in cima, e il concorso ancora aperto non c'è.
+    expect(titoliChiusi[0]).toContain("Concorso chiuso ieri");
+    expect(titoliChiusi.join(" ")).not.toContain("ancora aperto");
+
+    await handleUpdate(tap(6, "s:vinti", 100), deps(store2, tg));
+    expect(lastWith(calls, "editMessageText")?.payload.text).toContain("1 concorso vinto");
   });
 
   it("la sezione news tiene separate le notizie dai concorsi", async () => {
@@ -770,6 +871,45 @@ describe("digest e avvisi", () => {
     const { tg, calls } = makeTg();
     const result = await sendDigests({ store, tg, now: NOW });
     expect(result).toEqual({ chats: 0, messages: 0 });
+    expect(calls).toHaveLength(0);
+  });
+
+  it("ricorda i concorsi in watchlist prima che chiudano, senza ripetersi", async () => {
+    const store = createMemoryStore();
+    await store.upsertPrefs(prefs());
+    const ids = await seed(store, [
+      { title: "Chiude tra tre giorni", deadline: "2026-11-23" },
+      { title: "Chiude fra dieci giorni", deadline: "2026-11-30" },
+    ]);
+    for (const id of ids) await store.recordDelivery(CHAT, id, "saved", NOW.toISOString());
+    const { tg, calls } = makeTg();
+
+    // A tre giorni dalla chiusura arriva il primo promemoria; quello che chiude fra
+    // dieci giorni resta in silenzio.
+    expect(await sendWatchlistReminders({ store, tg, now: NOW })).toEqual({ sent: 1 });
+    const primo = lastWith(calls, "sendMessage")?.payload.text ?? "";
+    expect(primo).toContain("⭐ <b>Watchlist</b> · chiude tra 3 giorni");
+    expect(primo).toContain("Chiude tra tre giorni");
+    expect(primo).not.toContain("Chiude fra dieci giorni");
+
+    // Lo stesso giro non lo ripete...
+    expect(await sendWatchlistReminders({ store, tg, now: NOW })).toEqual({ sent: 0 });
+
+    // ...ma il giorno prima della chiusura arriva il secondo avviso, una volta sola.
+    const domani = new Date("2026-11-22T10:00:00.000Z");
+    expect(await sendWatchlistReminders({ store, tg, now: domani })).toEqual({ sent: 1 });
+    expect(lastWith(calls, "sendMessage")?.payload.text).toContain("chiude domani");
+    expect(await sendWatchlistReminders({ store, tg, now: domani })).toEqual({ sent: 0 });
+  });
+
+  it("senza scadenza la watchlist non produce promemoria", async () => {
+    const store = createMemoryStore();
+    await store.upsertPrefs(prefs());
+    const ids = await seed(store, [{ title: "Concorso senza data", deadline: null }]);
+    await store.recordDelivery(CHAT, ids[0], "saved", NOW.toISOString());
+    const { tg, calls } = makeTg();
+
+    expect(await sendWatchlistReminders({ store, tg, now: NOW })).toEqual({ sent: 0 });
     expect(calls).toHaveLength(0);
   });
 

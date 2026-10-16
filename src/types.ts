@@ -187,7 +187,14 @@ export interface ItemQuery {
   /** Esclude gli item i cui id compaiono qui. */
   excludeIds?: number[];
   limit?: number;
-  orderBy?: "first_seen" | "score" | "deadline";
+  /**
+   * Salta le prime N righe. È quello che rende VERE le pagine della chat: senza,
+   * l'elenco può mostrare solo le prime righe caricate, e con un archivio
+   * grande la coda resta irraggiungibile.
+   */
+  offset?: number;
+  /** "deadline_desc" = chiusi di recente per primi (serve allo storico). */
+  orderBy?: "first_seen" | "score" | "deadline" | "deadline_desc";
 }
 
 export interface Prefs {

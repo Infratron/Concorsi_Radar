@@ -53,9 +53,29 @@ export function menuKeyboard(counts: {
     inline_keyboard: [
       [button(`🆕 Nuovi (${counts.nuovi})`, "s:nuovi"), button(`📋 Oggi (${counts.oggi})`, "s:oggi")],
       [button(`📅 7 giorni (${counts.settimana})`, "s:settimana"), button(`⏳ Scadenze (${counts.scadenze})`, "s:scadenze")],
-      [button(`⭐ Salvati (${counts.salvati})`, "s:salvati"), button(`📰 News (${counts.news})`, "s:news")],
-      [button("🔍 Cerca", "s:cerca"), button("📡 Fonti", "s:fonti")],
-      [button("⚙️ Impostazioni", "s:impostazioni"), button("🔄 Aggiorna", "refresh")],
+      [button(`⭐ Watchlist (${counts.salvati})`, "s:salvati"), button(`📰 News (${counts.news})`, "s:news")],
+      [button("🔍 Cerca", "s:cerca"), button("🗂 Storico", "s:storico")],
+      [button("📡 Fonti", "s:fonti"), button("⚙️ Impostazioni", "s:impostazioni")],
+      [button("🔄 Aggiorna", "refresh")],
+    ],
+  };
+}
+
+/**
+ * Lo storico: cosa è successo ai concorsi che hai visto. È un sotto-menù perché
+ * sono tre elenchi che si guardano di rado, e nel menù principale ruberebbero lo
+ * spazio a quelli che si guardano ogni giorno.
+ */
+export function storicoKeyboard(counts: {
+  vinti: number;
+  scaduti: number;
+  ignorati: number;
+}): InlineKeyboardMarkup {
+  return {
+    inline_keyboard: [
+      [button(`🏆 Vinti (${counts.vinti})`, "s:vinti"), button(`⌛ Scaduti (${counts.scaduti})`, "s:scaduti")],
+      [button(`🚫 Ignorati (${counts.ignorati})`, "s:ignorati"), button("🏠 Menù", "home")],
+      [button("🔄 Aggiorna", "refresh")],
     ],
   };
 }
@@ -94,7 +114,7 @@ export function cardKeyboard(
   regolamentoUrl: string | null,
 ): InlineKeyboardMarkup {
   const decisioni: InlineKeyboardButton[] = [
-    decision === "saved" ? done("✅ Salvato") : button("✅ Salva", `save:${item.id}`),
+    decision === "saved" ? done("⭐ In watchlist") : button("⭐ Watchlist", `save:${item.id}`),
     decision === "ignored" ? done("🚫 Ignorato") : button("🚫 Non mi interessa", `ign:${item.id}`),
     decision === "won" ? done("🏆 Vinto") : button("🏆 Vinto", `won:${item.id}`),
   ];
@@ -118,7 +138,7 @@ export function instantKeyboard(item: ItemRow, regolamentoUrl: string | null): I
   return {
     inline_keyboard: [
       [
-        button("✅ Salva", `save:${item.id}`),
+        button("⭐ Watchlist", `save:${item.id}`),
         button("🚫 Non mi interessa", `ign:${item.id}`),
         button("🏆 Vinto", `won:${item.id}`),
       ],
@@ -193,7 +213,15 @@ export function sectionTitle(section: string): string {
     case "scadenze":
       return "In scadenza";
     case "salvati":
-      return "Salvati";
+      return "Watchlist";
+    case "storico":
+      return "Storico";
+    case "vinti":
+      return "Concorsi vinti";
+    case "scaduti":
+      return "Concorsi chiusi";
+    case "ignorati":
+      return "Scartati da te";
     case "news":
       return "Articoli e news";
     case "fonti":

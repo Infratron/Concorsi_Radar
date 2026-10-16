@@ -5,7 +5,7 @@ import { expireOldItems, resolveSource, runIngest, type IngestSummary } from "./
 import type { TelegramUpdate } from "./telegram/api.ts";
 import { TelegramClient } from "./telegram/api.ts";
 import { handleUpdate } from "./telegram/bot.ts";
-import { sendDigests, sendInstantAlerts } from "./telegram/digest.ts";
+import { sendDigests, sendInstantAlerts, sendWatchlistReminders } from "./telegram/digest.ts";
 import { jobFor, shouldFallbackIngest } from "./schedule.ts";
 import { USER_AGENT } from "./config/sources.ts";
 import { benchDedupeLookup, benchSource, downloadBodies, summarise } from "./debug/bench.ts";
@@ -88,8 +88,16 @@ async function runCron(env: Env, cron: string, now: Date): Promise<void> {
   }
 
   const instant = skipInstant ? 0 : (await sendInstantAlerts({ store, tg, now })).sent;
+  // Promemoria della watchlist: a tre giorni e a un giorno dalla chiusura di un
+  // concorso che l'utente ha salvato. È l'utility che evita di perdere proprio
+  // quello che si teneva d'occhio.
+  const reminders = skipInstant ? 0 : (await sendWatchlistReminders({ store, tg, now })).sent;
   const expired = await expireOldItems(store, now);
-  note.push(`avvisi: ${instant} istantanei`, `${expired} scaduti archiviati`);
+  note.push(
+    `avvisi: ${instant} istantanei`,
+    `promemoria watchlist: ${reminders}`,
+    `${expired} scaduti archiviati`,
+  );
 
   await store.recordRun({
     startedAt: now.toISOString(), trigger: cron,

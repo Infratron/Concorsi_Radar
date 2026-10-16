@@ -239,12 +239,19 @@ const ITEM_COLUMNS = [
   "effort", "requires_purchase", "tags", "score", "cluster_id", "status", "ai_used",
 ];
 
-/** Whitelist degli ordinamenti: orderBy non finisce MAI in SQL come valore libero. */
+/**
+ * Whitelist degli ordinamenti: orderBy non finisce MAI in SQL come valore libero.
+ * Ogni ordine finisce con `id DESC`: senza un ultimo criterio unico due righe a
+ * pari punteggio possono uscire in ordine diverso fra una query e l'altra, e le
+ * pagine della chat salterebbero o ripeterebbero un concorso.
+ */
 const ORDER_BY: Record<string, string> = {
-  first_seen: "first_seen_at DESC",
-  score: "score DESC, first_seen_at DESC",
+  first_seen: "first_seen_at DESC, id DESC",
+  score: "score DESC, first_seen_at DESC, id DESC",
   // NULL messi in fondo, così l'ordine coincide con l'implementazione in-memory.
-  deadline: "deadline IS NULL ASC, deadline ASC, score DESC",
+  deadline: "deadline IS NULL ASC, deadline ASC, score DESC, id DESC",
+  // Storico: chi ha chiuso per ultimo sta in cima.
+  deadline_desc: "deadline IS NULL ASC, deadline DESC, id DESC",
 };
 
 /**
@@ -408,9 +415,10 @@ export function createD1Store(db: D1Like): Store {
     async queryItems(query: ItemQuery): Promise<ItemRow[]> {
       const filter = buildWhere(query);
       const limit = Math.min(Math.max(Math.trunc(query.limit ?? 20), 1), 200);
+      const offset = Math.max(Math.trunc(query.offset ?? 0), 0);
       const order = ORDER_BY[query.orderBy ?? "first_seen"] ?? ORDER_BY.first_seen;
-      const sql = `SELECT * FROM items ${filter.sql} ORDER BY ${order} LIMIT ?`;
-      const result = await db.prepare(sql).bind(...filter.params, limit).all<ItemDbRow>();
+      const sql = `SELECT * FROM items ${filter.sql} ORDER BY ${order} LIMIT ? OFFSET ?`;
+      const result = await db.prepare(sql).bind(...filter.params, limit, offset).all<ItemDbRow>();
       return (result.results ?? []).map(rowToItem);
     },
 

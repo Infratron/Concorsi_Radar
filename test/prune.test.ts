@@ -162,7 +162,11 @@ describe("pulizia · dalla selezione alla cancellazione", () => {
 
   it("legge solo gli item senza scadenza e trova gli stessi candidati della funzione pura", async () => {
     const stale = await findStale(store, NOW);
-    expect(stale.map((entry) => entry.row.urlKey)).toEqual([edizioneVecchia.urlKey, paginaCatalogo.urlKey]);
+    // L'ordine dell'elenco dipende dall'ordinamento scelto (che ora è stabile a
+    // parità di data): quello che conta è QUALI righe sono candidate.
+    expect(stale.map((entry) => entry.row.urlKey).sort()).toEqual(
+      [edizioneVecchia.urlKey, paginaCatalogo.urlKey].sort(),
+    );
 
     // Il concorso con scadenza non entra nemmeno nella query: 4 item su 5.
     expect((await store.queryItems({ withoutDeadline: true, limit: 50 })).length).toBe(4);

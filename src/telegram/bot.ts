@@ -38,8 +38,6 @@ export interface BotDeps extends NotifyDeps {
   allowedChatIds?: number[];
 }
 
-/** Quanti item si leggono per un elenco: oltre questo si guarda con 🔍 Cerca. */
-export const LIST_FETCH_LIMIT = 60;
 const WEEK_MS = 7 * 86_400_000;
 
 export function defaultPrefs(chatId: number): Prefs {
@@ -89,7 +87,16 @@ function intentForCommand(command: string, args: string): Intent | null {
     case "/scadenze":
       return { kind: "section", section: "scadenze" };
     case "/salvati":
+    case "/watchlist":
       return { kind: "section", section: "salvati" };
+    case "/storico":
+      return { kind: "section", section: "storico" };
+    case "/vinti":
+      return { kind: "section", section: "vinti" };
+    case "/scaduti":
+      return { kind: "section", section: "scaduti" };
+    case "/ignorati":
+      return { kind: "section", section: "ignorati" };
     case "/news":
     case "/articoli":
       return { kind: "section", section: "news" };
@@ -150,7 +157,7 @@ function toastFor(intent: Intent, prefs: Prefs): string | null {
   switch (intent.kind) {
     case "decision":
       return intent.action === "save"
-        ? "✅ Salvato"
+        ? "⭐ In watchlist"
         : intent.action === "ign"
           ? "🚫 Ignorato: i filtri si adattano"
           : "🏆 Complimenti!";
@@ -211,10 +218,20 @@ function sectionQuery(section: string, now: Date, lastCheckAt: string | null): I
       orderBy: "deadline",
     };
   }
+  if (section === "scaduti") {
+    // Tutto quello che HA GIÀ CHIUSO, chi ha chiuso per ultimo in cima. Il limite
+    // è IERI: un concorso che scade oggi è ancora aperto. Non si filtra sullo
+    // stato: `expired` arriva tre giorni dopo la scadenza, e un concorso chiuso
+    // ieri deve essere già consultabile nello storico.
+    return { kinds: CONCORSI, deadlineBefore: shiftDate(localDateString(now), -1), orderBy: "deadline_desc" };
+  }
   // La ricerca guarda tutto — anche gli articoli, marcati 📰 nell'elenco:
   // "cerca nutella" deve trovare sia il concorso sia il pezzo che ne parla.
   return { keyword: section.slice("cerca:".length), orderBy: "score", statuses: ATTIVI };
 }
+
+/** Sezioni il cui contenuto viene dalle decisioni di QUESTA chat, non da una query. */
+const SEZIONI_CONSEGNA = new Set(["salvati", "vinti", "ignorati"]);
 
 function isListSection(section: string): boolean {
   return (
@@ -222,10 +239,26 @@ function isListSection(section: string): boolean {
     section === "oggi" ||
     section === "settimana" ||
     section === "scadenze" ||
-    section === "salvati" ||
     section === "news" ||
+    section === "scaduti" ||
+    section === "salvati" ||
+    section === "vinti" ||
+    section === "ignorati" ||
     section.startsWith("cerca:")
   );
+}
+
+/**
+ * Watchlist in ordine di scadenza: chi chiude prima sta in cima, e chi non ha una
+ * scadenza nota va in fondo. Senza questo ordine i salvati uscivano dal più
+ * recente, cioè il contrario di quello che serve per non perdere un concorso.
+ */
+export function sortByDeadline(items: ItemRow[]): ItemRow[] {
+  return [...items].sort((a, b) => {
+    const left = a.deadline ?? "9999-12-31";
+    const right = b.deadline ?? "9999-12-31";
+    return left.localeCompare(right) || b.score - a.score || a.id - b.id;
+  });
 }
 
 async function decisionFor(deps: BotDeps, chatId: number, itemId: number): Promise<string | null> {
@@ -250,11 +283,18 @@ async function loadScreenData(
   const settimanaFa = new Date(now.getTime() - WEEK_MS).toISOString();
   const sinceNuovi = state.lastCheckAt ?? settimanaFa;
   const scadenza = sectionQuery("scadenze", now, null);
-  const salvati = await store.listDeliveredItems(chatId, "saved", 200);
+  const scaduti = sectionQuery("scaduti", now, null);
+  // La watchlist è ordinata per scadenza: è la sua ragione d'essere.
+  const salvati = sortByDeadline(await store.listDeliveredItems(chatId, "saved", 200));
+  // Gli elenchi dello storico si leggono solo quando servono: nel menù di tutti i
+  // giorni sarebbero due query in più per niente.
+  const storico = state.section === "storico" || SEZIONI_CONSEGNA.has(state.section);
+  const vinti = storico ? await store.listDeliveredItems(chatId, "won", 200) : [];
+  const ignorati = storico ? await store.listDeliveredItems(chatId, "ignored", 200) : [];
 
   // I conteggi sono query SQL di conteggio: non caricano righe, quindi il menù
   // resta leggero anche con un archivio grande.
-  const [archiveTotal, contest, news, nuovi, oggi, settimana, scadenze] = await Promise.all([
+  const [archiveTotal, contest, news, nuovi, oggi, settimana, scadenze, quantiScaduti] = await Promise.all([
     store.countItems({}),
     store.countItems({ kinds: CONCORSI }),
     store.countItems({ kinds: ARTICOLI }),
@@ -262,23 +302,35 @@ async function loadScreenData(
     store.countItems(sectionQuery("oggi", now, null)),
     store.countItems(sectionQuery("settimana", now, null)),
     store.countItems(scadenza),
+    // Il conteggio dei chiusi serve solo allo storico: fuori da lì resta a zero.
+    state.section === "storico" ? store.countItems(scaduti) : Promise.resolve(0),
   ]);
-  const counts: ScreenCounts = { nuovi, oggi, settimana, scadenze, news, contest, salvati: salvati.length };
+  const counts: ScreenCounts = {
+    nuovi, oggi, settimana, scadenze, news, contest,
+    salvati: salvati.length, vinti: vinti.length, ignorati: ignorati.length, scaduti: quantiScaduti,
+  };
 
   const wantsList = state.openItemId === null && isListSection(state.section);
   let items: ItemRow[] = [];
   let total = 0;
   if (wantsList) {
-    const completo =
-      state.section === "salvati"
+    // Le sezioni basate sulle consegne (watchlist, vinti, ignorati) sono liste
+    // corte e già in memoria; le altre si pagano con LIMIT/OFFSET, quindi anche
+    // un archivio grande si sfoglia tutto invece di fermarsi al primo carico.
+    const daConsegne = SEZIONI_CONSEGNA.has(state.section)
+      ? state.section === "salvati"
         ? salvati
-        : await store.queryItems({ ...sectionQuery(state.section, now, state.lastCheckAt), limit: LIST_FETCH_LIMIT });
-    total = state.section === "salvati" ? salvati.length : await store.countItems(sectionQuery(state.section, now, state.lastCheckAt));
-    // La pagina si riporta dentro l'intervallo PRIMA di ritagliare: uno stato
-    // vecchio (o una lista accorciata) non deve mostrare una pagina vuota.
+        : state.section === "vinti"
+          ? vinti
+          : ignorati
+      : null;
+    const query = sectionQuery(state.section, now, state.lastCheckAt);
+    total = daConsegne ? daConsegne.length : await store.countItems(query);
     const pagine = Math.max(1, Math.ceil(total / PAGE_SIZE));
     const pagina = Math.min(Math.max(state.page, 0), pagine - 1);
-    items = completo.slice(pagina * PAGE_SIZE, pagina * PAGE_SIZE + PAGE_SIZE);
+    items = daConsegne
+      ? daConsegne.slice(pagina * PAGE_SIZE, pagina * PAGE_SIZE + PAGE_SIZE)
+      : await store.queryItems({ ...query, limit: PAGE_SIZE, offset: pagina * PAGE_SIZE });
   }
 
   const openItem = state.openItemId !== null ? await store.getItem(state.openItemId) : null;

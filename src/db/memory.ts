@@ -101,17 +101,26 @@ export function createMemoryStore(): MemoryStore {
     return true;
   };
 
+  // L'ultimo criterio è sempre l'id decrescente, come in SQL: senza, due righe a
+  // pari punteggio possono cambiare ordine fra una query e l'altra e le pagine
+  // della chat salterebbero o ripeterebbero un concorso.
   const compare = (orderBy: ItemQuery["orderBy"], a: ItemRow, b: ItemRow): number => {
     if (orderBy === "score") {
-      return b.score - a.score || b.firstSeenAt.localeCompare(a.firstSeenAt);
+      return b.score - a.score || b.firstSeenAt.localeCompare(a.firstSeenAt) || b.id - a.id;
     }
     if (orderBy === "deadline") {
       // NULL in fondo, come in SQL (deadline IS NULL ASC).
       const left = a.deadline ?? "9999-12-31";
       const right = b.deadline ?? "9999-12-31";
-      return left.localeCompare(right) || b.score - a.score;
+      return left.localeCompare(right) || b.score - a.score || b.id - a.id;
     }
-    return b.firstSeenAt.localeCompare(a.firstSeenAt);
+    if (orderBy === "deadline_desc") {
+      if (a.deadline === null && b.deadline === null) return b.id - a.id;
+      if (a.deadline === null) return 1;
+      if (b.deadline === null) return -1;
+      return b.deadline.localeCompare(a.deadline) || b.id - a.id;
+    }
+    return b.firstSeenAt.localeCompare(a.firstSeenAt) || b.id - a.id;
   };
 
   return {
@@ -179,10 +188,11 @@ export function createMemoryStore(): MemoryStore {
 
     async queryItems(query: ItemQuery): Promise<ItemRow[]> {
       const limit = Math.min(Math.max(Math.trunc(query.limit ?? 20), 1), 200);
+      const offset = Math.max(Math.trunc(query.offset ?? 0), 0);
       return items
         .filter((row) => matchesQuery(row, query))
         .sort((a, b) => compare(query.orderBy, a, b))
-        .slice(0, limit)
+        .slice(offset, offset + limit)
         .map((row) => clone(row));
     },
 

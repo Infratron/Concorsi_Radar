@@ -1,7 +1,7 @@
 import type { Store } from "../db/store.ts";
 import type { ItemKind, ItemRow, Prefs } from "../types.ts";
 import type { TelegramClient } from "./api.ts";
-import { daysLeft, formatDigest, formatItemCard, localHour, type DigestSection } from "./format.ts";
+import { daysLeft, formatDigest, formatItemCard, localDateString, localHour, type DigestSection } from "./format.ts";
 import { digestKeyboard, instantKeyboard } from "./keyboard.ts";
 import { staleItemReason } from "../enrich/freshness.ts";
 
@@ -35,6 +35,15 @@ export const INSTANT_MAX_AGE_MS = 3 * 60 * 60 * 1000;
 
 /** Soglia "alto valore" usata per la sezione dedicata del digest. */
 export const HIGH_VALUE_SCORE = 70;
+
+/**
+ * Quando ricordare un concorso della watchlist: a tre giorni e a un giorno dalla
+ * chiusura. È la differenza fra "l'ho salvato" e "l'ho fatto": senza promemoria,
+ * un concorso importante si perde proprio perché era importante.
+ */
+export const WATCHLIST_REMINDER_DAYS = [3, 1];
+/** Tetto di promemoria per chat in un giro: oltre diventa un listone. */
+export const WATCHLIST_MAX_PER_RUN = 2;
 
 function parseQuietHours(value: string): [number, number] | null {
   const match = /^(\d{1,2})\s*-\s*(\d{1,2})$/.exec(value.trim());
@@ -154,6 +163,56 @@ export async function sendDigests(deps: NotifyDeps): Promise<{ chats: number; me
   }
 
   return { chats, messages };
+}
+
+/**
+ * Promemoria di chiusura per i concorsi che hai messo in watchlist.
+ *
+ * Regole: solo item salvati, solo con una scadenza, solo a 3 giorni e a 1 giorno
+ * dalla chiusura, una volta sola per soglia (la consegna "reminder:3" resta
+ * registrata). Rispetta la fascia di silenzio e non tocca il ritmo degli avvisi
+ * immediati: è un messaggio che hai chiesto tu salvando il concorso.
+ */
+export async function sendWatchlistReminders(deps: NotifyDeps): Promise<{ sent: number }> {
+  const { store, tg, now } = deps;
+  let sent = 0;
+
+  for (const chatId of await store.listChats()) {
+    const prefs = await store.getPrefs(chatId);
+    if (!prefs || !prefs.active) continue;
+    if (isQuietHour(prefs, now)) continue;
+
+    const salvati = await store.listDeliveredItems(chatId, "saved", 200);
+    let inviati = 0;
+    for (const item of salvati) {
+      if (inviati >= WATCHLIST_MAX_PER_RUN) break;
+      if (item.status === "expired") continue;
+      const left = daysLeft(item.deadline, now);
+      // Senza scadenza non c'è niente da ricordare in tempo: resta nella watchlist.
+      if (left === null || left > WATCHLIST_REMINDER_DAYS[0]) continue;
+      // Un item che scade già chiuso (left < 0) non si annuncia più.
+      if (left < 0) continue;
+      const soglia = left <= 1 ? 1 : 3;
+      const kind = `reminder:${soglia}`;
+      if (await store.isDelivered(chatId, item.id, kind)) continue;
+
+      const quando = left === 0 ? "chiude oggi" : left === 1 ? "chiude domani" : `chiude tra ${left} giorni`;
+      const testo = `⭐ <b>Watchlist</b> · ${quando}\n\n${formatItemCard(item, now)}`;
+      const result = await tg.sendMessage(chatId, testo, {
+        keyboard: instantKeyboard(item, regolamentoUrl(item)),
+        disablePreview: true,
+      });
+      if (!result.ok) continue;
+
+      // La soglia annunciata resta registrata: il giro successivo non ripete lo
+      // stesso promemoria (e quello a un giorno resta un messaggio a sé).
+      await store.recordDelivery(chatId, item.id, kind, now.toISOString());
+      inviati++;
+      sent++;
+    }
+  }
+
+  return { sent };
 }
 
 export async function sendInstantAlerts(deps: NotifyDeps): Promise<{ sent: number }> {

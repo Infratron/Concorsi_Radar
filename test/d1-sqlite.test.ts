@@ -153,6 +153,33 @@ describe("store D1 · SQL vero su SQLite", () => {
     expect(await store.queryItems({ limit: 0 })).toHaveLength(1);
   });
 
+  it("pagina con LIMIT e OFFSET, e ordina i chiusi dal più recente", async () => {
+    // Pari punteggio e stessa data: senza l'id come ultimo criterio due pagine
+    // possono sovrapporsi.
+    for (let index = 1; index <= 5; index++) {
+      await store.insertItem(
+        item({ urlKey: `pag-${index}`, url: `https://esempio.it/pag-${index}`, title: `Concorso pagina ${index}`, score: 50 }),
+      );
+    }
+    await store.insertItem(
+      item({ urlKey: "chiuso-prima", title: "Chiuso prima", score: 20, deadline: "2026-09-01", firstSeenAt: "2026-09-01T08:00:00.000Z" }),
+    );
+    await store.insertItem(
+      item({ urlKey: "chiuso-dopo", title: "Chiuso dopo", score: 10, deadline: "2026-10-15", firstSeenAt: "2026-10-15T08:00:00.000Z" }),
+    );
+
+    const prima = await store.queryItems({ orderBy: "score", limit: 3 });
+    const seconda = await store.queryItems({ orderBy: "score", limit: 3, offset: 3 });
+    expect(prima.map((row) => row.id)).toEqual([5, 4, 3]);
+    // Tutte con lo stesso punteggio: la seconda pagina non ripete la prima, e
+    // dietro ai pari punteggio arrivano i due concorsi già chiusi.
+    expect(seconda.map((row) => row.id)).toEqual([2, 1, 6]);
+
+    // Storico: prima chi ha chiuso per ultimo, e chi non ha una scadenza non entra.
+    const chiusi = await store.queryItems({ deadlineBefore: "2026-10-16", orderBy: "deadline_desc" });
+    expect(chiusi.map((row) => row.urlKey)).toEqual(["chiuso-dopo", "chiuso-prima"]);
+  });
+
   it("aggiorna i campi indicati senza toccare gli altri", async () => {
     await store.insertItem(item({ deadline: null, prize: null, participation: null }));
     await store.updateItem(1, { deadline: "2026-12-15", tags: ["viaggio"], score: 88, aiUsed: true });

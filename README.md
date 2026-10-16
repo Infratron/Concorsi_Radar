@@ -331,9 +331,10 @@ casi in chat resta un messaggio solo.
 
 [🆕 Nuovi (3)]        [📋 Oggi (12)]
 [📅 7 giorni (40)]    [⏳ Scadenze (2)]
-[⭐ Salvati (1)]      [📰 News (7)]
-[🔍 Cerca]            [📡 Fonti]
-[⚙️ Impostazioni]     [🔄 Aggiorna]
+[⭐ Watchlist (1)]    [📰 News (7)]
+[🔍 Cerca]            [🗂 Storico]
+[📡 Fonti]            [⚙️ Impostazioni]
+[🔄 Aggiorna]
 ```
 
 | Sezione | Cosa mostra |
@@ -341,8 +342,9 @@ casi in chat resta un messaggio solo.
 | 🆕 Nuovi | quello che è arrivato **dall'ultimo controllo** (il numero è sulla voce del menù) |
 | 📋 Oggi / 📅 7 giorni | l'archivio recente, ordinato per punteggio |
 | ⏳ Scadenze | chi chiude entro 7 giorni e **non è già chiuso** |
-| ⭐ Salvati | i concorsi che hai salvato, con la scadenza più vicina in cima |
+| ⭐ Watchlist | i concorsi che hai salvato, **ordinati per scadenza** (chi chiude prima sta in cima) e con il promemoria a 3 giorni e 1 giorno dalla chiusura |
 | 📰 News | gli articoli e le pagine-elenco che parlano di concorsi: **non** sono concorsi, e il link porta al pezzo, non alla pagina ufficiale |
+| 🗂 Storico | cosa è successo a quello che hai visto: 🏆 vinti, ⌛ chiusi (chi ha chiuso per ultimo in cima) e 🚫 scartati, che da lì puoi riprendere |
 | 🔍 Cerca | scrivi una parola: il bot cancella il tuo messaggio e mostra i risultati (concorsi e news insieme, gli articoli marcati 📰) |
 | 📡 Fonti | quali fonti rispondono, quando, e le ultime raccolte |
 | ⚙️ Impostazioni | soglia degli avvisi, fascia di silenzio, orari dei digest |
@@ -354,17 +356,31 @@ che *notificano* (avvisi immediati e digest) guardano la stessa fetta, quindi un
 articolo non ti sveglia per niente.
 
 Gli elenchi sono **bottone per concorso** (`⭐85 ⏳3gg · Concorso Barilla…`):
-toccandone uno si apre la scheda, e da lì `⬅️ Torna all'elenco`. Nella scheda ci
-sono le decisioni ✅ Salva, 🚫 Non mi interessa, 🏆 Vinto (quella già presa resta
-visibile e inerte), 🔗 Apri e 📄 Regolamento quando l'URL è nel testo.
+toccandone uno si apre la scheda, e da lì `⬅️ Torna all'elenco`. Il numero è il
+punteggio 0-100 (premio, sforzo, urgenza, freschezza, più i tuoi feedback), ed è
+il criterio con cui ogni elenco è ordinato: in cima c'è quello che vale di più
+adesso. Nella scheda ci sono le decisioni ⭐ Watchlist, 🚫 Non mi interessa, 🏆
+Vinto (quella già presa resta visibile e inerte), 🔗 Apri e 📄 Regolamento quando
+l'URL è nel testo.
 
-**Salva** e **Non mi interessa** addestrano i pesi: ogni tag dei concorsi che
+Ogni elenco è **a pagine di sei**, con `⬅️ Prec` / `Succ ➡️` e il numero di
+pagina in mezzo: la pagina che vedi la legge il database con LIMIT/OFFSET, quindi
+si sfoglia tutto l'archivio, non solo le prime righe.
+
+**⭐ Watchlist** è il posto dove tieni i concorsi che vuoi fare davvero. Due cose
+la rendono utile: l'ordine per scadenza (chi chiude prima è in cima) e il
+promemoria automatico **tre giorni e un giorno prima della chiusura** — un
+messaggio con il link, così non si perde proprio quello che tenevi d'occhio. Chi
+non ha una scadenza resta in watchlist senza promemoria.
+
+**Watchlist** e **Non mi interessa** addestrano i pesi: ogni tag dei concorsi che
 salvi guadagna un punto, quelli che ignori ne perdono uno (clamp ±5 per tag),
 quindi i punteggi si spostano verso i tuoi gusti. Le decisioni sono **per
 persona**: se tu ignori un concorso, alla tua amica arriva lo stesso.
 
-**Le notifiche** (avvisi immediati e digest) sono messaggi a sé, e hanno gli stessi
-bottoni: dal digest tocchi un concorso e si apre la scheda nella schermata viva.
+**Le notifiche** (avvisi immediati, promemoria della watchlist e digest) sono
+messaggi a sé, e hanno gli stessi bottoni: dal digest tocchi un concorso e si
+apre la scheda nella schermata viva.
 La differenza è cosa succede dopo: il digest **resta** (è contenuto da rileggere),
 mentre l'avviso immediato ha già fatto il suo lavoro appena lo usi e il bot lo
 cancella, così in chat non resta niente di appeso.
@@ -374,8 +390,9 @@ digest e nella scheda — non sposta i pesi due volte.
 
 I comandi funzionano ancora ma sono scorciatoie, non il modo normale: `/start`
 (che è anche l'iscrizione, ed è l'unico pubblicato nel menù "/" di Telegram),
-`/menu`, `/nuovi`, `/oggi`, `/settimana`, `/scadenze`, `/salvati`, `/news`,
-`/cerca`, `/fonti`, `/impostazioni`, `/stop` e `/salva|/vinto|/ignora <id>`.
+`/menu`, `/nuovi`, `/oggi`, `/settimana`, `/scadenze`, `/salvati` (o
+`/watchlist`), `/news`, `/storico`, `/vinti`, `/scaduti`, `/cerca`, `/fonti`,
+`/impostazioni`, `/stop` e `/salva|/vinto|/ignora <id>`.
 
 ## 6. Deduplica: perché è fatta così
 

@@ -10,6 +10,7 @@ import {
   menuKeyboard,
   sectionTitle,
   settingsKeyboard,
+  storicoKeyboard,
 } from "./keyboard.ts";
 
 /**
@@ -49,6 +50,10 @@ export const SECTIONS = [
   "scadenze",
   "salvati",
   "news",
+  "storico",
+  "vinti",
+  "scaduti",
+  "ignorati",
   "cerca",
   "fonti",
   "impostazioni",
@@ -143,6 +148,10 @@ export interface ScreenCounts {
   news: number;
   /** Concorsi in archivio, di qualunque stato: la metà "buona" dell'archivio. */
   contest: number;
+  /** Storico: contati solo quando si apre 🗂 Storico, per non pesare sul menù. */
+  vinti: number;
+  scaduti: number;
+  ignorati: number;
 }
 
 export interface ScreenData {
@@ -202,31 +211,41 @@ function listScreen(state: UiState, data: ScreenData, now: Date): Screen {
   // non deve mostrare una pagina vuota: si riporta dentro e si ri-renderizza.
   const page = Math.min(Math.max(data.page, 0), pagine - 1);
 
-  // Sostantivo giusto per la sezione: nella news non si "tocca un concorso".
-  const articoli = state.section === "news";
+  // Sostantivo giusto per la sezione: nella news non si "tocca un concorso", e
+  // nello storico non si sta guardando qualcosa da fare adesso.
+  const nomi: Record<string, [string, string]> = {
+    news: ["articolo", "articoli"],
+    salvati: ["concorso in watchlist", "concorsi in watchlist"],
+    vinti: ["concorso vinto", "concorsi vinti"],
+    scaduti: ["concorso chiuso", "concorsi chiusi"],
+    ignorati: ["concorso scartato", "concorsi scartati"],
+  };
+  const [singolare, plurale] = nomi[state.section] ?? ["concorso", "concorsi"];
   if (data.items.length === 0) {
-    const vuoto =
-      state.section === "salvati"
-        ? "Non hai ancora salvato niente: apri un concorso e tocca ✅ Salva."
-        : articoli
-          ? "Nessun articolo qui: le news arrivano dalle fonti di cronaca, appena le trovano."
-          : "Nessun concorso qui. Tocca 🔄 Aggiorna più tardi.";
+    const vuoti: Record<string, string> = {
+      salvati: "La watchlist è vuota: apri un concorso e tocca ⭐ Watchlist per non perderlo di vista.",
+      news: "Nessun articolo qui: le news arrivano dalle fonti di cronaca, appena le trovano.",
+      vinti: "Nessuna vittoria registrata: quando ne vinci uno, apri la scheda e tocca 🏆 Vinto.",
+      scaduti: "Nessun concorso chiuso in archivio: qui finiscono quelli la cui scadenza è passata.",
+      ignorati: "Non hai scartato niente: quello che tocchi 🚫 finisce qui, e da qui puoi riprenderlo.",
+    };
     return {
-      text: `📭 <b>${escapeHtml(title)}</b>\n\n${vuoto}`,
+      text: `📭 <b>${escapeHtml(title)}</b>\n\n${vuoti[state.section] ?? "Nessun concorso qui. Tocca 🔄 Aggiorna più tardi."}`,
       keyboard: backKeyboard(),
     };
   }
 
-  const nome =
-    data.total === 1 ? (articoli ? "articolo" : "concorso") : articoli ? "articoli" : "concorsi";
+  const nome = data.total === 1 ? singolare : plurale;
   const righe = [
     `<b>${escapeHtml(title)}</b> · ${data.total} ${nome}${
       pagine > 1 ? ` · pagina ${page + 1}/${pagine}` : ""
     }`,
     "",
-    articoli
+    state.section === "news"
       ? "Qui ci sono gli articoli: il link porta al pezzo, non alla pagina del concorso."
-      : "Tocca un concorso per aprirlo:",
+      : state.section === "salvati"
+        ? "Ordinati per scadenza: chi chiude prima sta in cima. Ti avviso 3 giorni e 1 giorno prima."
+        : "Tocca un concorso per aprirlo:",
   ];
   return {
     text: righe.join("\n"),
@@ -241,7 +260,7 @@ function cardScreen(state: UiState, data: ScreenData, now: Date): Screen {
   }
   const stato =
     data.decision === "saved"
-      ? "✅ <b>Salvato da te</b>"
+      ? "⭐ <b>Nella tua watchlist</b>"
       : data.decision === "ignored"
         ? "🚫 <b>Ignorato da te</b>"
         : data.decision === "won"
@@ -323,6 +342,17 @@ export function renderScreen(state: UiState, data: ScreenData, now: Date): Scree
       const righe = ["📡 <b>Concorsi Radar</b>", "", ...headerLines(state, data, now)];
       return { text: righe.join("\n"), keyboard: menuKeyboard(data.counts) };
     }
+    case "storico":
+      return {
+        text: [
+          "🗂 <b>Storico</b>",
+          "",
+          `🏆 <b>${data.counts.vinti}</b> vinti · ⌛ <b>${data.counts.scaduti}</b> chiusi · 🚫 <b>${data.counts.ignorati}</b> scartati`,
+          "",
+          "Qui ritrovi quello che hai già visto: i concorsi a cui hai partecipato e vinto, quelli che hanno chiuso e quelli che avevi scartato.",
+        ].join("\n"),
+        keyboard: storicoKeyboard(data.counts),
+      };
     case "fonti":
       return sourcesScreen(data);
     case "impostazioni":

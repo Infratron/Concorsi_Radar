@@ -382,6 +382,46 @@ describe("memory store · fonti, run, ai e robots", () => {
     expect(await store.claimUpdate(102, "2026-10-16T08:00:02.000Z")).toBe(true);
   });
 
+  it("pagina con limit e offset senza saltare né ripetere righe", async () => {
+    // Stesso punteggio e stessa data di inserimento per tutte: è il caso in cui,
+    // senza un ultimo criterio unico, due pagine si sovrappongono.
+    for (let index = 1; index <= 7; index++) {
+      await store.insertItem(makeItem({ urlKey: `key-${index}`, url: `https://esempio.it/${index}`, title: `Concorso ${index}` }));
+    }
+
+    const prima = await store.queryItems({ limit: 3 });
+    const seconda = await store.queryItems({ limit: 3, offset: 3 });
+    const terza = await store.queryItems({ limit: 3, offset: 6 });
+    expect(prima).toHaveLength(3);
+    expect(seconda).toHaveLength(3);
+    expect(terza).toHaveLength(1);
+
+    const visti = [...prima, ...seconda, ...terza].map((row) => row.id);
+    expect(new Set(visti).size).toBe(7);
+    // Le righe a pari punteggio escono dalla più recente: il penultimo inserito
+    // sta prima dell'ultimo solo se l'ordine non è stabile, quindi qui si
+    // controlla l'ordine esatto.
+    expect(visti).toEqual([7, 6, 5, 4, 3, 2, 1]);
+  });
+
+  it("ordina i chiusi per data di chiusura, i più recenti per primi", async () => {
+    const chiusoDaPoco = await store.insertItem(
+      makeItem({ urlKey: "key-a", url: "https://esempio.it/a", title: "Chiuso ieri", deadline: "2026-10-15", score: 40 }),
+    );
+    const chiusoDaTanto = await store.insertItem(
+      makeItem({ urlKey: "key-b", url: "https://esempio.it/b", title: "Chiuso a settembre", deadline: "2026-09-01", score: 90 }),
+    );
+    const senzaScadenza = await store.insertItem(
+      makeItem({ urlKey: "key-c", url: "https://esempio.it/c", title: "Senza scadenza", deadline: null, score: 100 }),
+    );
+    await store.insertItem(makeItem({ urlKey: "key-d", url: "https://esempio.it/d", title: "Ancora aperto", deadline: "2026-12-31" }));
+
+    const chiusi = await store.queryItems({ deadlineBefore: "2026-10-16", orderBy: "deadline_desc", limit: 10 });
+    expect(chiusi.map((row) => row.id)).toEqual([chiusoDaPoco.item.id, chiusoDaTanto.item.id]);
+    // La riga senza scadenza resta fuori dal filtro, non "in fondo".
+    expect(chiusi.map((row) => row.id)).not.toContain(senzaScadenza.item.id);
+  });
+
   it("recordRun e recentRuns restituiscono i run più recenti per primi", async () => {
     await store.recordRun({ startedAt: "2026-10-16T08:00:00.000Z", trigger: "*/15 * * * *", sourcesOk: 2, sourcesFail: 0, itemsNew: 4, ms: 120, note: null });
     await store.recordRun({ startedAt: "2026-10-16T09:00:00.000Z", trigger: "*/15 * * * *", sourcesOk: 1, sourcesFail: 1, itemsNew: 2, ms: 200, note: "soldissimi: HTTP 429" });
