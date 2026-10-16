@@ -62,6 +62,38 @@ describe("cancello · concorso ancora attivo", () => {
     expect(staleReason(item({ summary: "Il concorso si concluderà il 30 novembre 2026." }), NOW)).toBeNull();
   });
 
+  it("il vincitore come premio non chiude il concorso", () => {
+    // Falso positivo misurato il 16/10/2026 sul feed Scontrino Felice: il
+    // vincitore era il PREMIO, non l'annuncio che la gara era finita.
+    expect(
+      staleReason(
+        item({
+          title: "Concorso Caffè Borbone: vinci abbonamenti NOW e incontra il vincitore di X Factor 2026",
+          publishedAt: "2026-10-09T06:07:00.000Z",
+        }),
+        NOW,
+      ),
+    ).toBeNull();
+    // La chiusura vera invece si vede ancora.
+    expect(staleReason(item({ summary: "A breve l'elenco dei vincitori sul sito." }), NOW)).toBe("concorso già chiuso");
+    expect(staleReason(item({ summary: "I vincitori sono stati contattati." }), NOW)).toBe("concorso già chiuso");
+  });
+
+  it("un numero di modello non è un anno di edizione", () => {
+    // Falso positivo misurato il 16/10/2026: "Philips Airfryer Serie 2000"
+    // diventava "edizione chiusa (2000)" e faceva scartare un concorso vivo.
+    expect(
+      staleReason(
+        item({
+          title: "Concorso Sottilette: in palio friggitrici ad aria Philips",
+          summary: "In palio una Philips Airfryer Serie 2000 da 6,2 litri. Scade il 30 novembre.",
+          publishedAt: "2026-10-08T05:40:00.000Z",
+        }),
+        NOW,
+      ),
+    ).toBeNull();
+  });
+
   it("scarta la pagina che non si aggiorna da mesi", () => {
     const vecchia = new Date(NOW.getTime() - (STALE_PAGE_DAYS + 1) * 86_400_000).toISOString();
     expect(staleReason(item({ publishedAt: vecchia }), NOW)).toBe(`pagina ferma da ${STALE_PAGE_DAYS + 1} giorni`);

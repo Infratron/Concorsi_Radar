@@ -70,6 +70,10 @@ Decisioni di progetto che contano:
   slug — le pagine di catalogo, le tassonomie e le pagine indice. Le stesse
   regole valgono per il digest e per la pulizia dell'archivio (`npm run prune`),
   e la nota di ogni raccolta dice quanti item ha scartato e perché.
+  Due falsi positivi misurati il 16/10/2026 e corretti: un anno citato vale come
+  edizione chiusa solo se è plausibile ("Philips Airfryer **Serie 2000**" non è
+  un'edizione del 2000) e la parola "vincitore" da sola non chiude niente —
+  "incontra il vincitore di X Factor" è il premio, non la fine della gara.
 - **Concorsi e articoli sono due cose diverse, e in chat stanno in due posti.**
   Ogni item entra in archivio con un tipo (`contest` o `news`) deciso in
   [src/enrich/kind.ts](src/enrich/kind.ts) da URL, titolo e tipo di fonte: la
@@ -423,6 +427,16 @@ un falso accoppiamento costa un concorso perso. Le stesse coppie sono bloccate
 come test in [test/text.test.ts](test/text.test.ts) e
 [test/dedupe.test.ts](test/dedupe.test.ts).
 
+**Quando vincono due copie dello stesso concorso, in archivio resta il nome
+migliore.** Un duplicato non crea una seconda riga, ma può portare un nome più
+completo: se il candidato contiene tutte le parole del titolo già salvato e ne ha
+altre — o se ha le stesse parole scritte meglio — il titolo in archivio viene
+aggiornato (insieme al suo SimHash, che è la firma di quel titolo). Il caso
+misurato: la sitemap di Scontrino Felice dà lo slug, il suo feed il titolo vero, e
+prima vinceva quella che capitava per prima. In ogni altro caso il nome in
+archivio non si tocca: meglio un nome imperfetto che uno sostituito con uno
+peggiore.
+
 ## 7. Punteggio e antispam
 
 Punteggio 0-100 (`src/enrich/score.ts`), pesi trasparenti: valore del premio
@@ -452,9 +466,19 @@ Freni antispam, tutti attivi per default:
 ## 8. Fonti monitorate
 
 Verificate il 16/10/2026 (feed leggibili senza login): Premi e Concorsi,
-Scontrino Felice (con acquisto + gratuiti), DimmiCosaCerchi, Soldissimi, Vincimi,
-più sei query Google News e alcune sitemap. L'elenco completo con stato di
-verifica è in [src/config/sources.ts](src/config/sources.ts).
+Scontrino Felice (**quattro** sezioni: con acquisto, gratuiti, premio certo,
+raccolte punti), DimmiCosaCerchi, Soldissimi, Vincimi, più sei query Google News
+e alcune sitemap. L'elenco completo con stato di verifica è in
+[src/config/sources.ts](src/config/sources.ts).
+
+**Scontrino Felice** è la fonte più ricca, e la sua sitemap e i suoi feed
+pubblicano gli **stessi URL**: la deduplica li tiene come una riga sola e vince il
+nome più completo (vedi la sezione 6). Misurato il 16/10/2026 sulle sue sole
+cinque fonti: **87 concorsi, 87 URL distinti, zero titoli mozzi**, e al giro
+successivo 0 nuovi su 20 riletti. Si legge con i suoi feed e non dalla sitemap
+perché i feed portano il titolo vero ("Concorso Lievital: vinci Forni e
+Scaldavivande") mentre la sitemap porta lo slug ("Concorso Lievital"): 25 item per
+sezione, che è tutto quello che il sito tiene in vetrina.
 
 **I brand.** Gli aggregatori non coprono i concorsi che un'azienda pubblica solo
 sul proprio sito: l'unico modo è guardare le **sitemap e le pagine promozionali**

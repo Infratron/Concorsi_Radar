@@ -74,7 +74,7 @@ const CONTEST_FOLDER = /(concors|premi|promo|offer|iniziativ|operazion|raccolt)/
  * sezione concorsi.
  */
 const LIST_TITLE =
-  /\b(tutti i concorsi|tutti i premi|i migliori concorsi|migliori concorsi|concorsi del mese|concorsi della settimana|concorsi in scadenza|elenco (?:completo )?(?:dei |di )?concorsi|lista (?:completa )?(?:dei |di )?concorsi|rassegna (?:dei |di )?concorsi|guida ai concorsi|calendario dei concorsi|nuovi concorsi|concorsi a premi 20\d{2})\b/i;
+  /\b(tutti i concorsi|tutti i premi|i migliori concorsi|migliori concorsi|concorsi del mese|concorsi della settimana|concorsi in scadenza|elenco (?:completo )?(?:dei |delle |di )?(concorsi|premi|iniziative|promozioni|offerte|raccolte)|lista (?:completa )?(?:dei |delle |di )?(concorsi|premi|iniziative|promozioni|offerte|raccolte)|rassegna (?:dei |delle |di )?(concorsi|premi|iniziative)|guida ai concorsi|calendario dei concorsi|nuovi concorsi|concorsi a premi 20\d{2})\b/i;
 
 /** Quanti concorsi promette il titolo: "12 concorsi a premi da provare". */
 const LIST_TITLE_COUNT = /\b\d{1,3}\s+concorsi\b/i;

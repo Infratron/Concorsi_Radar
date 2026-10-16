@@ -74,6 +74,14 @@ describe("concorso o articolo", () => {
     expect(kind("https://blog.example.it/come-vincere", "I migliori concorsi del mese")).toBe("news");
     expect(kind("https://blog.example.it/20-concorsi", "20 concorsi a premi da provare")).toBe("news");
     expect(kind("https://blog.example.it/rassegna", "Rassegna dei concorsi in scadenza")).toBe("news");
+    // Caso reale di Scontrino Felice: la pagina che raccoglie le iniziative con
+    // rimborso non è un concorso, è l'indice di quelli.
+    expect(
+      kind(
+        "https://www.scontrinofelice.it/spendi-e-riprendi/provami-gratis-spendi-e-riprendi-cashback/",
+        "Provami Gratis e Cashback 2026: elenco completo delle iniziative con rimborso attive",
+      ),
+    ).toBe("news");
   });
 
   it("riconosce i permalink con la data", () => {

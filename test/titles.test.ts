@@ -39,9 +39,15 @@ describe("titoli leggibili", () => {
     expect(readableTitle("Caffè2026")).toBe("Caffè 2026");
   });
 
-  it("separa le parole incollate senza inventarne di nuove", () => {
-    expect(readableTitle("GlowWin Beauty")).toBe("Glow Win Beauty");
-    // Nessun dizionario: "Vinciwonka" resta una parola sola, ma non più urlata.
+  it("non spezza i marchi scritti con la maiuscola in mezzo", () => {
+    // Casi reali dell'archivio: la separazione delle parole incollate li
+    // trasformava in "In Post", "Kitchen Aid" e "The Fork".
+    expect(readableTitle("Concorso gratuito InPost: in palio 12 voucher")).toBe(
+      "Concorso gratuito InPost: in palio 12 voucher",
+    );
+    expect(readableTitle("KitchenAid")).toBe("KitchenAid");
+    expect(readableTitle("Gift Card TheFork da 50 Euro")).toBe("Gift Card TheFork da 50 Euro");
+    // Nessun dizionario: "Vincimomentiinsieme" resta una parola sola, scritta bene.
     expect(readableTitle("VINCIWONKA")).toBe("Vinciwonka");
   });
 
@@ -58,7 +64,7 @@ describe("titoli leggibili", () => {
       "LA CACCIA AL TESORO DEL CAPITANO",
       "ŠKODAXFACTOR2026",
       "Vinciwonka2026",
-      "GlowWin Beauty",
+      "Concorso gratuito InPost: in palio 12 voucher",
       "Concorso Lievital: vinci Forni e Scaldavivande",
       "«IL GRANDE PREMIO»",
     ];

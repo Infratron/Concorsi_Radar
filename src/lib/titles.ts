@@ -23,8 +23,15 @@ const SMALL_WORDS = new Set([
 /** Anno attaccato alle lettere: "Vinciwonka2026" → "Vinciwonka 2026". */
 const GLUED_YEAR = /(\p{L})((?:19|20)\d{2})\b/gu;
 
-/** Confine interno fra minuscola e maiuscola: "GlowWin" → "Glow Win". */
-const CAMEL_BOUNDARY = /([a-zà-öø-ÿ])([A-ZÀ-ÖØ-Þ])/g;
+/*
+ * Non si separano le parole incollate in mezzo ("GlowWin", "InPost"): non c'è
+ * modo di distinguere un refuso da un marchio scritto così, e il costo è tutto
+ * dalla parte sbagliata. Misurato sull'archivio del 16/10/2026: la regola
+ * migliorava "GlowWin" ma rovinava "InPost" → "In Post", "KitchenAid" →
+ * "Kitchen Aid" e "TheFork" → "The Fork". Meglio un nome incollato che un
+ * marchio sbagliato: l'anno attaccato invece si separa sempre, perché lì il
+ * confine è certo.
+ */
 
 /** Quota di maiuscole oltre la quale il titolo è "urlato". */
 const SHOUTING_RATIO = 0.6;
@@ -88,6 +95,6 @@ function toReadableCase(input: string): string {
 export function readableTitle(raw: string): string {
   const collapsed = raw.replace(/\s+/g, " ").trim();
   if (collapsed.length === 0) return "";
-  const spaced = collapsed.replace(CAMEL_BOUNDARY, "$1 $2").replace(GLUED_YEAR, "$1 $2");
+  const spaced = collapsed.replace(GLUED_YEAR, "$1 $2");
   return isShouting(spaced) ? toReadableCase(spaced) : spaced;
 }

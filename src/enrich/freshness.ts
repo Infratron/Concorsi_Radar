@@ -35,10 +35,29 @@ const YEAR = /\b(20\d{2})\b/g;
 /**
  * Parole che dicono che il concorso è finito. Sono al passato di proposito:
  * "si concluderà il 30 novembre" non deve far scartare un concorso vivo, mentre
- * "concorso concluso" e "vincitori" sì.
+ * "concorso concluso" sì.
+ *
+ * La parola "vincitore" da sola NON basta: il 16/10/2026 ha fatto scartare il
+ * concorso Caffè Borbone, il cui titolo dice "incontra il vincitore di X Factor
+ * 2026" — cioè il vincitore è il premio, non la notizia che la gara è chiusa.
+ * Conta solo dentro una frase che annuncia la chiusura ("elenco dei vincitori",
+ * "i vincitori sono stati proclamati").
+ *
+ * Il confronto ignora le maiuscole: i titoli dei feed cominciano spesso con la
+ * frase in maiuscolo ("I vincitori sono stati contattati") e senza il flag `i`
+ * quelle chiusure non si vedevano affatto.
  */
 const CLOSED_TEXT =
-  /\b(vincitor[ei]|vincitric[ei]|graduatoria|verbale|estrazione avvenuta|estratto a sorte|sono stati estratti|premi assegnati|conclus[oi]|conclus[ae]|terminat[oi]|terminat[ae]|scadut[oi]|scadut[ae]|non pi[uù] attivo|si [eè] chius[oa]|edizione (?:passata|precedente|scorsa)|in archivio)\b/;
+  /\b((?:elenco|lista|proclamazione)\s+de[il]\s+vincitor[ei]|vincitor[ei]\s+de[il]\s+(?:concors\w*|premi\w*|estrazion\w*|edizion\w*)|i\s+vincitor[ei]\s+sono|vincitor[ei]\s+proclamat[ei]|graduatoria|verbale|estrazione avvenuta|estratto a sorte|sono stati estratti|premi assegnati|conclus[oi]|conclus[ae]|terminat[oi]|terminat[ae]|scadut[oi]|scadut[ae]|non pi[uù] attivo|si [eè] chius[oa]|edizione (?:passata|precedente|scorsa)|in archivio)\b/i;
+
+/**
+ * Un anno citato vale come "edizione chiusa" solo se è plausibile come anno di
+ * un'edizione: entro gli ultimi YEAR_LOOKBACK anni. Senza questo limite il
+ * modello di un prodotto fa scartare un concorso vero — misurato il 16/10/2026:
+ * "Concorso Sottilette: in palio friggitrici ad aria Philips" letto come
+ * "edizione chiusa (2000)" per via della Philips Airfryer Serie 2000.
+ */
+const YEAR_LOOKBACK = 5;
 
 export interface FreshnessInput {
   title: string;
@@ -85,7 +104,7 @@ function pastYear(text: string, now: Date): number | null {
   let match: RegExpExecArray | null;
   while ((match = YEAR.exec(text)) !== null) {
     const year = Number(match[1]);
-    if (year < current && (found === null || year > found)) found = year;
+    if (year >= current - YEAR_LOOKBACK && year < current && (found === null || year > found)) found = year;
   }
   return found;
 }

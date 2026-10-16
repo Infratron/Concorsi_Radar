@@ -27,6 +27,11 @@ export const SOURCES: SourceConfig[] = [
     enabled: true,
     maxItems: 15,
   },
+  // Scontrino Felice: il sito divide i concorsi in sezioni, e ogni sezione ha
+  // il suo feed. Misurato il 16/10/2026, ogni feed porta 25 item (non 10 come il
+  // default di WordPress) e i titoli sono completi, con premio e marca: per
+  // questo i maxItems stanno a 25 e non a 15 — tagliare a 15 significava perdere
+  // dieci concorsi per giro senza guadagnare niente.
   {
     id: "scontrinofelice-acquisto",
     name: "Scontrino Felice · concorsi con acquisto",
@@ -36,7 +41,7 @@ export const SOURCES: SourceConfig[] = [
     tags: ["acquisto", "punto_vendita"],
     cadenceMin: 30,
     enabled: true,
-    maxItems: 15,
+    maxItems: 25,
   },
   {
     id: "scontrinofelice-gratuiti",
@@ -47,7 +52,35 @@ export const SOURCES: SourceConfig[] = [
     tags: ["gratis"],
     cadenceMin: 30,
     enabled: true,
-    maxItems: 15,
+    maxItems: 25,
+  },
+  // "Premio certo": non è un'estrazione, è un premio che arriva a chi partecipa
+  // (gift card, gadget, buoni). Verificato il 16/10/2026: feed da 25 item, il più
+  // vecchio di maggio 2026 — una sezione che teneva solo questo sito e che noi
+  // non leggevamo affatto.
+  {
+    id: "scontrinofelice-premio-certo",
+    name: "Scontrino Felice · premio certo",
+    kind: "rss",
+    url: "https://www.scontrinofelice.it/premio-certo/feed/",
+    category: "punto_vendita",
+    tags: ["premio_certo", "acquisto"],
+    cadenceMin: 60,
+    enabled: true,
+    maxItems: 25,
+  },
+  // Raccolte punti e bollini: è la stessa famiglia dei concorsi dei supermercati
+  // che già seguiamo con le sitemap dei brand, e qui arrivano con la data.
+  {
+    id: "scontrinofelice-raccolte-punti",
+    name: "Scontrino Felice · raccolte punti",
+    kind: "rss",
+    url: "https://www.scontrinofelice.it/raccolte-punti/feed/",
+    category: "punto_vendita",
+    tags: ["raccolta_punti", "punto_vendita"],
+    cadenceMin: 60,
+    enabled: true,
+    maxItems: 25,
   },
   {
     id: "dimmicosacerchi",
