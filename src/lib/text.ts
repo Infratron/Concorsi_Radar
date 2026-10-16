@@ -307,12 +307,6 @@ export function jaccard(a: string[], b: string[]): number {
   return union === 0 ? 0 : intersection / union;
 }
 
-/**
- * Toglie dal titolo le parole che compongono il nome della fonte: gli
- * aggregatori antepongono il proprio nome ("Scontrino Felice - Concorso…") e
- * quel token estraneo abbasserebbe la similarità con lo stesso concorso visto
- * altrove. Se il titolo resterebbe troppo corto, si tiene l'originale.
- */
 export function sourceNameTokens(sourceName: string): Set<string> {
   return new Set(tokens(sourceName));
 }
@@ -322,23 +316,87 @@ function wordKey(word: string): string {
   return stripDiacritics(word).toLowerCase().replace(/[^a-z0-9]+/g, "");
 }
 
-export function stripSourceTokens(title: string, sourceName: string | Set<string>): string {
-  const unwanted = typeof sourceName === "string" ? sourceNameTokens(sourceName) : sourceName;
-  if (unwanted.size === 0) return title.trim();
+/** Un token fatto solo di separatori: "-", "|", "·", "»"… */
+const SEPARATOR_ONLY = /^[\s\-–—:|·•>»«]+$/;
 
-  const cleaned = title
-    .split(/\s+/)
-    .filter((word) => {
-      const key = wordKey(word);
-      return key.length === 0 || !unwanted.has(key);
-    })
+/** Sotto questa soglia il taglio ha tolto troppo: si tiene il titolo originale. */
+const MIN_STRIPPED_CHARS = 12;
+const MIN_STRIPPED_WORDS = 2;
+
+interface WordRun {
+  /** Indice (inclusivo) del primo token da togliere. */
+  start: number;
+  /** Indice (esclusivo) dell'ultimo token da togliere. */
+  end: number;
+}
+
+/**
+ * Blocco iniziale di parole della fonte: "Scontrino Felice - Concorso…" toglie
+ * "Scontrino Felice" e il separatore che lo chiude.
+ *
+ * Due parole bastano a riconoscere il boilerplate; una sola parola viene tolta
+ * solo se un separatore la stacca dal resto, perché altrimenti è la prima parola
+ * del titolo: il nome della fonte "Sammontana · gusta e vinci" non deve mangiare
+ * la "S" di "Sammontana E Gardaland Sorrisi Per Tutta La Famiglia".
+ */
+function leadingRun(words: string[], unwanted: Set<string>): WordRun | null {
+  let index = 0;
+  while (index < words.length && unwanted.has(wordKey(words[index]))) index++;
+  if (index === 0) return null;
+  const separator = index < words.length && SEPARATOR_ONLY.test(words[index]);
+  if (index < 2 && !separator) return null;
+  return { start: 0, end: separator ? index + 1 : index };
+}
+
+/** Stessa cosa dal fondo: "… - Scontrino Felice". */
+function trailingRun(words: string[], unwanted: Set<string>): WordRun | null {
+  let index = words.length - 1;
+  let count = 0;
+  while (index >= 0 && unwanted.has(wordKey(words[index]))) {
+    index--;
+    count++;
+  }
+  if (count === 0) return null;
+  const separator = index >= 0 && SEPARATOR_ONLY.test(words[index]);
+  if (count < 2 && !separator) return null;
+  return { start: separator ? index : index + 1, end: words.length };
+}
+
+/**
+ * Toglie dal titolo il nome della fonte, ma solo dove è davvero boilerplate: un
+ * blocco contiguo di parole della fonte in testa o in coda, chiuso da un
+ * separatore ("Scontrino Felice - Concorso Findus: 1000 euro").
+ *
+ * Le singole parole della fonte sparse dentro il titolo NON si toccano più: il
+ * nome "Sammontana · gusta e vinci" conteneva "gusta", "e" e "vinci", e la
+ * versione precedente riduceva "Gusta Gioca Vinci Gardaland" a "Gioca
+ * Gardaland" — un titolo incomprensibile, che è esattamente ciò che si voleva
+ * evitare. Quel token estraneo in testa o in coda resta un problema di
+ * similarità, ma lo risolve la deduplica (isDuplicateTitle), non il taglio a
+ * forbice del titolo mostrato all'utente.
+ */
+export function stripSourceTokens(title: string, sourceName: string | Set<string>): string {
+  const original = title.trim();
+  const unwanted = typeof sourceName === "string" ? sourceNameTokens(sourceName) : sourceName;
+  if (unwanted.size === 0 || original.length === 0) return original;
+
+  const words = original.split(/\s+/);
+  const leading = leadingRun(words, unwanted);
+  const rest = leading ? words.slice(leading.end) : words;
+  const trailing = trailingRun(rest, unwanted);
+  const kept = trailing ? rest.slice(0, trailing.start) : rest;
+  if (kept.length === words.length) return original;
+
+  const cleaned = kept
     .join(" ")
-    .replace(/^[\s\-–—:|·.]+/, "")
-    .replace(/[\s\-–—:|·.]+$/, "")
+    .replace(/^[\s\-–—:|·•>«]+/, "")
+    .replace(/[\s\-–—:|·•<»]+$/, "")
     .replace(/\s+/g, " ")
     .trim();
 
-  return cleaned.length >= 8 ? cleaned : title.trim();
+  if (cleaned.length < MIN_STRIPPED_CHARS) return original;
+  if (cleaned.split(/\s+/).length < MIN_STRIPPED_WORDS) return original;
+  return cleaned;
 }
 
 export function slugify(input: string): string {

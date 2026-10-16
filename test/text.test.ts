@@ -79,6 +79,33 @@ describe("normalizzazione del testo", () => {
     expect(
       stripSourceTokens("Scontrino Felice - Concorso Findus: 1000 euro", "Scontrino Felice · concorsi con acquisto"),
     ).toBe("Concorso Findus: 1000 euro");
+    // Anche in coda, con il separatore a staccarlo.
+    expect(
+      stripSourceTokens("Concorso Findus: 1000 euro - Scontrino Felice", "Scontrino Felice · concorsi con acquisto"),
+    ).toBe("Concorso Findus: 1000 euro");
+  });
+
+  it("non mangia le parole del titolo che somigliano al nome della fonte", () => {
+    // La fonte si chiama "Sammontana · gusta e vinci": la versione precedente
+    // toglieva "gusta", "e" e "vinci" ovunque comparissero, e questi due titoli
+    // diventavano "Gioca Gardaland" e "E Gardaland Sorrisi Per Tutta La
+    // Famiglia" — cioè illeggibili, che è il contrario dello scopo.
+    expect(stripSourceTokens("Gusta Gioca Vinci Gardaland", "Sammontana · gusta e vinci")).toBe(
+      "Gusta Gioca Vinci Gardaland",
+    );
+    expect(
+      stripSourceTokens("Sammontana E Gardaland Sorrisi Per Tutta La Famiglia", "Sammontana · gusta e vinci"),
+    ).toBe("Sammontana E Gardaland Sorrisi Per Tutta La Famiglia");
+    // Una parola sola in testa senza separatore è la prima parola del titolo
+    // (il brand che si nomina nel proprio titolo), non boilerplate da togliere.
+    expect(stripSourceTokens("Cupper vince un weekend", "Cupper")).toBe("Cupper vince un weekend");
+  });
+
+  it("non lascia un titolo più corto del dovuto", () => {
+    expect(stripSourceTokens("Scontrino Felice", "Scontrino Felice · concorsi con acquisto")).toBe("Scontrino Felice");
+    expect(stripSourceTokens("Scontrino Felice - Findus", "Scontrino Felice · concorsi con acquisto")).toBe(
+      "Scontrino Felice - Findus",
+    );
   });
 
   it("tronca e normalizza slug", () => {
