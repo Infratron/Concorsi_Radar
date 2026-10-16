@@ -5,8 +5,8 @@
   "type": "module",
   "description": "Radar dei concorsi a premi italiano: ingestione fonti, deduplica, scoring e digest su Telegram (Cloudflare Workers + D1).",
   "scripts": {
-    "dev": "wrangler dev",
-    "dev:cron": "wrangler dev --test-scheduled",
+    "dev": "wrangler dev --local",
+    "dev:cron": "wrangler dev --local --test-scheduled",
     "deploy": "wrangler deploy",
     "db:create": "wrangler d1 create concorsi-radar",
     "db:init": "wrangler d1 execute concorsi-radar --remote --file=./src/db/schema.sql",
@@ -24,10 +24,10 @@
     "bench:cpu": "node --experimental-strip-types scripts/bench-cpu.ts"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^4.20250109.0",
+    "@cloudflare/workers-types": "^5.20261016.1",
     "@types/node": "^22.10.2",
     "typescript": "^5.7.2",
     "vitest": "^2.1.8",
-    "wrangler": "^3.99.0"
+    "wrangler": "^4.151.0"
   }
 }

@@ -46,6 +46,7 @@ Decisioni di progetto che contano:
 - Node 20+ (testato su Node 24) e npm
 - Un account Cloudflare (gratuito)
 - Un bot creato con [@BotFather](https://t.me/BotFather)
+- Un account GitHub, solo se volete il deploy continuo (opzionale)
 
 ## 3. Configurazione dell'ambiente
 
@@ -77,6 +78,7 @@ autorizzato risponde con il tuo id (e non fa nient'altro). Aggiungilo a
 
 ```bash
 npm install
+npx wrangler login                # una volta sola: apre il browser su Cloudflare
 
 # 1. database
 npm run db:create                 # copia il database_id restituito in wrangler.toml
@@ -96,6 +98,11 @@ npm run deploy                    # stampa l'URL del Worker, es. https://concors
 curl "https://concorsi-radar.<tuo>.workers.dev/setup?secret=IL_TUO_WEBHOOK_SECRET"
 ```
 
+Nota sull'ordine: i segreti si aggiungono a un Worker che esiste già. Se non hai
+mai pubblicato, fai prima `npm run deploy` (o la prima build, se usi il deploy
+continuo) e poi i quattro `secrets:*`. Finché i segreti mancano, `/status`
+risponde elencandoli in `missing`: è il modo normale di accorgersene.
+
 Poi, **da entrambi gli account Telegram**, aprite il bot e premete `/start`:
 è quello che vi iscrive alle notifiche (il bot non può scrivere per primo a
 chi non ha mai avviato la conversazione). Verifica con `/help` e `/health`.
@@ -105,11 +112,16 @@ chi non ha mai avviato la conversazione). Verifica con `/help` e `/health`.
 ```bash
 npm run db:init:local
 npm run db:seed:local
-npm run dev:cron                  # wrangler dev --test-scheduled
+npm run dev:cron                  # wrangler dev --local --test-scheduled
 curl "http://127.0.0.1:8787/status"                                   # variabili mancanti
 curl "http://127.0.0.1:8787/__scheduled?cron=*/15+*+*+*+*"            # esegue l'ingestione vera
 curl "http://127.0.0.1:8787/health?secret=IL_TUO_WEBHOOK_SECRET"
 ```
+
+Gli script di sviluppo passano `--local` di proposito: da wrangler 4 i binding
+che non si possono simulare (Workers AI) verrebbero aperti in modalità *remote* e
+senza credenziali il server non partirebbe. In locale l'arricchimento AI resta
+spento — fanno tutto le regole — e si accende sul deploy, dove `env.AI` esiste.
 
 `npm run dry-run` è la prova generale **senza inviare nulla**: scarica le fonti
 vere e stampa i messaggi esatti che il bot manderebbe.
@@ -117,6 +129,60 @@ vere e stampa i messaggi esatti che il bot manderebbe.
 ```bash
 npm run dry-run -- --fonti 8
 ```
+
+### Deploy continuo da GitHub (ogni push = bot aggiornato)
+
+Il primo deploy si fa una volta a mano, come sopra. Da lì in poi conviene
+collegare il repository a Cloudflare: ogni push su `main` pubblica la nuova
+versione, senza `npm run deploy` e senza toccare segreti o database.
+
+La repository è già pronta per questo: `.gitignore` esclude `.dev.vars` (i
+segreti non entrano in git) e `.wrangler/` (il database locale di prova).
+
+```bash
+# 1. crea su GitHub un repository PRIVATO e vuoto (niente README né .gitignore: ci sono già)
+# 2. collega e spingi
+cd "<cartella del progetto>"
+git remote add origin git@github.com:<utente>/<repo>.git
+git push -u origin main
+```
+
+Poi nel dashboard Cloudflare: **Workers & Pages → Create application → GitHub**
+(se il Worker esistesse già: **Settings → Builds → Connect**), scegli il
+repository e imposta:
+
+| Impostazione | Valore |
+|---|---|
+| Production branch | `main` |
+| Root directory | *(vuota: il progetto è nella radice)* |
+| Build command | `npm ci && npm run typecheck && npm test` |
+| Deploy command | `npx wrangler deploy` |
+| Preview builds | **disattivate** (vedi sotto) |
+
+Il *build command* è la rete di sicurezza: se il typecheck o uno dei 153 test
+fallisce, la build si ferma e **il deploy non parte**. `npm ci` serve a rendere
+l'installazione riproducibile dal `package-lock.json`.
+
+Cosa **non** cambia a ogni deploy: i segreti (un deploy non li cancella), il
+database D1 e i suoi dati, il webhook Telegram già registrato. Non serve
+rieseguire `/setup` né `/start`. Serve invece che `wrangler.toml` abbia il
+`database_id` vero: con il segnaposto la build fallisce.
+
+Cosa **non** fa il deploy: le modifiche allo schema del database. Se aggiungi
+una tabella, esegui `npm run db:init` a mano (è idempotente, usa
+`CREATE TABLE IF NOT EXISTS`) oppure passa alle migrazioni tracciate di D1
+(`wrangler d1 migrations`).
+
+**Se un deploy va storto**: dashboard → Worker → **Deployments** → scegli la
+versione precedente → Rollback (istantaneo, non ricompila nulla); da riga di
+comando `npx wrangler rollback`.
+
+**Lavoro in due**: ogni push su `main` va subito in produzione, quindi per le
+modifiche delicate usate un ramo e una pull request, e solo il merge pubblica.
+Se attiverete i *Preview builds*, ogni ramo ottiene un URL di prova: ricordate
+che i Preview **non** ereditano i segreti di produzione e, con lo stesso
+`database_id`, condividono lo stesso database (per isolarli serve un secondo
+database D1).
 
 ## 5. Comandi del bot
 

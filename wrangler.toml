@@ -1,8 +1,9 @@
 name = "concorsi-radar"
 main = "src/index.ts"
-# Data di compatibilità: allineata al runtime di workerd installato da wrangler 3
-# (una data più recente fa solo un fallback con avviso in locale). Aggiorna
-# wrangler a v4 e poi puoi alzarla.
+# Data di compatibilità: congelata al comportamento già verificato in locale e
+# nei test. Alzarla cambia il runtime (non il codice): fallo di proposito, con un
+# giro di test e la prova `npm run dry-run` dopo, non come effetto collaterale di
+# un aggiornamento di wrangler.
 compatibility_date = "2025-07-18"
 workers_dev = true
 
