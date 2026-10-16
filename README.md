@@ -639,6 +639,12 @@ La tabella `runs` in D1 conserva la nota di ogni esecuzione: quelle con
   bot ne manda uno nuovo al tocco successivo, e comunque `/start` ne apre sempre
   uno fresco togliendo il precedente; aprendo il bot da due dispositivi
   con lo stesso account la schermata è la stessa, perché è la stessa chat.
+- **Aggiornando un archivio già esistente serve una riga di SQL a mano.** `npm
+  run db:init` usa `CREATE TABLE IF NOT EXISTS`, quindi non tocca le tabelle già
+  create: la colonna `kind` (concorso o articolo) va aggiunta con
+  `ALTER TABLE items ADD COLUMN kind TEXT NOT NULL DEFAULT 'contest';` — altrimenti
+  il Worker nuovo non legge l'archivio. Le righe già dentro diventano concorsi,
+  che è il valore giusto per un archivio nato prima della divisione.
 
 ## 12. Mappa del progetto
 
