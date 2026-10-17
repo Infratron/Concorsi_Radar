@@ -372,14 +372,16 @@ const NEWS_ALWAYS_OFF = [
   /\b(superenalotto|super enalotto|10e ?lotto|eurojackpot|jackpot|gratta e vinci|lotteria|lotterie|numeri vincenti|vincite? al lotto)\b/i,
   // Risultati: chi ha vinto ha già vinto, e la notizia non è un'occasione.
   /\b(ha vinto|hanno vinto|vincita da|vincite da|vincitori|vincitrice)\b/i,
-  // Premi professionali, bandi e scuola.
-  /\b(bors[ae] di studio|premio (?:giornalistic\w*|letterari\w*|nazional\w*|internazional\w*)|candidatur\w*|scuol\w*|student\w*|universit\w*|terzo settore|firmacopie)\b/i,
+  // Premi professionali, bandi e scuola. `award`/`prize` sono le stesse cose
+  // scritte in inglese: "World Sports Photography Awards" è un premio per
+  // fotografi sportivi, non un concorso da supermercato.
+  /\b(bors[ae] di studio|premio (?:giornalistic\w*|letterari\w*|nazional\w*|internazional\w*)|awards?|prizes?|candidatur\w*|scuol\w*|student\w*|universit\w*|terzo settore|firmacopie)\b/i,
   // TV e spettacolo: il "concorso" di una serie non è un concorso.
   /\b(ep\.?\s*\d+|episodio|puntata)\b/i,
 ];
 
 const NEWS_SPORT =
-  /\b(campionat\w*|torneo|trofeo|mondial\w*|olimpiad\w*|olimpic\w*|finali? nazional\w*|qualificazion\w*|tricolori|coppa (?:italia|del mondo|europa)|serie [ab]\b|enduro|motocross|rally|calcio|basket|volley|atleti|atleta|ginnastica|nuoto|ciclismo|pallavolo|pallacanestro)/i;
+  /\b(campionat\w*|torneo|trofeo|mondial\w*|olimpiad\w*|olimpic\w*|finali? nazional\w*|qualificazion\w*|tricolori|coppa (?:italia|del mondo|europa)|serie [ab]\b|enduro|motocross|rally|calcio|basket|volley|atleti|atleta|ginnastica|nuoto|ciclismo|pallavolo|pallacanestro|sports?|football|soccer|tennis|golf)/i;
 
 /** Le parole che dicono "c'è un premio da consumatore", non una gara. */
 const NEWS_CONSUMER =

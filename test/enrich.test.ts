@@ -105,6 +105,10 @@ describe("pertinenza delle fonti news", () => {
       "Borse di studio BVLG 2026: 438 i premi messi in palio per gli studenti",
       "L'Aquila, bando Il viaggio della memoria: premio per le scuole",
       "Augusta | Trofeo regionale di pittura: in palio premi e una borsa di studio",
+      // Arrivato in produzione alle 07:55 del 17/10/2026, con il filtro già nuovo:
+      // un premio per fotografi sportivi, in inglese, senza una parola italiana
+      // che lo dicesse.
+      "Vincere fotografando chi vince: al via i World Sports Photography Awards",
     ]) {
       expect(looksLikeNewsContest(titolo), titolo).toBe(false);
     }
