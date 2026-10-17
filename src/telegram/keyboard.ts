@@ -131,12 +131,8 @@ export function filtriButtonLabel(quanti: number): string {
 export function helpKeyboard(pagina: { index: number; total: number }): InlineKeyboardMarkup {
   return {
     inline_keyboard: [
-      [
-        pagina.index > 0 ? button("⬅️ Prec", `page:${pagina.index - 1}`) : done("⬅️"),
-        done(`${pagina.index + 1}/${pagina.total}`),
-        pagina.index < pagina.total - 1 ? button("Succ ➡️", `page:${pagina.index + 1}`) : done("➡️"),
-      ],
-      [button("🏠 Menù", "home")],
+      pagesRow(pagina.index, pagina.total, { prec: "⬅️ Prec", succ: "Succ ➡️" }),
+      [button("⬅️ Indietro", "back"), button("🏠 Menù", "home")],
     ],
   };
 }
@@ -222,7 +218,7 @@ export function marcheKeyboard(
     ]);
     righe.push([button("📋 I loro concorsi", "s:preferiti-lista"), button("🧹 Svuota", "cfg:brands:reset")]);
   }
-  righe.push([button("🎛 Cosa vedi", "s:filtri"), button("🏠 Menù", "home")]);
+  righe.push([button("⬅️ Indietro", "back"), button("🎛 Cosa vedi", "s:filtri"), button("🏠 Menù", "home")]);
   return { inline_keyboard: righe };
 }
 
@@ -238,21 +234,46 @@ export function filtriFontiKeyboard(
   const rows: InlineKeyboardButton[][] = sources.map((source) => [
     button(sourceToggleLabel(source, muted.includes(source.id)), `cfg:src:${source.id}`),
   ]);
-  if (pagina.total > 1) {
-    rows.push([
-      pagina.index > 0 ? button("⬅️ Prec", `page:${pagina.index - 1}`) : done("⬅️"),
-      done(`${pagina.index + 1}/${pagina.total}`),
-      pagina.index < pagina.total - 1 ? button("Succ ➡️", `page:${pagina.index + 1}`) : done("➡️"),
-    ]);
-  }
+  if (pagina.total > 1) rows.push(pagesRow(pagina.index, pagina.total, { prec: "⬅️ Prec", succ: "Succ ➡️" }));
   rows.push([button("♻️ Vedi di nuovo tutto", "cfg:reset:all")]);
-  rows.push([button("⬅️ Cosa vedi", "s:filtri"), button("🏠 Menù", "home")]);
+  rows.push([button("⬅️ Indietro", "back"), button("🎛 Cosa vedi", "s:filtri"), button("🏠 Menù", "home")]);
   return { inline_keyboard: rows };
 }
 
-/** Aggiorna + menù: la coda standard di ogni schermata. */
+/**
+ * La coda standard di ogni schermata: indietro, aggiorna, menù.
+ *
+ * `back` non è un salto al menù: torna alla schermata da cui si è arrivati, con
+ * la sua pagina, e dentro una scheda la chiude e basta (vedi applyIntent). Prima
+ * l'unico modo per uscire da una schermata annidata era ripartire dal menù, e
+ * per tornare a una pagina 5 di 6 bisognava rifare le frecce.
+ */
+export function navRow(): InlineKeyboardButton[] {
+  return [button("⬅️ Indietro", "back"), button("🔄 Aggiorna", "refresh"), button("🏠 Menù", "home")];
+}
+
 function navRows(): InlineKeyboardButton[][] {
-  return [[button("🔄 Aggiorna", "refresh"), button("🏠 Menù", "home")]];
+  return [navRow()];
+}
+
+/**
+ * La riga delle pagine: inizio, precedente, contatore, successiva.
+ *
+ * ⏮ c'è sempre, anche quando non serve: un bottone che sparisce sposta tutti gli
+ * altri, e da una pagina 5 di 6 tornare all'inizio con le frecce è il motivo per
+ * cui questa riga esiste.
+ */
+function pagesRow(
+  index: number,
+  total: number,
+  labels: { prec: string; succ: string },
+): InlineKeyboardButton[] {
+  return [
+    index > 0 ? button("⏮ Inizio", "page:0") : done("⏮ Inizio"),
+    index > 0 ? button(labels.prec, `page:${index - 1}`) : done(labels.prec),
+    done(`${index + 1}/${total}`),
+    index < total - 1 ? button(labels.succ, `page:${index + 1}`) : done(labels.succ),
+  ];
 }
 
 /**
@@ -275,7 +296,7 @@ export function storicoKeyboard(counts: {
     inline_keyboard: [
       [button(`🏆 Vinti (${counts.vinti})`, "s:vinti"), button(`⌛ Scaduti (${counts.scaduti})`, "s:scaduti")],
       [button(`🚫 Ignorati (${counts.ignorati})`, "s:ignorati"), button(`📚 Archivio (${counts.archivio})`, "s:archivio")],
-      [button("🔄 Aggiorna", "refresh"), button("🏠 Menù", "home")],
+      navRow(),
     ],
   };
 }
@@ -310,19 +331,13 @@ export function archivioKeyboard(
   const rows: InlineKeyboardButton[][] = items.map((item) => [
     button(itemButtonLabel(item, now), `open:${item.id}`),
   ]);
-  if (pagina.total > 1) {
-    rows.push([
-      pagina.index > 0 ? button("⬅️ Prec", `page:${pagina.index - 1}`) : done("⬅️"),
-      done(`${pagina.index + 1}/${pagina.total}`),
-      pagina.index < pagina.total - 1 ? button("Succ ➡️", `page:${pagina.index + 1}`) : done("➡️"),
-    ]);
-  }
+  if (pagina.total > 1) rows.push(pagesRow(pagina.index, pagina.total, { prec: "⬅️ Prec", succ: "Succ ➡️" }));
   const voce = (sezione: string, testo: string): InlineKeyboardButton =>
     button(sezione === info.sezione ? `• ${testo}` : testo, `s:${sezione}`);
   rows.push([voce("archivio", `📚 Tutto (${info.totale})`), voce("archivio:contest", `🎁 Concorsi (${info.concorsi})`)]);
   rows.push([voce("archivio:coupon", `💶 Coupon (${info.coupon})`), voce("archivio:news", `📰 Articoli (${info.articoli})`)]);
   rows.push([button("🔍 Cerca in tutto", "s:cerca")]);
-  rows.push([button("🔄 Aggiorna", "refresh"), button("🏠 Menù", "home")]);
+  rows.push(navRow());
   return { inline_keyboard: rows };
 }
 
@@ -353,15 +368,9 @@ export function listKeyboard(
     button(itemButtonLabel(item, now), `open:${item.id}`),
   ]);
 
-  if (pagina.total > 1) {
-    rows.push([
-      pagina.index > 0 ? button("⬅️ Prec", `page:${pagina.index - 1}`) : done("⬅️"),
-      done(`${pagina.index + 1}/${pagina.total}`),
-      pagina.index < pagina.total - 1 ? button("Succ ➡️", `page:${pagina.index + 1}`) : done("➡️"),
-    ]);
-  }
+  if (pagina.total > 1) rows.push(pagesRow(pagina.index, pagina.total, { prec: "⬅️ Prec", succ: "Succ ➡️" }));
   if (stelleMinime !== null) rows.push(starKeyboard(stelleMinime));
-  rows.push([button("🔄 Aggiorna", "refresh"), button("🏠 Menù", "home")]);
+  rows.push(navRow());
   return { inline_keyboard: rows };
 }
 
@@ -515,7 +524,7 @@ export function settingsKeyboard(prefs: Prefs): InlineKeyboardMarkup {
     prefs.active ? button("⏸ Sospendi notifiche", "cfg:notify:off") : button("▶️ Riattiva notifiche", "cfg:notify:on"),
   ]);
   righe.push([button("🎛 Cosa vedi", "s:filtri")]);
-  righe.push([button("🔄 Aggiorna", "refresh"), button("🏠 Menù", "home")]);
+  righe.push(navRow());
   return { inline_keyboard: righe };
 }
 
@@ -548,13 +557,9 @@ export function fontiKeyboard(isAdmin: boolean): InlineKeyboardMarkup {
 export function logKeyboard(pagina: { index: number; total: number }): InlineKeyboardMarkup {
   const righe: InlineKeyboardButton[][] = [];
   if (pagina.total > 1) {
-    righe.push([
-      pagina.index > 0 ? button("⬅️ Più recente", `page:${pagina.index - 1}`) : done("⬅️ Più recente"),
-      done(`${pagina.index + 1}/${pagina.total}`),
-      pagina.index < pagina.total - 1 ? button("Più vecchio ➡️", `page:${pagina.index + 1}`) : done("➡️"),
-    ]);
+    righe.push(pagesRow(pagina.index, pagina.total, { prec: "⬅️ Più recente", succ: "Più vecchio ➡️" }));
   }
-  righe.push([button("📡 Fonti", "s:fonti"), button("🏠 Menù", "home")]);
+  righe.push([button("⬅️ Indietro", "back"), button("📡 Fonti", "s:fonti"), button("🏠 Menù", "home")]);
   righe.push([button("🔄 Aggiorna", "refresh")]);
   return { inline_keyboard: righe };
 }
@@ -568,7 +573,7 @@ export function diagnosticaKeyboard(): InlineKeyboardMarkup {
   return {
     inline_keyboard: [
       [button("📡 Fonti", "s:fonti"), button("🎛 Scegli le fonti", "s:filtri-fonti")],
-      [button("🔄 Aggiorna", "refresh"), button("🏠 Menù", "home")],
+      navRow(),
     ],
   };
 }
@@ -582,14 +587,14 @@ export function vantaggioKeyboard(): InlineKeyboardMarkup {
   return {
     inline_keyboard: [
       [button("📡 Fonti", "s:fonti"), button("🔄 Aggiorna", "refresh")],
-      [button("🏠 Menù", "home")],
+      [button("⬅️ Indietro", "back"), button("🏠 Menù", "home")],
     ],
   };
 }
 
 /** Schermate senza scelte: solo il ritorno (fonti, prompt della ricerca, errori). */
 export function backKeyboard(): InlineKeyboardMarkup {
-  return { inline_keyboard: [[button("🔄 Aggiorna", "refresh"), button("🏠 Menù", "home")]] };
+  return { inline_keyboard: [navRow()] };
 }
 
 /**

@@ -67,6 +67,12 @@ const COLONNE_ATTESE: ColonnaAttesa[] = [
   { tabella: "items", colonna: "rules_url", tipo: "TEXT", perche: "bando trovato leggendo la pagina del concorso" },
   { tabella: "prefs", colonna: "filters", tipo: "TEXT NOT NULL DEFAULT '{}'", perche: "filtri personali della chat" },
   { tabella: "runs", colonna: "log", tipo: "TEXT", perche: "racconto fonte per fonte di una raccolta" },
+  {
+    tabella: "ui",
+    colonna: "history",
+    tipo: "TEXT",
+    perche: "storia di navigazione per il ritorno alla pagina di prima",
+  },
 ];
 
 export interface UpgradeResult {

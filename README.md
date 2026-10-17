@@ -604,9 +604,26 @@ Felice. Il costo è una richiesta in più **solo per i concorsi nuovi** (mai per
 coupon o un articolo), con robots.txt rispettato e un tetto per giro: i dettagli
 nella sezione 9.
 
-Ogni elenco è **a pagine di sei**, con `⬅️ Prec` / `Succ ➡️` e il numero di
-pagina in mezzo: la pagina che vedi la legge il database con LIMIT/OFFSET, quindi
-si sfoglia tutto l'archivio, non solo le prime righe.
+Ogni elenco è **a pagine di sei**, con `⏮ Inizio` / `⬅️ Prec` / `Succ ➡️` e il
+numero di pagina in mezzo: la pagina che vedi la legge il database con
+LIMIT/OFFSET, quindi si sfoglia tutto l'archivio, non solo le prime righe. Da una
+pagina 5 di 6 si torna al principio con un tocco, non con quattro.
+
+### ⬅️ Indietro: il posto dove si era
+
+Ogni schermata ha `⬅️ Indietro`, e non è un secondo `🏠 Menù`: torna alla schermata
+da cui si è arrivati, **con la sua pagina**. Aprire un concorso da pagina 5 di 6 e
+premere indietro riporta a pagina 5 di 6 — prima la pagina si azzerava, e con
+lei il posto in cui si stava leggendo. Dentro una scheda `⬅️ Indietro` la chiude e
+basta, e in 🆕 Nuovi non svuota la coda: il contatore dei nuovi riparte quando si
+**esce** dalla sezione, non appena se ne apre il primo concorso.
+
+La storia dei passi è nello stato della chat (`ui.history`, JSON di sezioni e
+pagine, al massimo otto passi: [src/telegram/screens.ts](src/telegram/screens.ts)),
+quindi sopravvive anche a un riavvio del Worker. Una chat ripresa da una riga
+scritta prima che la colonna esistesse ha la storia vuota, e in quel caso
+`⬅️ Indietro` ripiega sul genitore della schermata (una tabella esplicita, mai
+il nulla).
 
 Sotto l'elenco dei concorsi c'è **una riga sola** per le stelle — `⭐ Tutte`,
 `⭐ 70+`, `⭐ 80+` — con il pallino sulla soglia attiva: serve a tenere la testa
@@ -1646,7 +1663,12 @@ log (`log`) ce l'hanno solo le raccolte — i tick e i digest lo lasciano vuoto,
   ([test/report.test.ts](test/report.test.ts), [test/telegram.test.ts](test/telegram.test.ts)).
 - **La raccolta dipende dai tre secret su GitHub**: senza, il job fallisce subito
   e per due ore il radar resta completamente fermo; poi il Worker riparte con la
-  raccolta di riserva (2 fonti su 12 da qui, contro 12 su 12 da Actions). Dopo tre
+  raccolta di riserva (poche fonti da qui, contro quasi tutte da Actions: la rete
+  di Cloudflare è bloccata da alcuni siti). La riserva però non affama più nessuna
+  fonte: a ogni tick parte dalla più trascurata fra **tutte** quelle abilitate e
+  ne mette in coda dodici, così un giro che brucia i primi tentativi su un 403
+  continua invece di fermarsi lì — prima erano quattro fonti dello slot del
+  quarto d'ora e basta. Dopo tre
   ore di silenzio arriva il promemoria in chat all'admin, quindi il guasto non
   può più passare inosservato per giorni. Il limite che resta: il controllo gira
   **dentro** il tick del Worker, quindi se è il Worker stesso a fermarsi (deploy

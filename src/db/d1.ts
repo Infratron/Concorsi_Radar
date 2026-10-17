@@ -5,6 +5,7 @@ import type {
   ItemQuery,
   ItemRow,
   ItemStatus,
+  NavPoint,
   NewItem,
   Prefs,
   RobotsRow,
@@ -118,7 +119,34 @@ interface UiDbRow {
   page: number;
   open_item_id: number | null;
   last_check_at: string | null;
+  /** JSON della storia di navigazione; null/assente nelle righe vecchie. */
+  history: string | null;
   updated_at: string;
+}
+
+/**
+ * La storia di navigazione dal JSON: si accetta solo la forma che conosciamo.
+ * Una riga corrotta non deve far esplodere la schermata — al massimo si perde il
+ * ritorno indietro di quella chat, e il bottone ripiega sul genitore.
+ */
+function parseNavPoints(value: string | null | undefined): NavPoint[] {
+  if (!value) return [];
+  try {
+    const parsed: unknown = JSON.parse(value);
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter(
+        (punto): punto is NavPoint =>
+          typeof punto === "object" &&
+          punto !== null &&
+          typeof (punto as { section?: unknown }).section === "string" &&
+          typeof (punto as { page?: unknown }).page === "number",
+      )
+      .map((punto) => ({ section: punto.section, page: punto.page }))
+      .slice(-8);
+  } catch {
+    return [];
+  }
 }
 
 interface RunDbRow {
@@ -276,12 +304,17 @@ function rowToPrefs(row: PrefsDbRow): Prefs {
 }
 
 function rowToUiState(row: UiDbRow): UiState {
+  // Storia vuota = proprietà assente, non `[]`: una riga vecchia (scritta prima
+  // della colonna) e una nuova senza storia si leggono allo stesso modo, e le
+  // due implementazioni dello Store restituiscono la stessa forma.
+  const storia = parseNavPoints(row.history);
   return {
     chatId: row.chat_id,
     messageId: row.message_id,
     section: row.section,
     page: row.page,
     openItemId: row.open_item_id,
+    ...(storia.length > 0 ? { history: storia } : {}),
     lastCheckAt: row.last_check_at,
     // La colonna c'è dalla prima versione della tabella, ma il campo è stato
     // letto solo adesso: un database scritto prima risponde `undefined`, e "non
@@ -783,14 +816,15 @@ export function createD1Store(db: D1Like): Store {
     async saveUiState(state: UiState): Promise<void> {
       await db
         .prepare(
-          `INSERT INTO ui (chat_id, message_id, section, page, open_item_id, last_check_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?)
+          `INSERT INTO ui (chat_id, message_id, section, page, open_item_id, last_check_at, history, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(chat_id) DO UPDATE SET
              message_id = excluded.message_id,
              section = excluded.section,
              page = excluded.page,
              open_item_id = excluded.open_item_id,
              last_check_at = excluded.last_check_at,
+             history = excluded.history,
              updated_at = excluded.updated_at`,
         )
         .bind(
@@ -800,6 +834,7 @@ export function createD1Store(db: D1Like): Store {
           state.page,
           state.openItemId,
           state.lastCheckAt,
+          JSON.stringify(state.history ?? []),
           // La colonna è NOT NULL: chi non dichiara l'ora (uno strumento, un test
           // che scrive lo stato a mano) riceve quella del salvataggio, che è
           // l'unico valore che non fa credere a una chat ferma da mesi.

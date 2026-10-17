@@ -724,7 +724,11 @@ async function loadScreenData(
             ? HELP_PAGES.length
             : total;
   const pagine = Math.max(1, Math.ceil(totalePagine / passo));
-  const page = Math.min(Math.max(state.page, 0), pagine - 1);
+  // A scheda aperta nessun elenco è caricato (`total` vale 0), quindi il limite
+  // delle pagine sarebbe 1 e la pagina tornerebbe a zero: è il motivo per cui,
+  // uscendo dall'ennesimo concorso aperto da pagina 5 di 6, ci si ritrovava a
+  // pagina 1. La pagina dell'elenco resta quella che era.
+  const page = state.openItemId !== null ? state.page : Math.min(Math.max(state.page, 0), pagine - 1);
 
   return {
     counts,
@@ -921,7 +925,15 @@ export async function handleUpdate(update: TelegramUpdate, deps: BotDeps): Promi
     await store.upsertPrefs(prefs);
   }
 
-  const next = applyIntent(state, intent, now);
+  const applied = applyIntent(state, intent, now);
+  // Il contatore delle novità riparte quando si ESCE da 🆕 Nuovi, non appena la
+  // si apre: prima bastava aprirne uno e tornare indietro per trovare la sezione
+  // vuota, e i "nuovi" restanti sparivano senza essere stati letti.
+  const visto = state.section === "nuovi" && applied.section !== "nuovi";
+  // Uscendo, la schermata si disegna già con l'ora nuova: il badge del menù
+  // deve dire zero mentre lo si dipinge, non al tocco dopo. Entrando in 🆕
+  // Nuovi, invece, resta quella vecchia — è lì che si contano i nuovi.
+  const next = visto ? { ...applied, lastCheckAt: nowIso } : applied;
   // I dati si leggono con il lastCheckAt VECCHIO: è quello che rende possibile
   // mostrare i nuovi arrivati. Solo dopo averli mostrati il contatore riparte.
   const data = await loadScreenData(deps, chatId, next, prefs, now);
@@ -938,7 +950,6 @@ export async function handleUpdate(update: TelegramUpdate, deps: BotDeps): Promi
     renderScreen(normalized, data, now),
     fresh || isStaleChat(state.updatedAt, now),
   );
-  const visto = normalized.section === "nuovi" && normalized.openItemId === null;
   // L'ora dell'interazione si riscrive a ogni giro: è quella che dice, al tocco
   // successivo, se il messaggio appena mandato è ancora quello in chat.
   await store.saveUiState({

@@ -317,10 +317,12 @@ describe("bottoni · costruzione delle tastiere", () => {
     expect(unaPagina.inline_keyboard).toHaveLength(4); // 3 item + riga di navigazione
     expect(unaPagina.inline_keyboard[0]?.[0]?.callback_data).toBe("open:1");
 
+    // La riga delle pagine è ⏮ · prec · contatore · succ: il primo bottone porta
+    // all'inizio, che da una pagina 5 di 6 è l'unico modo di non risalire a mano.
     const due = listKeyboard(items, NOW, { index: 0, total: 2 });
-    expect(due.inline_keyboard[3]?.map((b) => b.callback_data)).toEqual(["noop", "noop", "page:1"]);
+    expect(due.inline_keyboard[3]?.map((b) => b.callback_data)).toEqual(["noop", "noop", "noop", "page:1"]);
     const seconda = listKeyboard(items, NOW, { index: 1, total: 2 });
-    expect(seconda.inline_keyboard[3]?.map((b) => b.callback_data)).toEqual(["page:0", "noop", "noop"]);
+    expect(seconda.inline_keyboard[3]?.map((b) => b.callback_data)).toEqual(["page:0", "page:0", "noop", "noop"]);
   });
 
   it("la scheda di un articolo avverte che il link non è la pagina del concorso", () => {
@@ -851,12 +853,26 @@ describe("interfaccia · un solo messaggio per chat", () => {
     expect(elenco).toContain("Nuovi dall'ultimo controllo");
     expect(elenco).toContain("1 concorso");
     const righeElenco = (lastWith(calls, "editMessageText")?.payload.reply_markup as {
-      inline_keyboard: { text: string }[][];
+      inline_keyboard: { text: string; callback_data?: string }[][];
     }).inline_keyboard;
     expect(righeElenco[0]?.[0]?.text).toContain("Concorso appena arrivato");
-    expect((await store2.getUiState(CHAT))?.lastCheckAt).toBe(NOW.toISOString());
+    // Guardare la sezione NON azzera il contatore: si azzera uscendo. Prima
+    // bastava aprirne uno e tornare indietro per trovarla vuota.
+    expect((await store2.getUiState(CHAT))?.lastCheckAt).toBeNull();
 
-    await handleUpdate(tap(4, "home", 100), deps(store2, tg));
+    // Il bug che si sentiva: aprire un concorso e tornare all'elenco deve
+    // lasciare la coda dei nuovi com'era.
+    const apri = righeElenco[0]?.[0]?.callback_data ?? "";
+    await handleUpdate(tap(4, apri, 100), deps(store2, tg));
+    const scheda = String(lastWith(calls, "editMessageText")?.payload.text ?? "");
+    expect(scheda).toContain("Concorso appena arrivato");
+    await handleUpdate(tap(5, "back", 100), deps(store2, tg));
+    expect(String(lastWith(calls, "editMessageText")?.payload.text ?? "")).toContain("1 concorso");
+    expect((await store2.getUiState(CHAT))?.lastCheckAt).toBeNull();
+
+    // Uscendo dalla sezione, sì: il contatore riparte e il badge va a zero.
+    await handleUpdate(tap(6, "home", 100), deps(store2, tg));
+    expect((await store2.getUiState(CHAT))?.lastCheckAt).toBe(NOW.toISOString());
     const menuDopo = lastWith(calls, "editMessageText")?.payload.reply_markup as {
       inline_keyboard: { text: string; callback_data?: string }[][];
     };
@@ -2244,13 +2260,13 @@ describe("tipi di premio · le porte dal menù", () => {
     const bottoni = lastKeyboard(calls)?.inline_keyboard.flat() ?? [];
     expect(bottoni.map((b) => b.text)).toEqual([
       "💳 Gift card (1)", "🚗 Auto e moto (1)", "✈️ Viaggi (1)", "🛒 Buoni spesa (1)", "🆓 Gratis (0)",
-      "🔄 Aggiorna", "🏠 Menù",
+      "⬅️ Indietro", "🔄 Aggiorna", "🏠 Menù",
     ]);
     // Quattro porte su cinque hanno un tag; 🆓 Gratis riapre la sezione che il
     // menù ha già, invece di duplicarla.
     expect(bottoni.map((b) => b.callback_data)).toEqual([
       "s:premi:giftcard", "s:premi:auto", "s:premi:viaggio", "s:premi:buoni_spesa", "s:gratis",
-      "refresh", "home",
+      "back", "refresh", "home",
     ]);
 
     // Ogni porta legge la sua sezione: si apre l'elenco, non si resta sulla
@@ -2879,6 +2895,66 @@ describe("testata del menù · quando ha raccolto il bot", () => {
     await handleUpdate(command(1, "/start"), deps(store, tg));
 
     expect(lastWith(calls, "sendMessage")?.payload.text).toContain("Nessuna raccolta ancora");
+  });
+});
+
+describe("⬅️ Indietro · il posto dove si era", () => {
+  it("aprire un concorso da pagina 3 e tornare indietro riporta a pagina 3", async () => {
+    const store = createMemoryStore();
+    await store.upsertPrefs(prefs());
+    await seed(
+      store,
+      Array.from({ length: 18 }, (_, index) => ({ title: `Concorso settimana ${index + 1}` })),
+    );
+    const { tg, calls } = makeTg();
+    await handleUpdate(command(1, "/start"), deps(store, tg));
+    await handleUpdate(tap(2, "s:settimana", 100), deps(store, tg));
+    await handleUpdate(tap(3, "page:2", 100), deps(store, tg));
+    expect(String(lastWith(calls, "editMessageText")?.payload.text ?? "")).toContain("pagina 3/3");
+
+    // ⏮ Inizio c'è proprio quando serve: da pagina 3 di 3 le frecce da sole
+    // costringerebbero a due tocchi per risalire.
+    expect(lastKeyboard(calls)?.inline_keyboard.flat().map((b) => b.callback_data)).toContain("page:0");
+
+    const apri = lastKeyboard(calls)?.inline_keyboard.flat().find((b) => b.callback_data?.startsWith("open:"));
+    await handleUpdate(tap(4, apri?.callback_data ?? "", 100), deps(store, tg));
+    await handleUpdate(tap(5, "back", 100), deps(store, tg));
+
+    // Il bug che si sentiva: si tornava sempre alla prima pagina.
+    expect(String(lastWith(calls, "editMessageText")?.payload.text ?? "")).toContain("pagina 3/3");
+    expect((await store.getUiState(CHAT))?.page).toBe(2);
+    // E l'elenco è ancora quello della pagina 3, non un elenco vuoto.
+    expect(
+      lastKeyboard(calls)?.inline_keyboard.flat().filter((b) => b.callback_data?.startsWith("open:")).length,
+    ).toBe(6);
+  });
+
+  it("indietro torna alla schermata precedente, non al menù", async () => {
+    const store = createMemoryStore();
+    await store.upsertPrefs(prefs());
+    const { tg, calls } = makeTg();
+    await handleUpdate(command(1, "/start"), deps(store, tg));
+    await handleUpdate(tap(2, "s:fonti", 100), deps(store, tg));
+    await handleUpdate(tap(3, "s:diagnostica", 100), deps(store, tg));
+    await handleUpdate(tap(4, "back", 100), deps(store, tg));
+
+    expect((await store.getUiState(CHAT))?.section).toBe("fonti");
+    expect(String(lastWith(calls, "editMessageText")?.payload.text ?? "")).toContain("Fonti");
+  });
+
+  it("senza storia (chat ripresa da vecchia) indietro ripiega sul genitore, mai sul vuoto", async () => {
+    const store = createMemoryStore();
+    await store.upsertPrefs(prefs());
+    const { tg, calls } = makeTg();
+    await handleUpdate(command(1, "/start"), deps(store, tg));
+    await handleUpdate(tap(2, "s:archivio", 100), deps(store, tg));
+    // Una riga vecchia non ha la storia: si simula scrivendola a mano, com'era
+    // prima della colonna.
+    const stato = await store.getUiState(CHAT);
+    if (stato) await store.saveUiState({ ...stato, history: undefined });
+
+    await handleUpdate(tap(3, "back", 100), deps(store, tg));
+    expect((await store.getUiState(CHAT))?.section).toBe("storico");
   });
 });
 

@@ -112,6 +112,21 @@ describe.each(stores)("stato dell'interfaccia · $nome", ({ crea }) => {
     expect(await store.getUiState(42)).toEqual(pieno);
   });
 
+  it("conserva la storia di navigazione, e la dimentica quando torna vuota", async () => {
+    const store = crea();
+    const storia = [
+      { section: "menu", page: 0 },
+      { section: "settimana", page: 4 },
+    ];
+    await store.saveUiState(stato(42, { section: "settimana", page: 4, history: storia }));
+    expect((await store.getUiState(42))?.history).toEqual(storia);
+
+    // Vuota = campo assente, in entrambe le implementazioni: una riga vecchia
+    // (scritta prima della colonna) e una senza storia si leggono uguali.
+    await store.saveUiState(stato(42, { section: "menu" }));
+    expect(await store.getUiState(42)).not.toHaveProperty("history");
+  });
+
   it("riscrive in place invece di accumulare righe, e le chat non si disturbano", async () => {
     const store = crea();
     await store.saveUiState(stato(42, { messageId: 10 }));

@@ -166,6 +166,17 @@ describe("cron · il tick completo", () => {
     expect((await note(world))[0]).toContain("promemoria raccolta: no");
   });
 
+  it("la raccolta di riserva mette in coda tutte le fonti, non solo lo slot del quarto d'ora", async () => {
+    // La rete qui risponde 404 a tutto: le fonti falliscono subito e non mangiano
+    // il budget di CPU, quindi quello che si legge è la coda vera. Prima erano le
+    // quattro fonti dello slot; adesso sono le più trascurate fra tutte.
+    await tick(world, NOW);
+
+    const nota = (await note(world))[0] ?? "";
+    const coda = Number(/raccolta di riserva: \d+ nuovi, \d+\/(\d+) fonti ok/.exec(nota)?.[1] ?? "0");
+    expect(coda, `nota del giro: ${nota}`).toBeGreaterThan(4);
+  });
+
   it("senza nessuna raccolta registrata lo dice senza inventare una data", async () => {
     world.db.exec(`
       INSERT INTO prefs (chat_id, active, weights, min_score_instant, quiet_hours, digest_hours, filters, updated_at)

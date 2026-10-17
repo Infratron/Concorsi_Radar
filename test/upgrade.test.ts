@@ -120,6 +120,24 @@ describe("allineamento del database", () => {
     expect((db.prepare("SELECT COUNT(*) AS n FROM runs").get() as { n: number }).n).toBe(1);
   });
 
+  it("aggiunge ui.history a una tabella ui che esiste già, senza perdere lo stato", async () => {
+    // Il caso vero della produzione: la tabella `ui` c'è da mesi, la colonna no.
+    db.exec(`CREATE TABLE ui (
+      chat_id INTEGER PRIMARY KEY, message_id INTEGER, section TEXT NOT NULL DEFAULT 'menu',
+      page INTEGER NOT NULL DEFAULT 0, open_item_id INTEGER, last_check_at TEXT, updated_at TEXT NOT NULL
+    )`);
+    db.exec(`INSERT INTO ui (chat_id, message_id, section, page, updated_at)
+             VALUES (7, 55, 'settimana', 4, '2026-10-17T09:00:00.000Z')`);
+
+    const risultato = await upgradeDatabase(binding, SCHEMA);
+
+    expect(risultato.colonne).toContain("ui.history");
+    // La riga resta quella: `null` = "non lo so", che è quello che le due
+    // implementazioni dello Store leggono come storia assente.
+    const riga = db.prepare("SELECT chat_id, section, page, history FROM ui").get() as Record<string, unknown>;
+    expect(riga).toMatchObject({ chat_id: 7, section: "settimana", page: 4, history: null });
+  });
+
   it("la semina delle fonti aggiorna la definizione e lascia lo stato runtime", async () => {
     await upgradeDatabase(binding, SCHEMA);
     db.exec(`INSERT INTO sources (id, name, kind, url, category, tags, cadence_min, enabled, etag, fail_streak, last_ok_at)
@@ -162,7 +180,7 @@ describe("allineamento del database", () => {
   it("ogni colonna attesa dice a cosa serve", () => {
     const elenco = colonneAttese();
     expect(elenco.map((voce) => voce.colonna)).toEqual(
-      expect.arrayContaining(["items.kind", "items.brand", "runs.log", "prefs.filters"]),
+      expect.arrayContaining(["items.kind", "items.brand", "runs.log", "prefs.filters", "ui.history"]),
     );
     expect(elenco.every((voce) => voce.perche.length > 10)).toBe(true);
   });

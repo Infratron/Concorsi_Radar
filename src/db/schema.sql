@@ -205,5 +205,9 @@ CREATE TABLE IF NOT EXISTS ui (
   page          INTEGER NOT NULL DEFAULT 0,
   open_item_id  INTEGER,
   last_check_at TEXT,
+  -- La storia della navigazione (JSON), per ⬅️ Indietro. Serve al ritorno alla
+  -- schermata precedente con la sua pagina: senza, da una pagina 5 di 6 si torna
+  -- alla prima. Null per le righe scritte prima che esistesse.
+  history       TEXT,
   updated_at    TEXT NOT NULL
 );

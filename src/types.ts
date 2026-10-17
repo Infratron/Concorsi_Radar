@@ -399,6 +399,13 @@ export interface ChatFilters {
 }
 
 /** Stato dell'interfaccia in chat: il bot tiene UN messaggio e lo modifica. */
+/** Un punto della navigazione: dove si era, per poterci tornare con ⬅️. */
+export interface NavPoint {
+  section: string;
+  /** Pagina dell'elenco (0-based). */
+  page: number;
+}
+
 export interface UiState {
   chatId: number;
   /** Id del messaggio da modificare; null la prima volta. */
@@ -407,6 +414,15 @@ export interface UiState {
   section: string;
   /** Pagina dell'elenco (0-based). */
   page: number;
+  /**
+   * Le schermate da cui si è arrivati, dalla più vecchia alla più recente:
+   * alimenta ⬅️ Indietro, che torna alla schermata precedente CON la sua pagina.
+   *
+   * Non è (solo) un vezzo: dalla pagina 5 di 6 di un elenco, aprire un concorso
+   * ed essere riportati alla prima pagina era il modo di perdere il posto.
+   * Facoltativa perché le righe scritte prima che esistesse non l'hanno.
+   */
+  history?: NavPoint[];
   /** Item aperto in scheda sopra la sezione, null se si vede l'elenco. */
   openItemId: number | null;
   /** Da quando contare i "nuovi" (ISO 8601). */

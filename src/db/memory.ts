@@ -378,8 +378,13 @@ export function createMemoryStore(): MemoryStore {
 
     async saveUiState(state: UiState): Promise<void> {
       // Come in D1: l'ora del salvataggio fa da rete per chi non la dichiara,
-      // altrimenti le due implementazioni racconterebbero due cose diverse.
-      ui.set(state.chatId, clone({ ...state, updatedAt: state.updatedAt ?? new Date().toISOString() }));
+      // altrimenti le due implementazioni racconterebbero due cose diverse. E la
+      // storia vuota si scrive come assenza, come fa il JSON di D1: due forme per
+      // la stessa cosa farebbero divergere i test di concordanza.
+      const salvato: UiState = { ...state, updatedAt: state.updatedAt ?? new Date().toISOString() };
+      if (state.history && state.history.length > 0) salvato.history = state.history;
+      else delete salvato.history;
+      ui.set(state.chatId, clone(salvato));
     },
 
     async listDeliveredItems(chatId: number, kind: string, limit = 50): Promise<ItemRow[]> {

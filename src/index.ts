@@ -14,6 +14,13 @@ import { jsonResponse } from "./lib/http.ts";
 import { dispatchIfSilent } from "./collect/dispatch.ts";
 
 /**
+ * Quante fonti prova la raccolta di riserva in un tick. Il tetto vero resta il
+ * budget di CPU (6 ms sul piano Free): questo è solo il numero che entra nella
+ * coda, e le fonti che non ci stanno vengono riprese dal tick successivo.
+ */
+const FALLBACK_MAX_SOURCES = 12;
+
+/**
  * Entry point del Worker.
  *  - POST /telegram  → webhook (protetto dall'header segreto di Telegram)
  *  - GET  /setup     → registra webhook e menu comandi (protetto dal secret)
@@ -94,10 +101,17 @@ async function runCron(env: Env, cron: string, now: Date): Promise<void> {
   if (sveglia !== null) note.push(sveglia);
 
   if (shouldFallbackIngest(runs, now)) {
-    // Raccolta di riserva: la rete di Cloudflare raggiunge poche fonti, ma
-    // meglio poche che nessuna. Il freno di CPU resta quello prudente del piano
-    // Free (budget 6 ms), quindi la rotazione continua a valere qui.
-    const summary: IngestSummary = await runIngest(deps, now);
+    // Raccolta di riserva FORTE: prima prendeva le quattro fonti dello slot di
+    // questo quarto d'ora, e con un silenzio di ore la stessa fonte tornava ogni
+    // due ore e mezza mentre le altre restavano invisibili. Ora prende le più
+    // trascurate fra TUTTE quelle abilitate (`allSources`), fino a dodici per
+    // giro: le fonti che sbordano dal budget di CPU restano al giro dopo, quindi
+    // in circa tre tick tutte le fonti raggiungibili sono state provate e poi
+    // si ricomincia dalla più vecchia.
+    const summary: IngestSummary = await runIngest(deps, now, {
+      allSources: true,
+      maxSources: FALLBACK_MAX_SOURCES,
+    });
     sourcesOk = summary.sourcesOk;
     sourcesFail = summary.sourcesFail;
     itemsNew = summary.itemsNew;
@@ -120,11 +134,10 @@ async function runCron(env: Env, cron: string, now: Date): Promise<void> {
     // Come al primo giro in assoluto: niente avvisi immediati su un archivio che
     // si sta riempiendo di concorsi vecchi.
     skipInstant = summary.archiveWasEmpty;
-    if (adminChatId !== null) {
-      for (const sourceId of summary.deadSources) {
-        await tg.sendMessage(adminChatId, `⚠️ <b>Fonte in errore</b>: ${sourceId} ha fallito 3 volte di fila. Controlla /fonti.`);
-      }
-    }
+    // Nessun avviso "fonte in errore" da qui: da questa rete un 403/503 dice
+    // com'è la rete di Cloudflare, non come sta la fonte — e la stessa fonte
+    // risponde 200 a GitHub. L'avviso vero lo manda la raccolta su GitHub
+    // (scripts/ingest.ts), che è quella che vede il sito davvero.
   }
 
   const instant = skipInstant ? 0 : (await sendInstantAlerts({ store, tg, now })).sent;

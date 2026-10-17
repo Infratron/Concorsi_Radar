@@ -1,4 +1,4 @@
-import type { ItemRow, Prefs, RunRow, SourceRow, UiState } from "../types.ts";
+import type { ItemRow, NavPoint, Prefs, RunRow, SourceRow, UiState } from "../types.ts";
 import { brandLabel, type BrandChoice } from "../config/brands.ts";
 import { GRUPPI_DIAGNOSI, type Diagnosi, type RiepilogoDiagnosi } from "../sources-health.ts";
 import {
@@ -193,6 +193,50 @@ export function parseCallback(data: string | undefined): Intent {
 }
 
 /**
+ * Dove si torna con ⬅️ Indietro quando la storia è vuota (chat ripresa dopo un
+ * riavvio, o riga scritta da una versione che la storia non ce l'aveva). Non è
+ * una seconda navigazione: è la rete di sicurezza perché nessuna schermata resti
+ * senza uscita, che era il reclamo. La storia vera, quando c'è, ha la precedenza.
+ */
+const PARENT_SECTION: Record<string, string> = {
+  "filtri-fonti": "filtri",
+  preferiti: "filtri",
+  "preferiti-lista": "preferiti",
+  impostazioni: "menu",
+  fonti: "menu",
+  diagnostica: "fonti",
+  vantaggio: "fonti",
+  log: "fonti",
+  storico: "menu",
+  vinti: "storico",
+  scaduti: "storico",
+  ignorati: "storico",
+  archivio: "storico",
+  "archivio:contest": "archivio",
+  "archivio:coupon": "archivio",
+  "archivio:news": "archivio",
+  aiuto: "menu",
+  cerca: "menu",
+};
+
+export function parentSection(section: string): string {
+  if (section.startsWith("aiuto:")) return "aiuto";
+  if (section.startsWith("cerca:")) return "cerca";
+  return PARENT_SECTION[section] ?? "menu";
+}
+
+/** Quanti passi indietro si ricordano: oltre, la storia diventa un labirinto. */
+const HISTORY_MAX = 8;
+
+/** Un passo in più nella storia, senza doppioni consecutivi e senza crescere. */
+function pushHistory(history: NavPoint[] | undefined, point: NavPoint): NavPoint[] {
+  const punti = history ?? [];
+  const ultimo = punti[punti.length - 1];
+  if (ultimo && ultimo.section === point.section && ultimo.page === point.page) return punti;
+  return [...punti, point].slice(-HISTORY_MAX);
+}
+
+/**
  * Applica l'intento allo stato. È pura: le preferenze, le query e il momento in
  * cui il contatore dei "nuovi" riparte stanno in bot.ts (che deve leggere la
  * sezione *prima* di segnarla come vista, altrimenti l'elenco uscirebbe vuoto).
@@ -201,28 +245,50 @@ export function applyIntent(state: UiState, intent: Intent, now: Date): UiState 
   void now;
   switch (intent.kind) {
     case "home":
-      return { ...state, section: "menu", page: 0, openItemId: null };
+      // Il menù è la radice: la storia riparte da qui.
+      return { ...state, section: "menu", page: 0, openItemId: null, history: [] };
     case "refresh":
       return state;
-    case "section":
+    case "section": {
       // `aiuto:<id>` è una sezione sola con la pagina dentro: la sezione resta
       // "aiuto" (una schermata, una tastiera) e il numero di pagina è l'indice
       // della voce della wiki, così le frecce continuano a funzionare.
-      if (intent.section.startsWith("aiuto:")) {
-        return {
-          ...state,
-          section: "aiuto",
-          page: helpIndexFor(intent.section.slice("aiuto:".length)) ?? 0,
-          openItemId: null,
-        };
-      }
-      return { ...state, section: intent.section, page: 0, openItemId: null };
+      const destinazione = intent.section.startsWith("aiuto:")
+        ? { section: "aiuto", page: helpIndexFor(intent.section.slice("aiuto:".length)) ?? 0 }
+        : { section: intent.section, page: 0 };
+      return {
+        ...state,
+        ...destinazione,
+        openItemId: null,
+        // Ogni porta che si apre lascia il segno: è quello che rende ⬅️ Indietro
+        // un ritorno vero e non un salto al menù.
+        history: pushHistory(state.history, { section: state.section, page: state.page }),
+      };
+    }
     case "page":
+      // Cambiare pagina non è navigare: la storia resta com'è, altrimenti un
+      // giro di frecce riempirebbe la storia di pagine e ⬅️ tornerebbe a una
+      // pagina intermedia invece che alla schermata precedente.
       return { ...state, page: intent.page, openItemId: null };
     case "open":
       return { ...state, openItemId: intent.itemId };
-    case "back":
-      return { ...state, openItemId: null };
+    case "back": {
+      // Dentro una scheda, "indietro" la chiude e torna all'elenco da cui si è
+      // arrivati — con la SUA pagina, che lo stato ha conservato.
+      if (state.openItemId !== null) return { ...state, openItemId: null };
+      const storia = state.history ?? [];
+      const precedente = storia[storia.length - 1];
+      if (precedente) {
+        return {
+          ...state,
+          section: precedente.section,
+          page: precedente.page,
+          openItemId: null,
+          history: storia.slice(0, -1),
+        };
+      }
+      return { ...state, section: parentSection(state.section), page: 0, openItemId: null };
+    }
     case "decision":
       return { ...state, openItemId: intent.itemId };
     default:
