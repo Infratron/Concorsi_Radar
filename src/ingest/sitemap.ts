@@ -78,18 +78,42 @@ export function parseSitemap(
     if (loc) childSitemaps.push(loc);
   }
 
+  // Si raccolgono TUTTE le pagine che interessano, e solo dopo si sceglie quali
+  // tenere. Prima si teneva il primo blocco incontrato nell'XML, e nello stesso
+  // ordine del file: ma le sitemap non sono ordinate dalla più nuova, sono
+  // ordinate come il sito le elenca — quasi sempre dalla più VECCHIA. Con un
+  // tetto di 20 pagine e 40 nel file (AIA), quelle del 2026 erano carta da
+  // parati: il bot leggeva le prime venti e non le vedeva mai, mentre le
+  // trentacinque che non leggeva contenevano quelle vere.
+  const candidate: { url: string; publishedAt: string | null; order: number }[] = [];
   for (const block of collectBlocks(xml, ["url"])) {
-    if (items.length >= maxItems) break;
     const url = resolveUrl(textOf(block, ["loc"]), "");
     if (!url) continue;
     if (!matchesPattern(url, includePattern)) continue;
+    candidate.push({
+      url,
+      publishedAt: toIsoDate(textOf(block, ["lastmod"])),
+      order: candidate.length,
+    });
+  }
+  // La più recente per <lastmod> viene prima. Chi non dichiara lastmod resta in
+  // coda nell'ordine del file: senza una data non si può affermare che sia
+  // nuova, e inventarle un ordine sarebbe peggio che non ordinare affatto.
+  candidate.sort((a, b) => {
+    if (a.publishedAt !== null && b.publishedAt !== null) return b.publishedAt.localeCompare(a.publishedAt);
+    if (a.publishedAt !== null) return -1;
+    if (b.publishedAt !== null) return 1;
+    return a.order - b.order;
+  });
+
+  for (const entry of candidate.slice(0, maxItems)) {
     items.push({
       sourceId,
-      url,
-      title: titleFromUrl(url),
+      url: entry.url,
+      title: titleFromUrl(entry.url),
       summary: "",
-      publishedAt: toIsoDate(textOf(block, ["lastmod"])),
-      guid: url,
+      publishedAt: entry.publishedAt,
+      guid: entry.url,
     });
   }
 

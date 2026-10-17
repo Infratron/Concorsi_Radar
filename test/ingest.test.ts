@@ -181,6 +181,42 @@ describe("parseSitemap", () => {
       publishedAt: "2026-10-15T00:00:00.000Z",
     });
   });
+
+  it("tiene le pagine più recenti, non le prime del file", () => {
+    // Le sitemap dei siti veri elencano dalla più vecchia: con un tetto di 20
+    // pagine, prendere le prime venti vuol dire leggere il 2023 e non vedere mai
+    // quello uscito ieri. L'ordine si decide sulla data, non sulla posizione.
+    const xml = `<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+      <url><loc>https://www.aiafood.com/it/concorsi/vinci-con-spinacine-aia/</loc><lastmod>2023-07-05T14:48:18.110Z</lastmod></url>
+      <url><loc>https://www.aiafood.com/it/concorsi/dal-15-ottobre-al-1-novembre-2026-vinci-un-barbecue/</loc><lastmod>2026-10-15T08:54:51.445Z</lastmod></url>
+      <url><loc>https://www.aiafood.com/it/concorsi/concorso-carne-al-fuoco-2026/</loc><lastmod>2026-03-30T08:19:25.068Z</lastmod></url>
+      <url><loc>https://www.aiafood.com/it/ricette/</loc><lastmod>2026-10-16T00:00:00.000Z</lastmod></url>
+    </urlset>`;
+
+    const parsed = parseSitemap(xml, "sitemap-aia", "/concorsi/[a-z0-9]", 2);
+
+    expect(parsed.items.map((item) => item.url)).toEqual([
+      "https://www.aiafood.com/it/concorsi/dal-15-ottobre-al-1-novembre-2026-vinci-un-barbecue/",
+      "https://www.aiafood.com/it/concorsi/concorso-carne-al-fuoco-2026/",
+    ]);
+  });
+
+  it("senza lastmod resta l'ordine del file, e chi non ha la data va in coda", () => {
+    const xml = `<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+      <url><loc>https://www.scontrinofelice.it/concorsi-gratuiti/primo-senza-data/</loc></url>
+      <url><loc>https://www.scontrinofelice.it/concorsi-gratuiti/con-la-data/</loc><lastmod>2026-10-15</lastmod></url>
+      <url><loc>https://www.scontrinofelice.it/concorsi-gratuiti/secondo-senza-data/</loc></url>
+    </urlset>`;
+
+    const parsed = parseSitemap(xml, "sitemap-scontrinofelice", "/concorsi-gratuiti/", 5);
+
+    // Una data è un'informazione, non un'ipotesi: chi ce l'ha sta davanti.
+    expect(parsed.items.map((item) => item.url)).toEqual([
+      "https://www.scontrinofelice.it/concorsi-gratuiti/con-la-data/",
+      "https://www.scontrinofelice.it/concorsi-gratuiti/primo-senza-data/",
+      "https://www.scontrinofelice.it/concorsi-gratuiti/secondo-senza-data/",
+    ]);
+  });
 });
 
 describe("parseHtmlLinks", () => {
