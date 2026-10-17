@@ -345,14 +345,22 @@ scegli il repository e imposta:
 |---|---|
 | Production branch | `main` |
 | Root directory | *(vuota: il progetto è nella radice)* |
-| Build command | `npm ci && npm run typecheck && npm test` |
+| Build command | `npm ci && npm run check` |
 | Deploy command | `npx wrangler deploy` |
 | Preview builds | **disattivate** (vedi sotto) |
 
 Il *build command* è la rete di sicurezza: se il typecheck o l'intera suite
 fallisce, la build si ferma e **il deploy non parte**. `npm ci` serve a rendere
-l'installazione riproducibile dal `package-lock.json`, e `npm run check` esegue
-esattamente le due cose del comando qui sopra.
+l'installazione riproducibile dal `package-lock.json`, e `npm run check` è
+`npm run typecheck && vitest run --no-file-parallelism`.
+
+Perché la suite gira **senza parallelismo di file**: i worker di vitest, su
+macchine piccole o cariche, vanno in timeout sul *transform* (`Timeout calling
+"fetch"`), cioè su un guasto dell'ambiente che non c'entra niente con il codice —
+e un cancello di deploy che si blocca a caso è peggio di un cancello lento. In
+sequenza la suite passa intera (misurato qui: 2-5 minuti contro ~30 secondi in
+parallelo). Se la build di Cloudflare ha fretta, si può togliere il flag e
+lasciare il parallelismo: la suite è la stessa.
 
 **Versione di Node della build**: i test eseguono l'SQL vero su `node:sqlite`, che
 senza flag esiste da Node **22.13**. La versione è fissata in
