@@ -11,6 +11,7 @@ import { COLLECTION_REMINDER_MARK, COLLECTION_REMINDER_SKIP, jobFor, shouldFallb
 import { USER_AGENT } from "./config/sources.ts";
 import { benchDedupeLookup, benchSource, downloadBodies, summarise } from "./debug/bench.ts";
 import { jsonResponse } from "./lib/http.ts";
+import { dispatchIfSilent } from "./collect/dispatch.ts";
 
 /**
  * Entry point del Worker.
@@ -79,6 +80,18 @@ async function runCron(env: Env, cron: string, now: Date): Promise<void> {
   // mettere via i scaduti non ha nulla da raccontare fonte per fonte, e senza log
   // non compare in 🧾 Log delle raccolte (vedi recentLogs nello store).
   let log: string | null = null;
+
+  // Prima la sveglia, poi la raccolta di riserva: se GitHub si è solo addormentato,
+  // basta chiedergli di partire, e la raccolta torna dalla rete che le fonti
+  // lasciano passare. La riserva resta per quando anche la sveglia non risponde
+  // (token scaduto, workflow disattivato): sono due guasti diversi.
+  const sveglia = await dispatchIfSilent({
+    env,
+    runs,
+    now,
+    fetcher: (input: string, init?: RequestInit) => fetch(input, init),
+  });
+  if (sveglia !== null) note.push(sveglia);
 
   if (shouldFallbackIngest(runs, now)) {
     // Raccolta di riserva: la rete di Cloudflare raggiunge poche fonti, ma

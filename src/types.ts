@@ -327,7 +327,7 @@ export interface ItemQuery {
   /** Solo item senza obbligo di acquisto (filtro "solo gratis" della chat). */
   withoutPurchase?: boolean;
   /**
-   * Solo gli item di queste marche ("Preferiti per marca"). Elenco vuoto =
+   * Solo gli item di queste marche ("Marche seguite"). Elenco vuoto =
    * nessun filtro, come tutti gli altri campi di questa query.
    */
   brands?: string[];
@@ -463,4 +463,16 @@ export interface Env {
   ADMIN_CHAT_ID: string;
   /** Chat id autorizzati a usare il bot, separati da virgola (es. "111,222"). */
   ALLOWED_CHAT_IDS: string;
+  /**
+   * Token GitHub (fine-grained, permesso Actions: write) per svegliare la
+   * raccolta quando il cron tace: vedi src/collect/dispatch.ts. Facoltativo: se
+   * manca, il Worker si limita alla raccolta di riserva.
+   */
+  GITHUB_DISPATCH_TOKEN?: string;
+  /** "owner/repo" del repository dove gira la raccolta (`[vars]` di wrangler.toml). */
+  GITHUB_REPO?: string;
+  /** File del workflow da svegliare (default ingest.yml). */
+  GITHUB_WORKFLOW?: string;
+  /** Ramo su cui farlo partire (default main). */
+  GITHUB_REF?: string;
 }

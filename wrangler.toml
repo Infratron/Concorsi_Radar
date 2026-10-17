@@ -27,6 +27,14 @@ database_id = "2c47a097-ad0e-4872-b868-9d9b3efe0dbb"
 [triggers]
 crons = ["*/15 * * * *", "5 6 * * *", "5 17 * * *"]
 
+[vars]
+# Dove gira la raccolta, per la sveglia del Worker (src/collect/dispatch.ts): se
+# il cron di GitHub tace, il Worker gli manda `workflow_dispatch`. Il token
+# (GITHUB_DISPATCH_TOKEN) è un secret, non sta qui.
+GITHUB_REPO = "Infratron/Concorsi_Radar"
+GITHUB_WORKFLOW = "ingest.yml"
+GITHUB_REF = "main"
+
 [observability]
 enabled = true
 
@@ -34,3 +42,4 @@ enabled = true
 #   wrangler secret put TELEGRAM_BOT_TOKEN
 #   wrangler secret put WEBHOOK_SECRET
 #   wrangler secret put ADMIN_CHAT_ID
+#   wrangler secret put GITHUB_DISPATCH_TOKEN   (facoltativo: sveglia la raccolta)

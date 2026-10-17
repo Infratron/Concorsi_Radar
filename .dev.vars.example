@@ -24,3 +24,9 @@ ADMIN_CHAT_ID=
 #    Il primo id è anche l'admin se ADMIN_CHAT_ID resta vuoto.
 #    Esempio con due persone:
 ALLOWED_CHAT_IDS=
+
+# 5) (Facoltativo) Sveglia della raccolta su GitHub. Se il cron tace, il Worker
+#    manda `workflow_dispatch`. Serve un token fine-grained con permesso
+#    "Actions: Read and write" SOLO su questo repository; in produzione è un
+#    secret (`npx wrangler secret put GITHUB_DISPATCH_TOKEN`), mai un file.
+GITHUB_DISPATCH_TOKEN=
