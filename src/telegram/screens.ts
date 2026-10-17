@@ -13,6 +13,7 @@ import {
 } from "../filters.ts";
 import type { LeadStats } from "../enrich/lead.ts";
 import { explainScore, insightFromRow } from "../enrich/score.ts";
+import { HELP_PAGES, helpIndexFor } from "./help.ts";
 import { MAX_MESSAGE_CHARS, type InlineKeyboardMarkup } from "./api.ts";
 import { escapeHtml, formatDate, formatItemCard, formatScoreBreakdown, sourceLabel } from "./format.ts";
 import { esitoUltimoTentativo } from "./report.ts";
@@ -24,6 +25,7 @@ import {
   archivioKeyboard,
   backKeyboard,
   cardKeyboard,
+  helpKeyboard,
   diagnosticaKeyboard,
   emptyKeyboard,
   filtriKeyboard,
@@ -123,6 +125,7 @@ export const SECTIONS = [
   "archivio",
   "diagnostica",
   "log",
+  "aiuto",
 ] as const;
 
 export function isKnownSection(section: string): boolean {
@@ -132,6 +135,9 @@ export function isKnownSection(section: string): boolean {
   // non leggerebbe niente, mentre un tipo sbagliato letto come "tutto" darebbe
   // l'elenco completo credendo di averne chiesto una fetta (vedi archivioKindFor).
   if (section.startsWith("archivio:")) return archivioKindFor(section) !== null;
+  // `aiuto:<id>`: la pagina della wiki si apre solo se esiste nell'elenco. Una
+  // pagina inventata aprirebbe il vuoto, e un indice sbagliato la pagina sbagliata.
+  if (section.startsWith("aiuto:")) return helpIndexFor(section.slice("aiuto:".length)) !== null;
   // `premi:<tag>` si accetta solo se il tag è uno di quelli offerti: una sezione
   // inventata non leggerebbe niente, e sarebbe un elenco vuoto senza spiegazione.
   return prizeFilterFor(section) !== null;
@@ -199,6 +205,17 @@ export function applyIntent(state: UiState, intent: Intent, now: Date): UiState 
     case "refresh":
       return state;
     case "section":
+      // `aiuto:<id>` è una sezione sola con la pagina dentro: la sezione resta
+      // "aiuto" (una schermata, una tastiera) e il numero di pagina è l'indice
+      // della voce della wiki, così le frecce continuano a funzionare.
+      if (intent.section.startsWith("aiuto:")) {
+        return {
+          ...state,
+          section: "aiuto",
+          page: helpIndexFor(intent.section.slice("aiuto:".length)) ?? 0,
+          openItemId: null,
+        };
+      }
       return { ...state, section: intent.section, page: 0, openItemId: null };
     case "page":
       return { ...state, page: intent.page, openItemId: null };
@@ -269,6 +286,12 @@ export interface ScreenData {
   sources: SourceRow[];
   runs: RunRow[];
   /**
+   * Quando è partita l'ultima raccolta vera (GitHub o un PC), ISO 8601; null se
+   * non ce n'è ancora una o se questa schermata non la mostra. È l'ora che dice
+   * se il radar è vivo — l'ora dell'ultimo tocco dice un'altra cosa.
+   */
+  ultimaRaccolta: string | null;
+  /**
    * Le ultime esecuzioni con un log, dalla più recente: si legge solo in
    * 🧾 Log delle raccolte, e solo per l'admin.
    */
@@ -323,7 +346,16 @@ function headerLines(state: UiState, data: ScreenData, now: Date): string[] {
   // articoli che ne parlano. Dirle entrambe evita di far sembrare l'archivio
   // grande quanto i concorsi.
   righe.push(
-    `🗂 <b>${data.counts.contest}</b> concorsi · <b>${data.counts.coupon}</b> coupon · <b>${data.counts.news}</b> news in archivio · controllati ${oreMinuti(state.lastCheckAt)}`,
+    `🗂 <b>${data.counts.contest}</b> concorsi · <b>${data.counts.coupon}</b> coupon · <b>${data.counts.news}</b> news in archivio`,
+  );
+  // Prima qui c'era "controllati 17/10 01:25": era l'ora dell'ultimo tocco di chi
+  // guarda (è lei che fa ripartire il contatore delle novità), ma si leggeva come
+  // "il bot si è fermato alle 01:25". L'ora che dice se il radar è vivo è quella
+  // della RACCOLTA, che finora si trovava solo in 📡 Fonti.
+  righe.push(
+    data.ultimaRaccolta === null
+      ? "🔄 Nessuna raccolta ancora"
+      : `🔄 Ultima raccolta: ${oreMinuti(data.ultimaRaccolta)}`,
   );
   // Con i filtri accesi il numero di sopra è quello che VEDI, non quello che
   // esiste: senza questa riga l'archivio sembrerebbe più piccolo di com'è.
@@ -415,19 +447,19 @@ function listScreen(state: UiState, data: ScreenData, now: Date): Screen {
     }`,
     "",
     state.section === "news"
-      ? "Qui ci sono gli articoli: il link porta al pezzo, non alla pagina del concorso."
+      ? "Sono articoli, non concorsi: il link porta al pezzo."
       : state.section === "coupon"
-        ? "Qui ci sono i buoni sconto e i rimborsi: si spende meno, non si vince. Non finiscono nei concorsi né negli avvisi."
+        ? "Buoni sconto e rimborsi: si spende meno, non si vince."
         : state.section === "gratis"
-        ? "Qui ci sono solo i concorsi senza acquisto: nessuno scontrino, nessun codice da comprare, nessuna spesa minima. Il giudizio viene da quello che la pagina dichiara — se non dice niente, il concorso resta in elenco."
+        ? "Solo concorsi senza acquisto: niente scontrino, niente codice, niente spesa minima."
         : state.section.startsWith("premi:")
-        ? "Qui ci sono solo i concorsi di questo tipo: il premio lo legge l'arricchimento dal testo della pagina, quindi un concorso lo trovi qui se lo dichiara. Per gli altri resta tutto come prima: questa porta non accende nessun filtro."
+        ? "Solo concorsi con questo premio. È una porta, non un filtro: i tuoi filtri restano come sono."
         : state.section === "salvati"
-        ? "Ordinati per scadenza: chi chiude prima sta in cima. Ti avviso 3 giorni e 1 giorno prima — e molto prima per le raccolte punti e i premi da richiedere, dove scontrini e bollini si mettono via durante la raccolta."
+        ? "Chi chiude prima sta in cima. Ti avviso 3 giorni e 1 giorno prima; per le raccolte punti molto prima."
         : state.section === "preferiti-lista"
-          ? "Solo le marche che segui, dal punteggio più alto: è il motivo per cui le trovi qui in cima."
+          ? "Solo le marche che segui, dal punteggio più alto."
         : sezioneArchivio
-          ? "Tutto quello che è passato da qui, dal più recente: concorsi chiusi e coupon scaduti compresi, marcati ⛔. I filtri di 🎛 Cosa vedi non valgono in archivio — se l'abbiamo visto, si trova."
+          ? "Tutto quello che il bot ha visto, anche chiuso (⛔). I filtri di 🎛 Cosa vedi qui non valgono."
           : "Tocca un concorso per aprirlo:",
   ];
   return {
@@ -895,6 +927,29 @@ function searchPromptScreen(): Screen {
   };
 }
 
+/**
+ * ❓ Aiuto: una pagina della wiki per volta, con le frecce.
+ *
+ * Il testo viene dal catalogo (src/telegram/help.ts), non da qui: aggiungere una
+ * pagina non deve voler dire toccare la schermata, e chi scrive la wiki non deve
+ * leggere il codice per farlo.
+ */
+function helpScreen(data: ScreenData): Screen {
+  const indice = Math.min(Math.max(data.page, 0), HELP_PAGES.length - 1);
+  const pagina = HELP_PAGES[indice];
+  const righe = [
+    `❓ <b>Aiuto · ${escapeHtml(pagina.title)}</b>`,
+    "",
+    ...pagina.lines.map((riga) => escapeHtml(riga)),
+    "",
+    `<i>Pagina ${indice + 1} di ${HELP_PAGES.length} · ⬅️ ➡️ per le altre</i>`,
+  ];
+  return {
+    text: righe.join("\n"),
+    keyboard: helpKeyboard({ index: indice, total: HELP_PAGES.length }),
+  };
+}
+
 /** Compone la schermata corrispondente allo stato della chat. */
 export function renderScreen(state: UiState, data: ScreenData, now: Date): Screen {
   if (state.openItemId !== null) return cardScreen(state, data, now);
@@ -937,6 +992,8 @@ export function renderScreen(state: UiState, data: ScreenData, now: Date): Scree
       return marcheScreen(data);
     case "diagnostica":
       return diagnosticaScreen(data);
+    case "aiuto":
+      return helpScreen(data);
     case "log":
       return logScreen(data);
     case "cerca":

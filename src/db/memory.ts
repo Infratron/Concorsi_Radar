@@ -406,6 +406,16 @@ export function createMemoryStore(): MemoryStore {
         .map((run) => clone(run));
     },
 
+    async lastRunAt(triggers: readonly string[]): Promise<string | null> {
+      const ammessi = new Set(triggers);
+      let ultima: string | null = null;
+      for (const run of runs) {
+        if (!ammessi.has(run.trigger)) continue;
+        if (ultima === null || run.startedAt > ultima) ultima = run.startedAt;
+      }
+      return ultima;
+    },
+
     /** Come in D1: solo le esecuzioni con un racconto, dalla più recente. */
     async recentLogs(limit: number): Promise<RunRow[]> {
       const capped = Math.min(Math.max(Math.trunc(limit), 1), 50);

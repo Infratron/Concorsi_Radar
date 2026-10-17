@@ -844,6 +844,17 @@ export function createD1Store(db: D1Like): Store {
       return (result.results ?? []).map(rowToRun);
     },
 
+    /** L'ora dell'ultima esecuzione con quei trigger: una riga, niente scansione. */
+    async lastRunAt(triggers: readonly string[]): Promise<string | null> {
+      if (triggers.length === 0) return null;
+      const segnaposto = triggers.map(() => "?").join(", ");
+      const row = await db
+        .prepare(`SELECT started_at FROM runs WHERE trigger IN (${segnaposto}) ORDER BY started_at DESC LIMIT 1`)
+        .bind(...triggers)
+        .first<{ started_at: string }>();
+      return row?.started_at ?? null;
+    },
+
     /**
      * I log delle ultime raccolte, dal più recente. `log IS NOT NULL` è il
      * filtro che conta: i tick da 15 minuti non hanno un racconto da dare, quindi

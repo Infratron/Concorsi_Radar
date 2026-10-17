@@ -18,6 +18,8 @@ import { brandChoices, isBrandId } from "../config/brands.ts";
 import { diagnosiFonti, riepilogoDiagnosi } from "../sources-health.ts";
 import { rescoreRow } from "../enrich/score.ts";
 import { mergedBrands, mergedWeights } from "../pipeline.ts";
+import { EXTERNAL_TRIGGERS } from "../schedule.ts";
+import { HELP_PAGES } from "./help.ts";
 import type { TelegramUpdate } from "./api.ts";
 import type { NotifyDeps } from "./digest.ts";
 import { regolamentoUrl } from "./digest.ts";
@@ -157,8 +159,6 @@ function intentForCommand(command: string, args: string): Intent | null {
   switch (command) {
     case "/start":
     case "/menu":
-    case "/help":
-    case "/aiuto":
       return { kind: "home" };
     case "/nuovi":
       return { kind: "section", section: "nuovi" };
@@ -183,6 +183,10 @@ function intentForCommand(command: string, args: string): Intent | null {
     case "/archivio":
     case "/passati":
       return { kind: "section", section: "archivio" };
+    // La wiki: la stessa cosa del bottone ❓, anche scritta a mano.
+    case "/aiuto":
+    case "/help":
+      return { kind: "section", section: "aiuto" };
     case "/vinti":
       return { kind: "section", section: "vinti" };
     case "/scaduti":
@@ -700,7 +704,8 @@ async function loadScreenData(
   // schermata — e il conto deve usare lo stesso passo della tastiera: se il passo
   // fosse quello degli elenchi (6), due log farebbero UNA pagina e la freccia
   // «Più vecchio» riporterebbe alla stessa raccolta.
-  const passo = state.section === "log" ? 1 : state.section === "preferiti" ? BRANDS_PAGE_SIZE : PAGE_SIZE;
+  const passo =
+    state.section === "log" || state.section === "aiuto" ? 1 : state.section === "preferiti" ? BRANDS_PAGE_SIZE : PAGE_SIZE;
   const totalePagine =
     state.section === "filtri-fonti"
       ? tutteLeFonti.length
@@ -708,7 +713,11 @@ async function loadScreenData(
         ? marche.length
         : state.section === "log"
           ? logs.length
-          : total;
+          : state.section === "aiuto"
+            // Una pagina di wiki alla volta: le frecce sono le voci del catalogo,
+            // non i concorsi. È anche il motivo per cui `page` qui è l'indice.
+            ? HELP_PAGES.length
+            : total;
   const pagine = Math.max(1, Math.ceil(totalePagine / passo));
   const page = Math.min(Math.max(state.page, 0), pagine - 1);
 
@@ -724,6 +733,9 @@ async function loadScreenData(
     regolamentoUrl: openItem ? regolamentoUrl(openItem) : null,
     sources: fonti,
     runs: state.section === "fonti" ? await store.recentRuns(4) : [],
+    // La testata del menù dice quando ha raccolto il bot, non quando hai guardato
+    // tu: è una riga sola e una query sola, e serve solo dove la testata si legge.
+    ultimaRaccolta: state.section === "menu" ? await store.lastRunAt(EXTERNAL_TRIGGERS) : null,
     lead,
     leadDelConcorso,
     diagnosi,

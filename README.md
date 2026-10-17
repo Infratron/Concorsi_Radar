@@ -461,23 +461,26 @@ scrivere `/start`.
 
 [🆕 Nuovi (3)]        [📋 Oggi (12)]
 [📅 7 giorni (40)]    [⏳ Scadenze (2)]
-[🆓 Gratis (88)]
 [🎁 Tipi di premio]
 [⭐ Watchlist (1)]    [📰 News (7)]
 [🔍 Cerca]            [🗂 Storico]
 [💶 Coupon e rimborsi (67)]
 [🏷 Preferiti per marca (4)] [🎛 Cosa vedi]
 [📡 Fonti]            [⚙️ Impostazioni]
-[🔄 Aggiorna]
+[🔄 Aggiorna]         [❓ Aiuto]
 ```
+
+La testata dice due cose diverse: quanti concorsi, coupon e news ci sono in
+archivio, e **quando ha raccolto il bot** (`🔄 Ultima raccolta: 17/10 07:40`).
+L'ora dell'ultimo tocco non c'è più: era quella a far leggere "il bot si è fermato
+all'una e venticinque" quando il radar aveva raccolto mezz'ora prima.
 
 | Sezione | Cosa mostra |
 |---|---|
 | 🆕 Nuovi | quello che è arrivato **dall'ultimo controllo** (il numero è sulla voce del menù) |
 | 📋 Oggi / 📅 7 giorni | l'archivio recente, ordinato per punteggio. **Oggi è il giorno di calendario**: alle 01:00 contiene quello che è arrivato da mezzanotte, non la giornata di ieri (che resta in 📅 7 giorni) |
 | ⏳ Scadenze | chi chiude entro 7 giorni e **non è già chiuso** |
-| 🆓 Gratis | i concorsi dove non si compra niente: **senza scontrino, senza codice sulla confezione, senza spesa minima** (qui sotto) |
-| 🎁 Tipi di premio | cinque porte per tipo di premio — 💳 gift card, 🚗 auto e moto, ✈️ viaggi, 🛒 buoni spesa, 🆓 gratis: si entra, si guarda, si esce, senza accendere nessun filtro (qui sotto) |
+| 🎁 Tipi di premio | cinque porte per tipo di premio — 💳 gift card, 🚗 auto e moto, ✈️ viaggi, 🛒 buoni spesa, 🆓 gratis (**i concorsi dove non si compra niente**: senza scontrino, senza codice sulla confezione, senza spesa minima). Si entra, si guarda, si esce, senza accendere nessun filtro (qui sotto). 🆓 sta **solo** qui: nel menù sarebbe la stessa sezione da due posti |
 | ⭐ Watchlist | i concorsi che hai salvato, **ordinati per scadenza** (chi chiude prima sta in cima) e con il promemoria a 3 giorni e 1 giorno dalla chiusura — a 30, 7 e 1 per raccolte punti e premi da richiedere (qui sotto) |
 | 📰 News | gli articoli e le pagine-elenco che parlano di concorsi: **non** sono concorsi, e il link porta al pezzo, non alla pagina ufficiale |
 | 💶 Coupon e rimborsi | i buoni sconto, i rimborsi e le operazioni a cashback da spendere al negozio o online: **non** sono concorsi e **non** producono notifiche (qui sotto) |
@@ -490,6 +493,7 @@ scrivere `/start`.
 | 🏁 Vantaggio | `/vantaggio`: di quanto arriviamo prima degli aggregatori, e quanto spesso non arriviamo affatto |
 | ⚙️ Impostazioni | soglia degli avvisi, fascia di silenzio e orari dei digest, regolabili di fino, più la porta ai filtri |
 | 🔄 Aggiorna | rilegge tutto e dice se è arrivato qualcosa di nuovo |
+| ❓ Aiuto | la wiki nella chat: una pagina breve per sezione, con ⬅️ Prec e Succ ➡️ (qui sotto) |
 
 `/vantaggio` (o `/anticipo`) apre la misura del **vantaggio di tempistica**: di
 quanto vediamo un concorso prima degli aggregatori. La schermata dichiara i suoi
@@ -716,9 +720,20 @@ persona**: se tu ignori un concorso, alla tua amica arriva lo stesso.
 **Le notifiche** (avvisi immediati, promemoria della watchlist e digest) sono
 messaggi a sé, e hanno gli stessi bottoni: dal digest tocchi un concorso e si
 apre la scheda nella schermata viva.
+
 La differenza è cosa succede dopo: il digest **resta** (è contenuto da rileggere),
 mentre l'avviso immediato ha già fatto il suo lavoro appena lo usi e il bot lo
 cancella, così in chat non resta niente di appeso.
+
+**Un concorso di una marca che segui avvisa subito, anche sotto la soglia.** La
+soglia risponde a "quanto vale la pena guardarlo adesso" (premio, sforzo,
+scadenza); un Ferrero uscito dieci minuti fa vale la pena guardarlo comunque,
+anche se il premio è piccolo e chiude fra due mesi — è quello che "seguo questa
+marca" voleva dire. La regola scavalca **solo** il punteggio: fascia di silenzio,
+distanza di 20 minuti fra due avvisi, età massima di 3 ore, "già consegnato" e i
+filtri veri (fonti spente, tag spenti, solo gratis) valgono identici. L'avviso lo
+dice in prima riga (`🏷 Ferrero · marca che segui`), così non sembra un punteggio
+sbagliato. Il codice sta in [sendInstantAlerts](src/telegram/digest.ts).
 
 Decidere due volte la stessa cosa — doppio tocco, o lo stesso concorso visto nel
 digest e nella scheda — non sposta i pesi due volte.
@@ -728,8 +743,31 @@ I comandi funzionano ancora ma sono scorciatoie, non il modo normale: `/start`
 `/menu`, `/nuovi`, `/oggi`, `/settimana`, `/scadenze`, `/gratis`, `/salvati` (o
 `/watchlist`), `/news`, `/coupon`, `/storico`, `/archivio` (o `/passati`),
 `/vinti`, `/scaduti`, `/cerca`, `/fonti`,
-`/diagnostica`, `/vantaggio`, `/impostazioni`, `/stop` e
+`/diagnostica`, `/vantaggio`, `/impostazioni`, `/aiuto` (o `/help`), `/stop` e
 `/salva|/vinto|/ignora <id>`.
+
+### ❓ Aiuto: la wiki nella chat
+
+La wiki è una sezione come le altre (una schermata sola, che si modifica), ma
+invece dell'archivio mostra **una pagina breve per sezione**: cosa vedi, cosa
+fare, e nient'altro. Le frecce ⬅️ Prec / Succ ➡️ sono lo stesso callback `page:`
+degli elenchi, quindi non c'è una seconda navigazione da tenere allineata.
+
+Le pagine stanno in [src/telegram/help.ts](src/telegram/help.ts), una voce
+dell'elenco `HELP_PAGES` per pagina.
+
+```ts
+{ id: "coupon", section: "coupon", title: "💶 Coupon e rimborsi", lines: [
+  "Buoni sconto, rimborsi e cashback ancora spendibili.",
+  "Non sono concorsi, non si vince niente e non mandano notifiche.",
+] },
+```
+
+Aggiungere una pagina = aggiungere una voce: la tastiera si costruisce dal numero
+di voci e `aiuto:<id>` è accettato solo per gli id che esistono davvero
+(`isKnownSection` in [src/telegram/screens.ts](src/telegram/screens.ts)), quindi
+una pagina inventata non apre il vuoto. Le regole di scrittura stanno in testa al
+file: tre o quattro righe, cosa vedi prima e cosa fare dopo, niente gergo.
 
 ### 🎁 Tipi di premio: cinque porte, nessun filtro acceso
 
@@ -1136,6 +1174,7 @@ Freni antispam, tutti attivi per default:
 | Concorsi per digest | max 8 (`…e altri N su /oggi`) |
 | Digest vuoto | non viene inviato |
 | Avvisi immediati | max 2 per esecuzione, uno ogni 20 minuti, solo item scoperti da ≤ 3 ore |
+| Marche seguite | scavalcano **solo** la soglia del punteggio; gli altri freni restano |
 | Fascia di silenzio | 23:00-07:00 italiane (è il default: si cambia da ⚙️ Impostazioni) |
 | Primo giro | nessun avviso immediato |
 | Notizie fuori tema | filtrate sulle fonti Google News |
@@ -1181,6 +1220,19 @@ concorso vere**. Di quelle sei, tre portavano solo la pagina della sezione
 concorso nello slug (Nivea). Sono entrate le due che con i parser veri hanno
 prodotto concorsi veri: **[AIA](src/config/sources.ts)** (`/concorsi/…`, 1
 concorso attivo) e **Pampers** (`/concorsi-a-premi-e-promozioni/…`, 1).
+
+**L'ordine di una sitemap non è il nostro.** Le sitemap elencano le pagine dalla
+più vecchia, e con un tetto di 20 pagine prendere le prime venti vuol dire
+leggere il 2023 per sempre: sulla sitemap di AIA le prime venti erano tutte del
+2023 e i concorsi del 2026 — compreso quello uscito il 15 ottobre — non venivano
+mai letti, quindi il cancello di freschezza li scartava tutti e la fonte
+sembrava vuota. Dal 17/10/2026 [parseSitemap](src/ingest/sitemap.ts) raccoglie
+**tutte** le pagine che passano `includePattern` e poi tiene le più recenti per
+`<lastmod>`; chi non dichiara la data resta in coda nell'ordine del file, perché
+una data assente non si inventa. Effetto misurato con `ingestSource` sulle fonti
+vere: AIA passa da venti pagine del 2023 a quelle del 2026 (15/10 e 07/10
+accettate), Conad dai tre concorsi mai letti in fondo al file ai primi tre — che
+però restano scartati per un altro motivo (vedi sotto).
 
 Poca roba, ed è il punto: le marche pubblicano i concorsi in una pagina sola o
 dietro JavaScript, e le sitemap servono a trovare quella pagina. Il valore non è

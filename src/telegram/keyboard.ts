@@ -79,8 +79,6 @@ export function menuKeyboard(counts: {
   news: number;
   /** Coupon e rimborsi in archivio: è il numero sul bottone 💶. */
   coupon: number;
-  /** Concorsi senza obbligo di acquisto: è il numero sul bottone 🆓. */
-  gratis: number;
   /** Concorsi delle marche seguite: è il numero che sta sul bottone dei preferiti. */
   preferiti: number;
   /** Quanti filtri sono attivi: 0 = si vede tutto. */
@@ -90,12 +88,10 @@ export function menuKeyboard(counts: {
     inline_keyboard: [
       [button(`🆕 Nuovi (${counts.nuovi})`, "s:nuovi"), button(`📋 Oggi (${counts.oggi})`, "s:oggi")],
       [button(`📅 7 giorni (${counts.settimana})`, "s:settimana"), button(`⏳ Scadenze (${counts.scadenze})`, "s:scadenze")],
-      // I concorsi che non costano niente, su una riga loro: è la domanda "quali
-      // posso fare senza comprare?", e in mezzo alle altre sezioni non si vede.
-      [button(`🆓 Gratis (${counts.gratis})`, "s:gratis")],
-      // E la porta ai tipi di premio: "che premio cerchi?" è la stessa domanda
-      // secca, e da lì si entra nella sezione che interessa senza accendere
-      // nessun filtro.
+      // "Che premio cerchi?" è una domanda secca, e la porta che la pone è una
+      // sola: 🎁 Tipi di premio, che ha dentro anche 🆓 Gratis. Prima il menù
+      // aveva tutte e due le voci e la stessa cosa si apriva da due posti, con
+      // due conteggi da tenere allineati.
       [button("🎁 Tipi di premio", "s:premi")],
       [button(`⭐ Watchlist (${counts.salvati})`, "s:salvati"), button(`📰 News (${counts.news})`, "s:news")],
       [button("🔍 Cerca", "s:cerca"), button("🗂 Storico", "s:storico")],
@@ -104,7 +100,9 @@ export function menuKeyboard(counts: {
       [button(`💶 Coupon e rimborsi (${counts.coupon})`, "s:coupon")],
       [button(`🏷 Preferiti per marca (${counts.preferiti})`, "s:preferiti"), button(filtriButtonLabel(counts.filtri), "s:filtri")],
       [button("📡 Fonti", "s:fonti"), button("⚙️ Impostazioni", "s:impostazioni")],
-      [button("🔄 Aggiorna", "refresh")],
+      // ❓ Aiuto sta accanto ad Aggiorna perché è l'altra cosa che si fa quando
+      // non si capisce: rileggere o chiedere come funziona.
+      [button("🔄 Aggiorna", "refresh"), button("❓ Aiuto", "s:aiuto")],
     ],
   };
 }
@@ -115,6 +113,27 @@ export function menuKeyboard(counts: {
  */
 export function filtriButtonLabel(quanti: number): string {
   return quanti === 0 ? "🎛 Cosa vedi" : `🎛 Cosa vedi (${quanti})`;
+}
+
+/**
+ * La tastiera della wiki: una pagina alla volta, con le frecce.
+ *
+ * `page:` è lo stesso callback delle pagine degli elenchi — cambia il numero di
+ * pagina della sezione aperta, e nella sezione ❓ quel numero è l'indice della
+ * pagina di aiuto. Un callback in più sarebbe una strada in più da tenere
+ * allineata per fare la stessa cosa.
+ */
+export function helpKeyboard(pagina: { index: number; total: number }): InlineKeyboardMarkup {
+  return {
+    inline_keyboard: [
+      [
+        pagina.index > 0 ? button("⬅️ Prec", `page:${pagina.index - 1}`) : done("⬅️"),
+        done(`${pagina.index + 1}/${pagina.total}`),
+        pagina.index < pagina.total - 1 ? button("Succ ➡️", `page:${pagina.index + 1}`) : done("➡️"),
+      ],
+      [button("🏠 Menù", "home")],
+    ],
+  };
 }
 
 /** Nome leggibile e corto di una fonte: in un bottone ci sta una riga sola. */
@@ -624,6 +643,8 @@ export function sectionTitle(section: string): string {
       // Il titolo dice il confine: a mezzanotte questa sezione riparte da zero, e
       // il giorno prima si guarda in 📅 7 giorni.
       return "Oggi (dalle 00:00)";
+    case "aiuto":
+      return "Aiuto";
     case "settimana":
       return "Ultimi 7 giorni";
     case "scadenze":

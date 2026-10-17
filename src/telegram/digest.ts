@@ -2,7 +2,8 @@ import type { Store } from "../db/store.ts";
 import type { ItemKind, ItemRow, Prefs, RunRow } from "../types.ts";
 import { COLLECTION_SILENCE_MS, collectionCheck } from "../schedule.ts";
 import type { TelegramClient } from "./api.ts";
-import { daysLeft, formatDigest, formatItemCard, localDateString, localHour, type DigestSection } from "./format.ts";
+import { brandLabel } from "../config/brands.ts";
+import { daysLeft, escapeHtml, formatDigest, formatItemCard, localDateString, localHour, type DigestSection } from "./format.ts";
 import { digestKeyboard, instantKeyboard } from "./keyboard.ts";
 import { staleItemReason } from "../enrich/freshness.ts";
 import { isSamePage, regulationUrlFromText } from "../enrich/regulation.ts";
@@ -384,6 +385,34 @@ export async function sendInstantAlerts(deps: NotifyDeps): Promise<{ sent: numbe
       }),
     );
 
+    // Le marche che segui non aspettano la soglia. La soglia risponde a "quanto
+    // vale la pena guardarlo adesso" — premio grande, sforzo basso, scadenza
+    // vicina — e un concorso Ferrero uscito dieci minuti fa vale la pena
+    // guardarlo comunque, anche se il premio è piccolo e chiude fra due mesi:
+    // è proprio quello che "seguo questa marca" voleva dire. Restano i filtri
+    // veri (fonti spente, tag spenti, solo gratis), perché quelli dicono "questo
+    // non lo voglio vedere", non "quanto mi interessa"; silenzio notturno,
+    // distanza minima fra avvisi, età massima e "già consegnato" valgono anche
+    // qui, e sono gli stessi controlli del ciclo qui sotto.
+    const marche = prefs.filters.favoriteBrands;
+    if (marche.length > 0) {
+      const perMarca = filtersFor(prefs.filters, {
+        kinds: SOLO_CONCORSI,
+        brands: [...marche],
+        // Il più recente per primo: la marca può avere in archivio concorsi vecchi
+        // che non hanno bisogno di un avviso.
+        orderBy: "first_seen",
+        limit: 5,
+      });
+      // `filtersFor` ci mette anche la soglia delle stelle di 🎛 Cosa vedi, che
+      // qui non deve valere: è la stessa cosa della soglia degli avvisi.
+      delete perMarca.minScore;
+      const gia = new Set(candidates.map((item) => item.id));
+      for (const item of await store.queryItems(perMarca)) {
+        if (!gia.has(item.id)) candidates.push(item);
+      }
+    }
+
     for (const item of candidates) {
       if (sent >= INSTANT_MAX_PER_RUN) break;
       if (item.status === "expired") continue;
@@ -394,7 +423,13 @@ export async function sendInstantAlerts(deps: NotifyDeps): Promise<{ sent: numbe
       if (await store.isDelivered(chatId, item.id, "digest")) continue;
       if (await store.isDelivered(chatId, item.id, "ignored")) continue;
 
-      const result = await tg.sendMessage(chatId, formatItemCard(item, now), {
+      // Un avviso che arriva sotto soglia arriva perché la marca è seguita:
+      // dirlo, altrimenti sembra che il punteggio sia sbagliato.
+      const perMarca =
+        item.brand !== null && marche.includes(item.brand)
+          ? `🏷 <b>${escapeHtml(brandLabel(item.brand))}</b> · marca che segui\n`
+          : "";
+      const result = await tg.sendMessage(chatId, `${perMarca}${formatItemCard(item, now)}`, {
         keyboard: instantKeyboard(item, regolamentoUrl(item)),
         disablePreview: true,
       });

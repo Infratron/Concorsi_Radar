@@ -273,21 +273,24 @@ describe("format", () => {
 describe("bottoni · costruzione delle tastiere", () => {
   it("il menù porta a tutte le sezioni, con i conteggi", () => {
     const keyboard = menuKeyboard({
-      nuovi: 3, oggi: 12, settimana: 40, scadenze: 2, salvati: 1, news: 7, coupon: 5, gratis: 9,
+      nuovi: 3, oggi: 12, settimana: 40, scadenze: 2, salvati: 1, news: 7, coupon: 5,
       preferiti: 4, filtri: 0,
     });
     const bottoni = keyboard.inline_keyboard.flat();
     expect(bottoni.map((b) => b.callback_data)).toEqual([
-      "s:nuovi", "s:oggi", "s:settimana", "s:scadenze", "s:gratis", "s:premi", "s:salvati", "s:news",
-      "s:cerca", "s:storico", "s:coupon", "s:preferiti", "s:filtri", "s:fonti", "s:impostazioni", "refresh",
+      "s:nuovi", "s:oggi", "s:settimana", "s:scadenze", "s:premi", "s:salvati", "s:news",
+      "s:cerca", "s:storico", "s:coupon", "s:preferiti", "s:filtri", "s:fonti", "s:impostazioni",
+      "refresh", "s:aiuto",
     ]);
     expect(bottoni[0]?.text).toBe("🆕 Nuovi (3)");
-    expect(bottoni[4]?.text).toBe("🆓 Gratis (9)");
-    // La porta ai tipi di premio non porta un numero: i conteggi sono dentro.
-    expect(bottoni[5]?.text).toBe("🎁 Tipi di premio");
-    expect(bottoni[6]?.text).toBe("⭐ Watchlist (1)");
-    expect(bottoni[7]?.text).toBe("📰 News (7)");
-    expect(bottoni[10]?.text).toBe("💶 Coupon e rimborsi (5)");
+    // La porta ai tipi di premio non porta un numero: i conteggi sono dentro, e
+    // 🆓 Gratis vive lì — nel menù sarebbe la stessa cosa da due posti.
+    expect(bottoni[4]?.text).toBe("🎁 Tipi di premio");
+    expect(bottoni.some((b) => (b.text ?? "").includes("🆓"))).toBe(false);
+    expect(bottoni[5]?.text).toBe("⭐ Watchlist (1)");
+    expect(bottoni[6]?.text).toBe("📰 News (7)");
+    expect(bottoni[9]?.text).toBe("💶 Coupon e rimborsi (5)");
+    expect(bottoni[15]?.text).toBe("❓ Aiuto");
   });
 
   it("un coupon si riconosce dal bottone: 💶 e senza punteggio", () => {
@@ -1631,6 +1634,62 @@ describe("digest e avvisi", () => {
     expect(calls).toHaveLength(0);
   });
 
+  it("un concorso di una marca seguita avvisa anche sotto la soglia", async () => {
+    const store = createMemoryStore();
+    await store.upsertPrefs(
+      prefs({
+        minScoreInstant: 80,
+        filters: { ...defaultFilters(), favoriteBrands: ["ferrero"] },
+      }),
+    );
+    // Punteggio basso: premio piccolo e scadenza lontana. Con la sola soglia non
+    // arriverebbe mai, ed è esattamente il caso che "seguo Ferrero" chiedeva.
+    await seed(store, [
+      { title: "Concorso Ferrero Nutella: vinci 10 euro di spesa", brand: "ferrero", score: 30 },
+    ]);
+    const { tg, calls } = makeTg();
+
+    expect(await sendInstantAlerts({ store, tg, now: NOW })).toEqual({ sent: 1 });
+
+    const testo = String(lastWith(calls, "sendMessage")?.payload.text ?? "");
+    expect(testo).toContain("Concorso Ferrero Nutella");
+    // La riga dice perché è arrivato senza il punteggio alto: senza, sembra un errore.
+    expect(testo).toContain("🏷 <b>Ferrero</b> · marca che segui");
+  });
+
+  it("una marca che non segui resta sotto la soglia: la regola è solo per le tue", async () => {
+    const store = createMemoryStore();
+    await store.upsertPrefs(
+      prefs({
+        minScoreInstant: 80,
+        filters: { ...defaultFilters(), favoriteBrands: ["ferrero"] },
+      }),
+    );
+    await seed(store, [{ title: "Concorso Barilla", brand: "barilla", score: 30 }]);
+    const { tg, calls } = makeTg();
+
+    expect(await sendInstantAlerts({ store, tg, now: NOW })).toEqual({ sent: 0 });
+    expect(calls).toHaveLength(0);
+  });
+
+  it("la marca seguita non scavalca il silenzio notturno né le fonti spente", async () => {
+    const store = createMemoryStore();
+    await store.upsertPrefs(
+      prefs({
+        minScoreInstant: 80,
+        filters: { ...defaultFilters(), favoriteBrands: ["ferrero"], mutedSources: ["premieconcorsi"] },
+      }),
+    );
+    await seed(store, [
+      { title: "Concorso Ferrero di notte", brand: "ferrero", score: 30 },
+    ]);
+    const { tg } = makeTg();
+    // 00:30 a Roma: la fascia di silenzio (23-7) vale anche per le marche seguite.
+    expect(await sendInstantAlerts({ store, tg, now: new Date("2026-11-20T23:30:00.000Z") })).toEqual({ sent: 0 });
+    // Di giorno sì, ma la fonte è spenta: quello è un "non lo voglio vedere".
+    expect(await sendInstantAlerts({ store, tg, now: NOW })).toEqual({ sent: 0 });
+  });
+
   it("gli articoli non finiscono nel digest: si leggono nella sezione news", async () => {
     const store = createMemoryStore();
     await store.upsertPrefs(prefs());
@@ -2065,7 +2124,7 @@ describe("solo gratis · la sezione", () => {
     expect(testo).toContain("Solo gratis (senza acquisto)");
     expect(testo).toContain("1 concorso");
     // La riga in testa spiega perché quell'elenco è corto: è il punto della sezione.
-    expect(testo).toContain("nessuno scontrino, nessun codice da comprare");
+    expect(testo).toContain("niente scontrino, niente codice, niente spesa minima");
     const bottoni = lastKeyboard(calls)?.inline_keyboard.flat() ?? [];
     expect(bottoni.some((b) => b.text.includes("senza obbligo di acquisto"))).toBe(true);
     expect(bottoni.some((b) => b.text.includes("con scontrino"))).toBe(false);
@@ -2076,18 +2135,24 @@ describe("solo gratis · la sezione", () => {
     expect((await store.getUiState(CHAT))?.section).toBe("gratis");
   });
 
-  it("il bottone del menù porta a 🆓 Gratis e conta gli stessi concorsi dell'elenco", async () => {
+  it("🆓 Gratis sta dentro 🎁 Tipi di premio, non nel menù", async () => {
+    // Una sezione sola, una porta sola: il menù non deve avere due modi per
+    // arrivare alla stessa domanda ("quali posso fare senza comprare?"), con due
+    // conteggi da tenere allineati.
     const store = await archivio();
     const { tg, calls } = makeTg();
 
     await handleUpdate(command(1, "/start"), deps(store, tg));
+    const menu = lastKeyboard(calls)?.inline_keyboard.flat() ?? [];
+    expect(menu.some((b) => b.callback_data === "s:gratis")).toBe(false);
 
+    await handleUpdate(tap(2, "s:premi", 100), deps(store, tg));
     const bottoni = lastKeyboard(calls)?.inline_keyboard.flat() ?? [];
     const gratis = bottoni.find((b) => b.callback_data === "s:gratis");
     // Un solo concorso senza acquisto in archivio: il numero è quello, non 3.
     expect(gratis?.text).toBe("🆓 Gratis (1)");
 
-    await handleUpdate(tap(2, "s:gratis", 100), deps(store, tg));
+    await handleUpdate(tap(3, "s:gratis", 100), deps(store, tg));
     const elenco = String(lastWith(calls, "editMessageText")?.payload.text ?? "");
     expect(elenco).toContain("1 concorso");
   });
@@ -2119,10 +2184,11 @@ describe("solo gratis · la sezione", () => {
     const bottoni = lastKeyboard(calls)?.inline_keyboard.flat() ?? [];
     expect(bottoni.some((b) => b.text.includes("che vale"))).toBe(true);
     expect(bottoni.some((b) => b.text.includes("mediocre"))).toBe(false);
-    // Il numero sul bottone nasce dalla stessa query: anche lui dice 1.
-    await handleUpdate(tap(2, "home", 100), deps(store, tg));
-    const menu = lastKeyboard(calls)?.inline_keyboard.flat() ?? [];
-    expect(menu.find((b) => b.callback_data === "s:gratis")?.text).toBe("🆓 Gratis (1)");
+    // Il numero sul bottone nasce dalla stessa query: anche lui dice 1 — e sta in
+    // 🎁 Tipi di premio, che è l'unica porta a questa sezione.
+    await handleUpdate(tap(2, "s:premi", 100), deps(store, tg));
+    const premi = lastKeyboard(calls)?.inline_keyboard.flat() ?? [];
+    expect(premi.find((b) => b.callback_data === "s:gratis")?.text).toBe("🆓 Gratis (1)");
   });
 
   it("senza nessun concorso senza acquisto lo dice, invece di sembrare vuota per caso", async () => {
@@ -2502,7 +2568,7 @@ describe("📚 Archivio · tutto quello che il bot ha visto", () => {
     const testo = String(lastWith(calls, "sendMessage")?.payload.text ?? "");
     const bottoniFetta = etichette(calls);
     expect(testo).toContain("📚 Archivio · Coupon</b> · 1 item");
-    expect(testo).toContain("non valgono in archivio");
+    expect(testo).toContain("qui non valgono");
     expect(bottoniFetta).toContain("Coupon scaduto");
     expect(bottoniFetta).not.toContain("Concorso chiuso");
     // La fetta attiva è segnata, come nelle altre schermate di scelta.
@@ -2774,5 +2840,79 @@ describe("📊 punteggio trasparente · la scheda spiega il voto", () => {
     expect(testo).toContain("qui non si vince niente");
     expect(testo).not.toContain("Come nasce");
     expect(testo).not.toContain("Soglia");
+  });
+});
+
+describe("testata del menù · quando ha raccolto il bot", () => {
+  it("mostra l'ora della raccolta, non quella dell'ultimo tocco", async () => {
+    const store = createMemoryStore();
+    await store.upsertPrefs(prefs());
+    // La raccolta vera è di ieri sera; il tick del Worker è di un minuto fa. La
+    // testata deve dire la prima: un tick che consegna non è una raccolta, e
+    // leggere la seconda come "aggiornato" è il malinteso da evitare.
+    await store.recordRun({
+      startedAt: "2026-11-19T20:09:00.000Z", trigger: "actions", sourcesOk: 31, sourcesFail: 1,
+      itemsNew: 4, ms: 300_000, note: "actions", log: null,
+    });
+    await store.recordRun({
+      startedAt: "2026-11-20T09:59:00.000Z", trigger: "*/15 * * * *", sourcesOk: 0, sourcesFail: 0,
+      itemsNew: 0, ms: 30, note: "tick", log: null,
+    });
+    const { tg, calls } = makeTg();
+
+    await handleUpdate(command(1, "/start"), deps(store, tg));
+
+    const testo = String(lastWith(calls, "sendMessage")?.payload.text ?? "");
+    expect(testo).toContain("Ultima raccolta: 19/11 21:09");
+  });
+
+  it("senza nessuna raccolta lo dice, invece di stampare una data inventata", async () => {
+    const store = createMemoryStore();
+    await store.upsertPrefs(prefs());
+    const { tg, calls } = makeTg();
+
+    await handleUpdate(command(1, "/start"), deps(store, tg));
+
+    expect(lastWith(calls, "sendMessage")?.payload.text).toContain("Nessuna raccolta ancora");
+  });
+});
+
+describe("❓ Aiuto · la wiki", () => {
+  it("si apre dal menù, una pagina alla volta, con le frecce che si fermano ai bordi", async () => {
+    const store = createMemoryStore();
+    await store.upsertPrefs(prefs());
+    const { tg, calls } = makeTg();
+
+    // Il primo messaggio lo manda /start: da lì in poi la schermata è quella
+    // sola che si modifica, e i tocchi sono editMessageText.
+    await handleUpdate(command(1, "/start"), deps(store, tg));
+    await handleUpdate(tap(2, "s:aiuto", 100), deps(store, tg));
+
+    expect(lastWith(calls, "editMessageText")?.payload.text).toContain("❓ <b>Aiuto · Come funziona</b>");
+    const prima = lastKeyboard(calls)?.inline_keyboard.flat() ?? [];
+    // All'inizio non c'è una pagina precedente, e la pagina è la prima.
+    expect(prima.some((b) => b.callback_data === "page:0")).toBe(false);
+    expect(prima.map((b) => b.callback_data)).toContain("page:1");
+
+    await handleUpdate(tap(3, "page:1", 100), deps(store, tg));
+
+    const seconda = String(lastWith(calls, "editMessageText")?.payload.text ?? "");
+    expect(seconda).toContain("❓ <b>Aiuto · 🆕 Nuovi</b>");
+    // Ogni pagina si spiega in poche righe: una wiki che si scorre non si legge.
+    expect(seconda.split("\n").length).toBeLessThanOrEqual(8);
+    expect(seconda).toContain("Pagina 2 di");
+  });
+
+  it("una pagina inventata non apre il vuoto", async () => {
+    const store = createMemoryStore();
+    await store.upsertPrefs(prefs());
+    const { tg, calls } = makeTg();
+
+    await handleUpdate(command(1, "/start"), deps(store, tg));
+    await handleUpdate(tap(2, "s:aiuto:inventata", 100), deps(store, tg));
+
+    // Il callback non è una sezione nota: nessuna pagina di aiuto si apre.
+    const testo = String((lastWith(calls, "editMessageText") ?? lastWith(calls, "sendMessage"))?.payload.text ?? "");
+    expect(testo).not.toContain("❓ <b>Aiuto");
   });
 });

@@ -139,6 +139,14 @@ export interface Store {
   recordRun(run: RunRow): Promise<void>;
   recentRuns(limit: number): Promise<RunRow[]>;
   /**
+   * Quando è partita l'ultima esecuzione con uno di questi trigger (ISO 8601),
+   * o null se non ce n'è nessuna. È la domanda "il radar è vivo?" nella forma
+   * più corta: una riga sola, indicizzata su started_at, e il trigger lo sceglie
+   * chi chiama (`EXTERNAL_TRIGGERS` per la raccolta vera, che i tick del Worker
+   * non sono).
+   */
+  lastRunAt(triggers: readonly string[]): Promise<string | null>;
+  /**
    * Le ultime esecuzioni CHE HANNO UN LOG, dalla più recente: sono le raccolte
    * vere (Actions, un PC, la raccolta di riserva del Worker). I tick da 15 minuti
    * e i digest restano fuori, perché non hanno niente da raccontare fonte per
