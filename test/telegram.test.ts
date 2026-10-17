@@ -2493,6 +2493,55 @@ describe("coupon e rimborsi · la sezione", () => {
     expect(bottoni[0]?.text.split("\n")[1]).toBe("💶 20 € su 50 € · 40% · ⏳ 31/12");
   });
 
+  it("↩️ Rimborsi su spesa: la stessa offerta da due fonti è una riga sola", async () => {
+    const store = createMemoryStore();
+    await store.upsertPrefs(prefs());
+    await seed(store, [
+      // Lo stesso rimborso raccontato da due fonti: in archivio sono due righe
+      // (due viste, due URL), nella classifica della convenienza è una offerta.
+      {
+        title: "Rimborso di 5 € su Nutella",
+        // Il riassunto più ricco è quello che resta in riga: l'altra copia
+        // sparisce come riga, non come informazione.
+        summary: "Rimborso di 5 euro sull'acquisto di Nutella: scontrino e modulo entro 30 giorni.",
+        kind: "coupon",
+        sourceId: "scontrinofelice-cashback",
+        tags: ["coupon", "cashback"],
+        deadline: "2026-12-31",
+      },
+      {
+        title: "Cashback Nutella: 5 € di rimborso",
+        kind: "coupon",
+        sourceId: "dimmicosacerchi-cashback",
+        tags: ["coupon", "cashback"],
+        deadline: "2026-12-31",
+      },
+      // Un'offerta diversa, per essere sicuri che l'unione non sia "una sola riga e basta".
+      {
+        title: "Spendi 100, ricevi 20",
+        kind: "coupon",
+        tags: ["coupon", "cashback"],
+        deadline: "2026-12-31",
+      },
+    ]);
+    const { tg, calls } = makeTg();
+
+    await handleUpdate(command(1, "/coupon"), deps(store, tg));
+    await handleUpdate(tap(2, "s:coupon-rimborsi", 100), deps(store, tg));
+
+    const bottoni = (lastKeyboard(calls)?.inline_keyboard.flat() ?? []).filter((b) =>
+      b.callback_data?.startsWith("open:"),
+    );
+    expect(bottoni).toHaveLength(2);
+    expect(bottoni.map((b) => b.text.split("\n")[0])).toEqual([
+      "💶 · Spendi 100, ricevi 20",
+      "💶 · Rimborso di 5 € su Nutella",
+    ]);
+    // Il conto in testa è quello delle righe mostrate, non delle righe in archivio.
+    const testo = String(lastWith(calls, "editMessageText")?.payload.text ?? "");
+    expect(testo).toContain("2 coupon");
+  });
+
   it("💶 Coupon ha le stesse viste dei concorsi: oggi, 7 giorni, scadenze, tutti", async () => {
     const store = createMemoryStore();
     await store.upsertPrefs(prefs());

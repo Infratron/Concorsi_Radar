@@ -458,6 +458,61 @@ export const SOURCES: SourceConfig[] = [
     includePattern: "/collezioni-e-concorsi/[a-z0-9-]+/?$",
     maxItems: 20,
   },
+  // ↩️ Le campagne spendi-e-riprendi delle insegne, dalla sitemap ufficiale.
+  // Aggiunte il 17/10/2026 e SPENTE, perché accese oggi non porterebbero niente:
+  // le pagine ci sono, il pattern le trova e la classificazione le riconosce
+  // tutte come coupon (verificato con `ingestSource` sulle sitemap vere), ma il
+  // cancello di freschezza scarta il 100% — sono campagne stagionali e l'ultima
+  // è finita da mesi. Accenderle adesso vuol dire una fonte "vuota" per mesi,
+  // che è il motivo per cui Burger King, PAYBACK, Penny ed Eurospin sono spente.
+  //
+  // Conad · 12 pagine (11 landing-page-ccn, 1 landing-page-dao): le spendi e
+  //   riprendi, le "ti rendiamo la metà" e il cashback. Tutte con lastmod
+  //   2025-06-05 tranne cashback-conad (2024-09-03), quindi 12 su 12 scartate
+  //   come "offerta vecchia (499 giorni)". Attenzione al costo: sitemap.xml è un
+  //   unico urlset da 3443 URL e 442 KB, ~21 ms di parse misurati in Node — da
+  //   sola sfonda i 10 ms di CPU del piano Free. Non accenderla senza Workers
+  //   Paid (o un file più piccolo: robots.txt non ne annuncia altri).
+  // Carrefour · 14 pagine da sitemap_2-content.xml (50 KB, ~1,2 ms di parse),
+  //   tutte coupon, tutte scartate: la più recente è del 2026-07-10, 98 giorni,
+  //   contro i 60 di COUPON_TTL_DAYS. Costo accettabile, contenuto fermo.
+  //
+  // Quando accenderle: alla prima campagna nuova (lastmod entro 60 giorni) che
+  // compare nel pattern, cioè quando il negozio pubblica la pagina con la soglia
+  // di spesa. Il pattern è già quello giusto e non serve toccare il codice. Gli
+  // elenchi /promozioni/ e le pagine prodotto restano fuori: il pattern prende
+  // solo le landing della campagna. Per Conad, oltre alla campagna, serve il
+  // budget CPU di Workers Paid: su Free il file da 442 KB resta troppo caro
+  // anche quando la promo è fresca.
+  {
+    id: "sitemap-conad-spendi",
+    name: "Conad · spendi e riprendi",
+    kind: "sitemap",
+    url: "https://www.conad.it/sitemap.xml",
+    category: "coupon",
+    tags: ["coupon", "cashback", "sitemap", "conad"],
+    cadenceMin: 240,
+    enabled: false,
+    // Tutti i circuiti (ccn, dao, cia…), non solo quelli che oggi ospitano la
+    // promo: "spendi" copre spendi_e_riprendi, Spendieriprendi*, spendieriprendi-
+    // giugno; "ti rendiamo la metà" è la stessa famiglia di rimborso.
+    includePattern: "landing-page-[a-z0-9]+/(spendi|cashback|tirendiamolameta)",
+    maxItems: 20,
+  },
+  {
+    id: "sitemap-carrefour-spendi",
+    name: "Carrefour · spendi e riprendi",
+    kind: "sitemap",
+    url: "https://www.carrefour.it/sitemap_2-content.xml",
+    category: "coupon",
+    tags: ["coupon", "cashback", "sitemap", "carrefour"],
+    cadenceMin: 240,
+    enabled: false,
+    // Prende "spendi-riprendi-…", "spendi-e-riprendi/…" e le landing
+    // "landing/spendi-riprendi-…"; non il catalogo né /promozioni/.
+    includePattern: "spendi-?(e-)?riprendi",
+    maxItems: 20,
+  },
   // SPENTA dal 17/10/2026: zero item in tutta la storia della fonte. La sitemap
   // non espone i regolamenti che il pattern cerca (risponde sempre 304, quindi
   // il file non cambia nemmeno). Sostituita dalla sitemap di Penny.
@@ -644,7 +699,13 @@ export const SOURCES: SourceConfig[] = [
 export const REJECTED_SOURCES: { url: string; reason: string }[] = [
   {
     url: "https://www.carrefour.it/sitemap_2-content.xml",
-    reason: "provata il 17/10/2026: 10 pagine lette e 10 scartate (7 ferme, 3 senza segnale di concorso), zero item",
+    reason:
+      "provata il 17/10/2026: 10 pagine lette e 10 scartate (7 ferme, 3 senza segnale di concorso), zero item. Riletta come fonte spendi-e-riprendi: 14 campagne, tutte con lastmod più vecchio di 60 giorni — vedi sitemap-carrefour-spendi (pronta, spenta)",
+  },
+  {
+    url: "https://www.esselunga.it/it-it/promo-e-news/landing/cashback.html",
+    reason:
+      "provata il 17/10/2026: è l'unica pagina cashback della sitemap (2 URL su 2220), risponde 200 ma è un guscio JavaScript senza testo di campagna; la seconda, cashback-smartphone.html, è 404. Zero offerte, niente da monitorare",
   },
   { url: "https://www.omaggiomania.com/concorsi-a-premi/", reason: "403 al fetch diretto delle pagine (il feed risponde)" },
   { url: "https://www.scontomaggio.com/concorsi-con-acquisto/", reason: "403 al fetch diretto delle pagine (i feed rispondono)" },

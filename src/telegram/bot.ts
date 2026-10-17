@@ -24,7 +24,7 @@ import type { TelegramUpdate } from "./api.ts";
 import type { NotifyDeps } from "./digest.ts";
 import { regolamentoUrl } from "./digest.ts";
 import { localDateString, sourceLabel, startOfLocalDay } from "./format.ts";
-import { parseEuroInput, refundAmountFor, sortByConvenience } from "../refunds.ts";
+import { parseEuroInput, rankByConvenience, refundAmountFor } from "../refunds.ts";
 import { leadHours, summarizeLead } from "../enrich/lead.ts";
 import { BRANDS_PAGE_SIZE, PAGE_SIZE, SHARE_BASE_DEFAULT } from "./keyboard.ts";
 import { SCORE_MAX, SCORE_MIN, hourLabel, parseQuietRange, toggleDigestHour } from "./prefs-config.ts";
@@ -762,7 +762,11 @@ async function loadScreenData(
     // cima il migliore dei sei arrivati, non il migliore in assoluto.
     if (state.section === "coupon-rimborsi") {
       const tutti = await store.queryItems({ ...query, limit: 200 });
-      const ordinati = sortByConvenience(tutti);
+      // La stessa offerta ripubblicata da più fonti è una riga sola: senza
+      // questo passaggio la classifica della convenienza mostrava lo stesso
+      // rimborso tre volte, con lo stesso rapporto. L'unione è di
+      // visualizzazione — le righe restano in archivio, una per fonte.
+      const ordinati = rankByConvenience(tutti);
       total = ordinati.length;
       const pagine = Math.max(1, Math.ceil(total / PAGE_SIZE));
       const pagina = Math.min(Math.max(state.page, 0), pagine - 1);

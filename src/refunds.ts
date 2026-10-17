@@ -1,4 +1,5 @@
 import type { RefundRow, RefundTotals } from "./types.ts";
+import { normalizeTitle } from "./lib/text.ts";
 
 /**
  * I rimborsi e i cashback: quanto torna indietro, e quanto è già tornato.
@@ -265,9 +266,9 @@ export function convenienceOf(value: SpendRefund): number | null {
  */
 export function sortByConvenience<T extends { title: string; summary: string | null; prize: string | null }>(
   items: readonly T[],
+  /** Cifre già lette (vedi rankByConvenience): evita di ripetere le stesse regex. */
+  valori: ReadonlyMap<T, SpendRefund> = valuesOf(items),
 ): T[] {
-  const valori = new Map<T, SpendRefund>();
-  for (const item of items) valori.set(item, spendRefundFor(item));
   return [...items].sort((a, b) => {
     const va = valori.get(a)!;
     const vb = valori.get(b)!;
@@ -278,6 +279,197 @@ export function sortByConvenience<T extends { title: string; summary: string | n
     if (ca === null && cb !== null) return 1;
     return (vb.refund.cents ?? 0) - (va.refund.cents ?? 0);
   });
+}
+
+/** Spesa e rimborso di ogni riga, calcolati una volta sola. */
+function valuesOf<T extends { title: string; summary: string | null; prize: string | null }>(
+  items: readonly T[],
+): Map<T, SpendRefund> {
+  const valori = new Map<T, SpendRefund>();
+  for (const item of items) valori.set(item, spendRefundFor(item));
+  return valori;
+}
+
+/**
+ * Parole che in un coupon non identificano l'offerta: dicono il MESTIERE della
+ * pagina (rimborso, cashback, buono) o la meccanica (spendi, ricevi, scontrino).
+ * Da sole non provano che due righe siano la stessa offerta — "Rimborso di 5 €"
+ * su un prodotto e su un altro si somigliano in tutto tranne che nel prodotto —
+ * quindi servono a togliere rumore, non a decidere.
+ */
+const OFFER_GENERIC = new Set([
+  "rimborso", "rimborsi", "rimborsa", "rimborsano", "rimborsare", "rimborsato", "cashback",
+  "buono", "buoni", "sconto", "sconti", "coupon", "offerta", "offerte", "promo",
+  "promozione", "promozioni", "iniziativa", "iniziative", "operazione", "spesa", "spese",
+  "spendi", "spendo", "spendere", "spendendo", "spendendone", "speso", "spesi", "ricevi",
+  "riceverai", "ricevere", "ricevuto", "ricevuti", "riprendi", "richiedi", "richiesta",
+  "richiedere", "torna", "tornano", "indietro", "restituisce", "risparmia", "risparmio",
+  "risparmi", "risparmiare", "prodotto", "prodotti", "confezione", "confezioni", "euro",
+  "gratis", "gratuito", "gratuita", "acquisto", "acquisti", "acquista", "acquistare",
+  "acquistando", "scontrino", "scontrini", "farmacia", "supermercato", "negozio", "punti",
+  "bollini", "codice", "stampare", "scaricare", "scarica", "come", "quando", "dove", "fino",
+  "massimo", "max", "valido", "valida", "scadenza", "importo", "cifra", "totale", "secondo",
+  "seconda", "meno", "caro", "cara", "più", "sul", "sulla", "sui", "della", "delle", "dei",
+  "degli", "dal", "dalla", "nelle", "nella", "tuo", "tua",
+]);
+
+/** Quello che si sa di un'offerta per riconoscerla in un altro elenco. */
+interface OfferIdentity {
+  /** La spesa dichiarata, se c'è: due spese diverse sono due offerte. */
+  spendCents: number | null;
+  /** Marca riconosciuta (src/config/brands.ts), se c'è. */
+  brand: string | null;
+  /** Titolo normalizzato: l'uguaglianza esatta vale come prova. */
+  title: string;
+  /** Marche e prodotti: l'unica parte che identifica davvero il coupon. */
+  specific: Set<string>;
+}
+
+function identityOf(item: { title: string; brand?: string | null }, spendCents: number | null): OfferIdentity {
+  const normalized = normalizeTitle(item.title);
+  const specific = new Set(
+    normalized
+      .split(" ")
+      .filter((token) => token.length >= 4 && !OFFER_GENERIC.has(token) && !/^\d+$/.test(token)),
+  );
+  return {
+    spendCents,
+    brand: item.brand ? item.brand.toLowerCase() : null,
+    title: normalized,
+    specific,
+  };
+}
+
+/**
+ * Due righe sono la stessa offerta?
+ *
+ * Serve che il bando dichiari lo STESSO rimborso (la firma è già il secchio in
+ * cui si confrontano), che le spese non si contraddicano, e almeno una prova in
+ * più: una parola specifica in comune (il prodotto: Novi, Nutella, Ymea…). La
+ * marca riconosciuta è solo un vincolo, non una prova. L'uguaglianza del titolo
+ * normalizzato basta da sola.
+ *
+ * La parola in comune deve avere almeno quattro lettere: con tre, "usa" (come in
+ * "Gillette usa e getta") univa due campagne di marche diverse nella prova con i
+ * feed veri del 17/10/2026 — Parodontax e Gillette finirono nello stesso gruppo.
+ *
+ * La spesa può mancare in una delle due copie — un blog la scrive nel titolo, un
+ * altro solo nel corpo — quindi una spesa presente solo da una parte non è una
+ * contraddizione; lo è se c'è in entrambe ed è diversa.
+ *
+ * Se una delle due non ha nessuna parola specifica — "Rimborso di 5 €" — non si
+ * unisce: uguale importo non è uguale offerta, e nasconderne una sarebbe peggio
+ * che mostrarne due.
+ */
+function sameOffer(a: OfferIdentity, b: OfferIdentity): boolean {
+  if (a.spendCents !== null && b.spendCents !== null && a.spendCents !== b.spendCents) return false;
+  if (a.brand !== null && b.brand !== null && a.brand !== b.brand) return false;
+  if (a.title.length > 0 && a.title === b.title) return true;
+  // La marca uguale NON basta da sola: due buoni diversi della stessa marca
+  // dichiarano spesso lo stesso importo ("Aia Durango 0,50 €" e "Aia Spinacine
+  // 0,50 €") e unirli nasconderebbe un'offerta. Serve sempre una parola in
+  // comune che non sia il mestiere della pagina.
+  for (const token of a.specific) {
+    if (b.specific.has(token)) return true;
+  }
+  return false;
+}
+
+/** Il rappresentante di un gruppo: quello che racconta di più, non il primo. */
+function richer<T extends { summary: string | null; brand?: string | null; firstSeenAt?: string }>(
+  candidate: T,
+  current: T,
+): boolean {
+  const lunghezza = (candidate.summary?.length ?? 0) - (current.summary?.length ?? 0);
+  if (lunghezza !== 0) return lunghezza > 0;
+  const marca = (candidate.brand ? 1 : 0) - (current.brand ? 1 : 0);
+  if (marca !== 0) return marca > 0;
+  if (candidate.firstSeenAt && current.firstSeenAt) return candidate.firstSeenAt < current.firstSeenAt;
+  return false;
+}
+
+/**
+ * Le stesse offerte ripubblicate da fonti diverse diventano UNA riga.
+ *
+ * Perché serve: la deduplica dell'ingestione (src/dedupe.ts) lavora sui titoli e
+ * un coupon raccontato da tre blog con tre frasi diverse le sfugge — "Rimborso
+ * di 5 € su Nutella" e "Cashback Nutella: 5 € di rimborso" hanno abbastanza
+ * parole in comune per essere la stessa offerta, ma non abbastanza per
+ * isDuplicateTitle. In 💶 Coupon e rimborsi quelle tre righe finivano una sotto
+ * l'altra con lo stesso rapporto di convenienza, cioè la classifica mostrava tre
+ * volte la stessa offerta.
+ *
+ * Qui l'unione è di VISUALIZZAZIONE, non di archivio: le righe restano tutte,
+ * perché ognuna è la vista di una fonte (e le viste si contano in 📈 Vantaggio).
+ * Si uniscono solo le offerte che dichiarano il rimborso: è quella la cifra che
+ * le rende confrontabili, e senza non c'è niente di verificabile in comune.
+ *
+ * L'ordine di arrivo si conserva: il rappresentante prende il posto della prima
+ * copia incontrata, così chi era in cima resta in cima.
+ */
+export function mergeIdenticalOffers<
+  T extends {
+    title: string;
+    summary: string | null;
+    prize: string | null;
+    brand?: string | null;
+    firstSeenAt?: string;
+  },
+>(
+  items: readonly T[],
+  /** Cifre già lette (vedi rankByConvenience): evita di ripetere le stesse regex. */
+  valori: ReadonlyMap<T, SpendRefund> = valuesOf(items),
+): T[] {
+  const tenuti: T[] = [];
+  const identita = new Map<number, OfferIdentity>();
+  const perFirma = new Map<string, number[]>();
+
+  for (const item of items) {
+    const { spendCents, refund } = valori.get(item) ?? spendRefundFor(item);
+    if (refund.cents === null) {
+      tenuti.push(item);
+      continue;
+    }
+    const signature = `${refund.cents}/${refund.cap ? "cap" : "exact"}`;
+    const propria = identityOf(item, spendCents);
+    const candidati = perFirma.get(signature) ?? [];
+    const unito = candidati.find((index) => sameOffer(identita.get(index)!, propria));
+    if (unito !== undefined) {
+      if (richer(item, tenuti[unito]!)) {
+        tenuti[unito] = item;
+        identita.set(unito, propria);
+      }
+      continue;
+    }
+    const index = tenuti.length;
+    tenuti.push(item);
+    identita.set(index, propria);
+    perFirma.set(signature, [...candidati, index]);
+  }
+
+  return tenuti;
+}
+
+/**
+ * La classifica di 💶 Coupon · ↩️ Rimborsi e cashback: prima i doppioni uniti,
+ * poi l'ordine dal più conveniente.
+ *
+ * Le due cose stanno insieme perché leggono le STESSE due cifre dal testo: in
+ * due passate separate ogni riga pagava due volte le regex di refundAmountFor e
+ * spendFrom. A 200 righe la differenza si misura in millisecondi, e su Workers
+ * Free la CPU di un'invocazione è 10 ms.
+ */
+export function rankByConvenience<
+  T extends {
+    title: string;
+    summary: string | null;
+    prize: string | null;
+    brand?: string | null;
+    firstSeenAt?: string;
+  },
+>(items: readonly T[]): T[] {
+  const valori = valuesOf(items);
+  return sortByConvenience(mergeIdenticalOffers(items, valori), valori);
 }
 
 /**

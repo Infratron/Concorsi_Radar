@@ -1681,7 +1681,8 @@ di un negozio è a sua volta un elenco di categorie ("Moda & Accessori",
 un buono, quindi sono fuori. **Le insegne** (Conad, Acqua & Sapone, Esselunga)
 tengono i buoni nell'app o sulla carta fedeltà e non pubblicano nessun elenco
 leggibile: le loro promozioni arrivano da qui, perché queste tre fonti le
-raccontano.
+raccontano. Le pagine di campagna delle sitemap Conad e Carrefour esistono, ma
+non elencano i buoni: il terzo sondaggio qui sotto dice cosa c'è dentro.
 
 | Fonte coupon | Feed | Cosa entra (misura del 16/10/2026) |
 |---|---|---|
@@ -1698,6 +1699,38 @@ leggono i feed, come per i concorsi. Il risultato in archivio, con la pipeline
 vera: **67 coupon**, 4 concorsi ibridi e 31 offerte fermate all'ingresso perché
 troppo vecchie (18 + 8 + 5).
 
+**Un'offerta, una riga.** Tre feed di coupon raccontano spesso la stessa
+promozione con tre frasi diverse ("Rimborso di 5 € su Nutella", "Cashback
+Nutella: 5 € di rimborso", "5 euro indietro su Nutella"): per la deduplica
+dell'ingestione sono titoli diversi, quindi nella **classifica della convenienza**
+di 💶 Coupon la stessa offerta poteva comparire tre volte con lo stesso
+rapporto. Da qui
+[mergeIdenticalOffers](src/refunds.ts): prima di ordinare per convenienza le
+righe si uniscono quando dichiarano **lo stesso rimborso** (stessa cifra, stesso
+tetto), non si contraddicono sulla **spesa** e hanno in comune almeno una parola
+di prodotto (la marca conta solo come vincolo: se le due marche dichiarate sono
+diverse, non si unisce). L'importo uguale da solo non basta: due "Rimborso di
+5 €" senza un prodotto in comune restano due righe, perché nasconderne una
+sarebbe peggio che mostrarne due; e nemmeno la marca uguale basta ("Aia Durango
+0,50 €" e "Aia Spinacine 0,50 €" sono due buoni). L'unione è **di
+visualizzazione**: l'archivio resta una riga per fonte (le viste si contano in
+📈 Vantaggio), cambia solo quello che si legge — riga rappresentante quella che
+racconta di più. La regola vale nella classifica; le altre viste dei coupon
+(🗂 Tutti, 📋 Oggi…) restano per fonte e per data di arrivo.
+
+Misura sui feed veri del 17/10/2026 (Scontrino Felice, DimmiCosaCerchi,
+CouponVolantini, 85 item): **85 righe → 73**, cioè 12 copie unite, tutte
+coppie vere (Ymea menopausa da tre fonti, Parodontax, Ambipur, AIA da Despar,
+Gillette Usa e Getta…). La prova ha fatto emergere una falsa unione che i test
+ora fissano: con la parola in comune lunga tre lettere, "usa" di "Gillette usa e
+getta" univa Parodontax e Gillette. `rankByConvenience` fa unione e ordinamento
+in una passata sola perché leggono le stesse due cifre: 200 righe costano ~1,4
+ms in Node, e su Workers Free il tetto è 10 ms.
+
+Il limite dichiarato: chi non dichiara una cifra di rimborso non si unisce —
+"buono sconto" senza importo (o "rimborso del 50%") resta una riga per fonte,
+perché senza una cifra non c'è niente di verificabile da confrontare.
+
 **Secondo sondaggio, 17/10/2026.** La domanda era se esistano altri siti di coupon
 con un feed, e la risposta misurata è **no**: `PromoQui`, `DoveConviene`,
 `Tiendeo` rispondono 200 ma servono **HTML**, non un feed; `Prezzonauta` espone
@@ -1709,6 +1742,34 @@ La conclusione pratica: il collo di bottiglia non sono le fonti ma la
 **classificazione** — le insegne (Esselunga, Conad, Coop, Carrefour, Pam, Lidl)
 tengono i buoni nell'app o in PDF, e chi li racconta pubblica un feed — ed è per
 questo che la sezione coupon ha ora le viste e non un elenco unico.
+
+**Terzo sondaggio: le insegne hanno una sitemap, ma è vuota di campagne.** La
+domanda era se le campagne spendi-e-riprendi di Conad e Carrefour si possano
+leggere dal sito ufficiale invece di aspettare che un blog le racconti. Si può —
+le sitemap sono pubbliche, robots.txt le permette e i pattern trovano le pagine —
+ma il 17/10/2026 non c'era **niente da raccogliere**: misurato con `ingestSource`
+sulle sitemap vere, **26 pagine su 26** (Conad 12, Carrefour 14) sono state
+classificate coupon e poi scartate dal cancello di freschezza come "offerta
+vecchia" — le più recenti erano di 98 giorni (Carrefour, tecnologia) e di 499
+(Conad, che ha tutte le landing ferme al 2025-06-05 per un aggiornamento di
+massa del sito). Sono campagne stagionali: quando non c'è, la pagina resta su.
+
+Le due fonti sono quindi in configurazione (`sitemap-conad-spendi`,
+`sitemap-carrefour-spendi`) ma **spente**, con il pattern già fissato nei test:
+accenderle oggi vorrebbe dire una fonte a zero item per mesi, cioè lo stesso
+motivo per cui sono spente Burger King, PAYBACK, Penny ed Eurospin. Si accendono
+alla prima campagna con `lastmod` entro i 60 giorni dei coupon, e non serve
+toccare il codice. C'è anche un motivo di costo, misurato: la sitemap di Conad è
+un unico urlset da **442 KB e 3443 URL**, ~21 ms di parse in Node — da sola
+sfonda i 10 ms di CPU del piano Free, quindi Conad resta spenta anche a campagna
+fresca finché non si passa a Workers Paid. Quella di Carrefour è 50 KB e ~1,2 ms,
+quindi è solo il contenuto a mancare.
+
+**Esselunga no.** Ha una sitemap da 2220 URL con **due** pagine cashback:
+`cashback.html` risponde 200 ma è un guscio JavaScript senza testo di campagna, e
+`cashback-smartphone.html` è 404. Zero offerte da leggere: essendo un negozio che
+tiene i buoni sulla Carta Fidaty, resta coperta dai feed e dalle query Google
+News, come le altre insegne.
 
 Esclusi con il motivo, perché la ricognizione serve a non riprovarli:
 **OmaggioMania** è escluso come fonte di **coupon** — il feed generalista mescola

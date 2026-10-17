@@ -80,6 +80,11 @@ export const CHANNEL_BY_SOURCE: Record<string, SourceChannel> = {
   "sitemap-eni": "brand",
   "sitemap-payback": "brand",
   "sitemap-conad": "brand",
+  // Le campagne spendi-e-riprendi delle insegne, dalla loro sitemap: brand, come
+  // le altre. Spente (vedi src/config/sources.ts) ma dichiarate qui lo stesso,
+  // perché il test di copertura vale per tutta la configurazione.
+  "sitemap-conad-spendi": "brand",
+  "sitemap-carrefour-spendi": "brand",
   "sitemap-burgerking": "brand",
   "sitemap-sammontana": "brand",
   "sitemap-aia": "brand",

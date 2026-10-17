@@ -6,6 +6,8 @@ import { parseGoogleNewsFeed, parseRssFeed } from "../src/ingest/rss.ts";
 import { parseSitemap, titleFromUrl } from "../src/ingest/sitemap.ts";
 import { parseHtmlLinks } from "../src/ingest/httplist.ts";
 import { ingestSource } from "../src/ingest/index.ts";
+import { matchesPattern } from "../src/ingest/shared.ts";
+import { SOURCES } from "../src/config/sources.ts";
 
 const NOW = new Date("2026-10-16T08:00:00.000Z");
 
@@ -372,5 +374,61 @@ describe("ingestSource", () => {
 
     expect(result.items).toHaveLength(1);
     expect(result.items[0].title).toBe("Vinci Buoni Spesa");
+  });
+});
+
+/**
+ * Le due sitemap spendi-e-riprendi delle insegne: configurate, verificate e
+ * spente (vedi src/config/sources.ts). Il test fissa il PATTERN sulle pagine
+ * misurate il 17/10/2026, perché è l'unica parte che non si può riverificare
+ * senza rete, e quella che, se sbagliata, fa entrare il catalogo.
+ */
+describe("sitemap spendi-e-riprendi delle insegne", () => {
+  const fonte = (id: string) => {
+    const config = SOURCES.find((source) => source.id === id);
+    if (!config) throw new Error(`fonte assente: ${id}`);
+    return config;
+  };
+
+  it("sono coupon, di tipo sitemap, e restano spente finché non c'è una campagna fresca", () => {
+    for (const id of ["sitemap-conad-spendi", "sitemap-carrefour-spendi"]) {
+      expect(fonte(id).kind).toBe("sitemap");
+      expect(fonte(id).category).toBe("coupon");
+      expect(fonte(id).enabled).toBe(false);
+    }
+  });
+
+  it("Conad: prende le spendi-e-riprendi e le ti-rendiamo-la-metà di ogni circuito", () => {
+    const pattern = fonte("sitemap-conad-spendi").includePattern ?? null;
+    const campagne = [
+      "https://www.conad.it/landing-page-ccn/spendi_e_riprendi",
+      "https://www.conad.it/landing-page-ccn/Spendieriprendi",
+      "https://www.conad.it/landing-page-ccn/spendieriprendispazio",
+      "https://www.conad.it/landing-page-ccn/tirendiamolametasettembre",
+      "https://www.conad.it/landing-page-dao/cashback-conad",
+    ];
+    for (const url of campagne) expect(matchesPattern(url, pattern)).toBe(true);
+
+    // Il catalogo non è una campagna: concorsi, raccolte punti e volantini.
+    const catalogo = [
+      "https://www.conad.it/landing-page-ccn/Concorso60",
+      "https://www.conad.it/landing-page-ccn/catalogo-mdd",
+      "https://www.conad.it/landing-page-cia/collezione-bicchieri-disney",
+      "https://www.conad.it/landing-page-pac2000a/sfoglia-i-nuovi-volantini-conad-lazio",
+      "https://www.conad.it/carte-e-premi/collezioni-e-concorsi/thun",
+    ];
+    for (const url of catalogo) expect(matchesPattern(url, pattern)).toBe(false);
+  });
+
+  it("Carrefour: prende le due forme di slug e non l'elenco promozioni", () => {
+    const pattern = fonte("sitemap-carrefour-spendi").includePattern ?? null;
+    const campagne = [
+      "https://www.carrefour.it/spendi-e-riprendi/ortofrutta.html",
+      "https://www.carrefour.it/spendi-riprendi-uova-di-pasqua.html",
+      "https://www.carrefour.it/landing/spendi-riprendi-pescheria.html",
+    ];
+    for (const url of campagne) expect(matchesPattern(url, pattern)).toBe(true);
+    expect(matchesPattern("https://www.carrefour.it/spesa-online/promozioni-weekend.html", pattern)).toBe(false);
+    expect(matchesPattern("https://www.carrefour.it/p/poltrona-nuvola.html", pattern)).toBe(false);
   });
 });

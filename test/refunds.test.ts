@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   convenienceOf,
   formatEuro,
+  mergeIdenticalOffers,
   parseEuroInput,
   refundAmountFor,
   refundAmountFrom,
@@ -137,6 +138,96 @@ describe("spesa richiesta e convenienza", () => {
       "Spendi 100, ricevi 10", // 10%
       "Rimborso di 3 €", // senza spesa: non confrontabile
     ]);
+  });
+});
+
+/**
+ * La stessa offerta ripubblicata da fonti diverse: la classifica della
+ * convenienza deve mostrarla una volta sola. I titoli sono nella forma delle
+ * fonti di coupon (Scontrino Felice, DimmiCosaCerchi, CouponVolantini), dove lo
+ * stesso rimborso è raccontato con tre frasi diverse.
+ */
+describe("la stessa offerta da più fonti è una riga sola", () => {
+  const offerta = (
+    title: string,
+    extra: { brand?: string; sourceId?: string; summary?: string; firstSeenAt?: string } = {},
+  ) => ({ title, summary: null, prize: null, ...extra });
+
+  it("unisce titoli diversi della stessa offerta, con la stessa cifra", () => {
+    const righe = mergeIdenticalOffers([
+      offerta("Rimborso di 5 € su Nutella", { brand: "Ferrero", sourceId: "scontrinofelice-cashback" }),
+      offerta("Cashback Nutella: 5 € di rimborso", { brand: "Ferrero", sourceId: "dimmicosacerchi-cashback" }),
+      offerta("5 euro indietro su Nutella", { brand: "Ferrero", sourceId: "couponvolantini" }),
+    ]);
+    expect(righe).toHaveLength(1);
+    expect(righe[0]?.title).toBe("Rimborso di 5 € su Nutella");
+  });
+
+  it("tiene il rappresentante che racconta di più, non il primo arrivato", () => {
+    const righe = mergeIdenticalOffers([
+      offerta("Rimborso di 5 € su Nutella", { sourceId: "a" }),
+      offerta("Cashback Nutella: 5 € di rimborso", {
+        sourceId: "b",
+        summary: "Rimborso di 5 euro sull'acquisto di Nutella, scontrino entro 30 giorni.",
+      }),
+    ]);
+    expect(righe).toHaveLength(1);
+    expect(righe[0]?.sourceId).toBe("b");
+  });
+
+  it("non unisce offerte con cifre, marche o prodotti diversi", () => {
+    const cifra = mergeIdenticalOffers([
+      offerta("Rimborso di 5 € su Nutella"),
+      offerta("Rimborso di 3 € su Nutella"),
+    ]);
+    expect(cifra).toHaveLength(2);
+
+    // Stessa marca, stesso importo, prodotti diversi: sono due buoni distinti.
+    const stessoMarchio = mergeIdenticalOffers([
+      offerta("Buono sconto Aia Spinacine 0,50 €", { brand: "AIA" }),
+      offerta("Buono sconto Aia Durango 0,50 €", { brand: "AIA" }),
+    ]);
+    expect(stessoMarchio).toHaveLength(2);
+
+    const marca = mergeIdenticalOffers([
+      offerta("Rimborso di 5 €", { brand: "Ferrero" }),
+      offerta("Rimborso di 5 €", { brand: "Novi" }),
+    ]);
+    expect(marca).toHaveLength(2);
+
+    const prodotto = mergeIdenticalOffers([
+      offerta("Rimborso di 5 € su Nutella"),
+      offerta("Rimborso di 5 € su Kinder Bueno"),
+    ]);
+    expect(prodotto).toHaveLength(2);
+  });
+
+  it("la spesa contraddittoria separa, quella presente da una parte sola no", () => {
+    const diverse = mergeIdenticalOffers([
+      offerta("Spendi 25 € e ricevi 5 € su Nutella"),
+      offerta("Spendi 50 € e ricevi 5 € su Nutella"),
+    ]);
+    expect(diverse).toHaveLength(2);
+
+    const stessa = mergeIdenticalOffers([
+      offerta("Spendi 25 € e ricevi 5 € su Nutella", { sourceId: "a" }),
+      offerta("Rimborso di 5 € su Nutella", { sourceId: "b" }),
+    ]);
+    expect(stessa).toHaveLength(1);
+  });
+
+  it("senza un prodotto in comune non si unisce: l'importo uguale non basta", () => {
+    // Due rimborsi diversi da 5 €, nessuna parola che li identifichi.
+    const righe = mergeIdenticalOffers([offerta("Rimborso di 5 €"), offerta("Cashback da 5 €")]);
+    expect(righe).toHaveLength(2);
+  });
+
+  it("le offerte senza rimborso dichiarato restano tutte", () => {
+    const righe = mergeIdenticalOffers([
+      offerta("Rimborso del 50% su tutti i prodotti"),
+      offerta("Rimborso del 50% su tutti i prodotti"),
+    ]);
+    expect(righe).toHaveLength(2);
   });
 });
 
