@@ -612,6 +612,19 @@ richiesta è dichiarata in uno solo (Prodeco Insyn, "la fase per richiedere il
 premio certo è valida dal 1° settembre al 31 dicembre"), ed è esattamente il
 caso in cui la scheda la mostra.
 
+Sui **premi certi** la scheda sa dire anche quando si gioca: `🕐 Quando giocare ·
+09:00–20:00 · un premio ogni 15 minuti · ✅ adesso si gioca`, e fuori orario
+`🚫 adesso fuori orario (riapre domani alle 09:00)`. Finestra e cadenza si
+leggono dal testo del bando quando la scheda viene disegnata
+([src/enrich/playtime.ts](src/enrich/playtime.ts)), con lo stesso principio delle
+due righe sopra: **niente colonne, niente migrazioni**, e niente numeri
+inventati. Se il bando dichiara solo l'orario, la cadenza non si mostra; se non
+dichiara nemmeno l'orario, **la riga non c'è**. La restrizione di giorni è
+rispettata (`solo il sabato`, `dal lunedì al venerdì`) e l'ora è quella italiana.
+Misurato sull'archivio del 17/10/2026: **0 dei 25 premi certi** dichiarano una
+finestra oraria o una cadenza, quindi oggi la riga non compare su nessuna scheda;
+comparirà quando un bando la scriverà.
+
 **📤 Condividi** apre il foglio di condivisione del telefono (WhatsApp, un'altra
 chat, qualunque app) con un messaggio già scritto: `Hey! Dai un'occhiata a questo
 concorso!` e poi **solo l'URL dell'item** — la pagina del concorso, o quella che

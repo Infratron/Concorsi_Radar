@@ -386,6 +386,30 @@ describe("bottoni · costruzione delle tastiere", () => {
     expect(formatItemCard(row({ kind: "news", summary: "Conserva lo scontrino" }), NOW)).not.toContain("🧾");
   });
 
+  it("🎁 Premio certo: la scheda dice quando giocare e se adesso è dentro o fuori", () => {
+    const premio = row({
+      summary: "Premio certo: un premio ogni 15 minuti, dalle 9:00 alle 20:00.",
+      tags: ["premio_certo"],
+    });
+    const card = formatItemCard(premio, NOW);
+    // NOW è venerdì 20/11/2026 alle 11:00 a Roma: dentro la finestra.
+    expect(card).toContain(
+      "🕐 <b>Quando giocare</b> · <b>09:00–20:00</b> · un premio ogni 15 minuti · ✅ adesso si gioca",
+    );
+
+    // Alle 22:30 la stessa scheda dice che è chiuso e quando riapre: è il dato
+    // che serve per decidere se aspettare o tornare domani.
+    const sera = formatItemCard(premio, new Date("2026-11-20T21:30:00.000Z"));
+    expect(sera).toContain("🚫 adesso fuori orario (riapre domani alle 09:00)");
+
+    // Solo i premi certi: un'estrazione con gli stessi orari non prende la riga.
+    expect(formatItemCard(row({ summary: premio.summary, tags: [] }), NOW)).not.toContain("Quando giocare");
+    // E un premio certo che non dichiara orari non inventa una finestra.
+    expect(
+      formatItemCard(row({ summary: "Premio certo con omaggio", tags: ["premio_certo"] }), NOW),
+    ).not.toContain("Quando giocare");
+  });
+
   it("la scheda è a blocchi leggibili: etichette in grassetto e riga vuota fra i gruppi", () => {
     const card = formatItemCard(row({}), NOW);
     const blocchi = card.split("\n\n");
@@ -702,6 +726,26 @@ describe("interfaccia · un solo messaggio per chat", () => {
     const scheda = lastWith(calls, "editMessageText")?.payload.text ?? "";
     expect(scheda).toContain("🧾 <b>Da conservare</b> · lo scontrino originale e il codice sulla confezione");
     expect(scheda).toContain("🎫 <b>Premio da richiedere</b> entro il <b>31/12/2026</b>");
+  });
+
+  it("la scheda aperta dalla chat dice quando giocare un premio certo", async () => {
+    const [id] = await seed(store, [
+      {
+        title: "Premio certo Bolla: richiedi i calici in regalo",
+        summary: "Premio certo: un premio ogni 15 minuti, dalle 9:00 alle 20:00.",
+        tags: ["premio_certo"],
+      },
+    ]);
+    const { tg, calls } = makeTg();
+    await handleUpdate(command(1, "/start"), deps(store, tg));
+    await handleUpdate(tap(2, `open:${id}`, 100), deps(store, tg));
+
+    // NOW è venerdì 20/11/2026 alle 11:00 a Roma: la riga arriva nella scheda
+    // vera, con lo stato calcolato adesso, non solo dalla funzione di formato.
+    const scheda = lastWith(calls, "editMessageText")?.payload.text ?? "";
+    expect(scheda).toContain(
+      "🕐 <b>Quando giocare</b> · <b>09:00–20:00</b> · un premio ogni 15 minuti · ✅ adesso si gioca",
+    );
   });
 
   it("la decisione nella scheda resta visibile e addestra i pesi di quella chat", async () => {

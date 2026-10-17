@@ -1,6 +1,7 @@
 import type { ItemRow } from "../types.ts";
 import { truncate } from "../lib/text.ts";
 import { dutiesFor } from "../enrich/proof.ts";
+import { playTimeFor } from "../enrich/playtime.ts";
 import { SOURCES } from "../config/sources.ts";
 import { MAX_MESSAGE_CHARS } from "./api.ts";
 
@@ -247,6 +248,25 @@ export function formatItemCard(item: ItemRow, now: Date): string {
   const fatti: string[] = [];
   if (item.prize) fatti.push(campo(offerta ? "💶" : "🏆", offerta ? "Offerta" : "Premio", escapeHtml(truncate(item.prize, 160))));
   if (item.participation) fatti.push(campo("📝", "Come partecipare", escapeHtml(truncate(item.participation, 160))));
+  // 🎁 Premio certo: il bando dice anche QUANDO si gioca. La riga c'è solo se
+  // il testo dichiara un orario o una cadenza — una finestra inventata sarebbe
+  // peggio di una riga mancante — e lo stato (dentro/fuori) si calcola adesso,
+  // al momento in cui la scheda si apre.
+  if (!articolo && item.tags.includes("premio_certo")) {
+    const quando = playTimeFor(item, now);
+    const parti: string[] = [];
+    if (quando.window) parti.push(`<b>${quando.window.label}</b>`);
+    if (quando.days) parti.push(escapeHtml(quando.days));
+    if (quando.every) parti.push(escapeHtml(quando.every));
+    if (quando.status === "inside") parti.push("✅ adesso si gioca");
+    if (quando.status === "outside" && quando.reason === "time") {
+      parti.push(`🚫 adesso fuori orario${quando.opensAt ? ` (${escapeHtml(quando.opensAt)})` : ""}`);
+    }
+    // Fuori per il giorno: la restrizione è già scritta sopra ("solo il
+    // sabato"), quindi qui basta dire che oggi non è quel giorno.
+    if (quando.status === "outside" && quando.reason === "day") parti.push("🚫 oggi no");
+    if (parti.length > 0) fatti.push(campo("🕐", "Quando giocare", parti.join(" · ")));
+  }
   // Chi apre la scheda deve sapere che cosa ha davanti: la pagina del concorso, un
   // pezzo che ne parla, o un'offerta da spendere. È la differenza che l'utente ha
   // chiesto di rendere evidente; sta qui, sotto il titolo, non in fondo.

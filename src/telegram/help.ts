@@ -95,6 +95,8 @@ export const HELP_PAGES: HelpPage[] = [
       "Il premio è garantito a chi partecipa: non è un'estrazione.",
       "Oggi lo dichiarano quasi solo le pagine di Scontrino Felice · premio certo; le altre fonti usano raramente questa formula.",
       "La porta rispetta i filtri che hai già attivo (fonti, stelle, marche): non ne accende nessuno.",
+      "Se il bando dichiara gli orari e la cadenza dei premi, la scheda aggiunge 🕐 Quando giocare e dice se adesso si è dentro o fuori: fuori orario scrive anche quando riapre.",
+      "Quando il testo non li dichiara, la riga non c'è: gli orari non si inventano.",
     ],
   },
   {
