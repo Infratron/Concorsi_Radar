@@ -14,7 +14,7 @@ import {
   type FilterSource,
 } from "../filters.ts";
 import type { InlineKeyboardButton, InlineKeyboardMarkup } from "./api.ts";
-import { daysLeft, formatDate, sourceLabel } from "./format.ts";
+import { formatDate, itemDetailLine, sourceLabel } from "./format.ts";
 import { dutiesFor } from "../enrich/proof.ts";
 import type { HelpPage } from "./help.ts";
 import { DIGEST_HOURS, hourLabel, hourShort, quietRange, shiftQuietRange, stepScore } from "./prefs-config.ts";
@@ -49,17 +49,18 @@ function done(text: string): InlineKeyboardButton {
 }
 
 /**
- * Etichetta di un concorso in un elenco: punteggio, urgenza e titolo. Il titolo
- * è troncato perché Telegram tronca da sé, e vogliamo decidere noi dove.
+ * Etichetta di un concorso in un elenco: DUE righe, come il digest.
+ *
+ * Prima riga: punteggio e titolo. Seconda: premio sintetico e scadenza. Il
+ * bottone di Telegram accetta il ritorno a capo, quindi la schermata può dire
+ * le stesse due cose della riga di digest senza rubare spazio al titolo — e non
+ * serve aprire la scheda per capire cosa si vince o quando chiude.
+ *
+ * Il titolo è troncato perché Telegram tronca da sé, e vogliamo decidere noi
+ * dove: 40 caratteri stanno in una riga di bottone senza andare a capo di
+ * nuovo, che farebbe una terza riga (e una tastiera alta il doppio).
  */
 export function itemButtonLabel(item: ItemRow, now: Date): string {
-  const left = daysLeft(item.deadline, now);
-  const urgenza = left !== null && left >= 0 && left <= 7 ? ` ⏳${left}gg` : "";
-  // ⛔ su chi non è più in gioco: dove si sceglie cosa fare adesso non compare
-  // quasi mai (l'archivio chiuso non entra in quelle sezioni), ma in 📚 Archivio
-  // e in 🔍 Cerca sì — e senza quel segno si tocca un concorso credendo di poterci
-  // ancora partecipare.
-  const chiuso = item.status === "expired" || (left !== null && left < 0) ? " ⛔" : "";
   // 📰 per un articolo e 💶 per un coupon, al posto di ⭐: in un elenco (e nella
   // ricerca, dove i tre tipi convivono) si vede subito che quello non è la pagina
   // su cui si partecipa.
@@ -69,7 +70,9 @@ export function itemButtonLabel(item: ItemRow, now: Date): string {
   // buono sconto non vuol dire niente — mostrarlo sarebbe un numero inventato.
   const segno = item.kind === "news" ? "📰" : item.kind === "coupon" ? "💶" : "⭐";
   const testa = item.kind === "coupon" ? segno : `${segno}${item.score}`;
-  return truncate(`${testa}${urgenza}${chiuso} · ${item.title}`, 52);
+  const prima = `${testa} · ${truncate(item.title, 46)}`;
+  const dettaglio = truncate(itemDetailLine(item, now), 46);
+  return dettaglio.length > 0 ? `${prima}\n${dettaglio}` : prima;
 }
 
 /** Il menù principale: tutte le sezioni, con i conteggi addosso. */

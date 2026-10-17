@@ -2,6 +2,7 @@ import type { ItemRow } from "../types.ts";
 import { truncate } from "../lib/text.ts";
 import { dutiesFor } from "../enrich/proof.ts";
 import { playTimeFor } from "../enrich/playtime.ts";
+import { formatEuro, refundAmountFor } from "../refunds.ts";
 import { SOURCES } from "../config/sources.ts";
 import { MAX_MESSAGE_CHARS } from "./api.ts";
 
@@ -197,15 +198,81 @@ function tagLabel(item: ItemRow, max = 4): string {
   return `🏷 ${escapeHtml(tags.slice(0, max).map((tag) => tag.replace(/_/g, " ")).join(" · "))}`;
 }
 
-/** Riga compatta per liste lunghe (digest, /oggi, /settimana). */
-export function formatItemLine(item: ItemRow, now: Date): string {
+/**
+ * Data breve per gli elenchi: "24/11", con l'anno solo quando è un altro.
+ *
+ * In un elenco di concorsi l'anno è quasi sempre quello in corso: scriverlo
+ * dodici volte occupa la riga che serve al premio. Quando invece la scadenza
+ * è l'anno prossimo, l'anno torna, perché "12/01" da solo si legge come
+ * passato prossimo.
+ */
+function shortDate(iso: string, now: Date): string {
+  const parsed = parseIsoDate(iso);
+  if (!parsed) return "";
+  const oggi = parseIsoDate(localDateString(now));
+  const anno = oggi?.y === parsed.y ? "" : `/${String(parsed.y).slice(2)}`;
+  return `${String(parsed.d).padStart(2, "0")}/${String(parsed.m).padStart(2, "0")}${anno}`;
+}
+
+/**
+ * La scadenza in poche parole: "⏳ 4 giorni (24/11)", "⏳ 24/11", "⏳ scade
+ * oggi", "⛔ scaduto il 12/11". Nei primi sette giorni il conto è esplicito
+ * perché è quello che cambia la decisione; dopo basta la data.
+ */
+export function deadlineBrief(item: ItemRow, now: Date): string {
+  if (!item.deadline) return "";
   const left = daysLeft(item.deadline, now);
-  const urgency = left !== null && left >= 0 && left <= 7 ? ` ⏳${left}gg` : "";
+  const data = shortDate(item.deadline, now);
+  if (left === null || data.length === 0) return "";
+  if (left < 0) return `⛔ scaduto il ${data}`;
+  if (left === 0) return `⏳ scade oggi (${data})`;
+  if (left <= 7) return `⏳ ${left} ${left === 1 ? "giorno" : "giorni"} (${data})`;
+  return `⏳ ${data}`;
+}
+
+/**
+ * Il premio in poche parole, per gli elenchi.
+ *
+ * Un coupon non ha un premio: ha una cifra che torna indietro, e quella è la
+ * cosa da leggere. Una news non ha né premio né offerta, e dirlo è meglio che
+ * lasciare la seconda riga vuota.
+ */
+export function prizeBrief(item: ItemRow): string {
+  if (item.kind === "coupon") {
+    const amount = refundAmountFor(item);
+    if (amount.cents !== null) {
+      return `💶 ${amount.cap ? "fino a " : ""}${formatEuro(amount.cents)} indietro`;
+    }
+    return "💶 buono sconto";
+  }
+  if (item.kind === "news") return "📰 articolo";
+  if (item.prize) return `🏆 ${truncate(item.prize, 70)}`;
+  // Il premio c'è ma il testo non lo dice: "nel bando" è l'unica cosa vera
+  // che si può scrivere, e tiene la seconda riga al suo posto.
+  return "🏆 premio nel bando";
+}
+
+/** La seconda riga di un elenco: premio sintetico e scadenza, uniti. */
+export function itemDetailLine(item: ItemRow, now: Date): string {
+  return [prizeBrief(item), deadlineBrief(item, now)].filter((parte) => parte.length > 0).join(" · ");
+}
+
+/**
+ * Riga di un elenco (digest, anteprime): DUE righe, non una.
+ *
+ * Prima riga: punteggio e titolo, che è quello su cui si decide se aprire.
+ * Seconda: premio e scadenza, che è quello che si vuole sapere senza aprire.
+ * Su una riga sola le due cose si contendevano lo spazio e la scadenza vinceva
+ * solo negli ultimi sette giorni; qui il premio c'è sempre, e la data pure —
+ * breve quando è lontana, con il conto dei giorni quando stringe.
+ */
+export function formatItemLine(item: ItemRow, now: Date): string {
   const title = truncate(item.title, 90);
   // 💶 al posto del punteggio: un buono sconto non si giudica con "quanto vale la
   // pena guardare questo concorso" (premio, sforzo, scadenza).
   const testa = item.kind === "coupon" ? "💶" : `⭐${item.score}`;
-  return `${testa}${urgency} · <a href="${escapeHtml(item.url)}">${escapeHtml(title)}</a>`;
+  const prima = `${testa} · <a href="${escapeHtml(item.url)}">${escapeHtml(title)}</a>`;
+  return `${prima}\n${escapeHtml(itemDetailLine(item, now))}`;
 }
 
 /**

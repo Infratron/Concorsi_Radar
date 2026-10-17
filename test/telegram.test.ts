@@ -249,9 +249,39 @@ describe("format", () => {
     expect(card).toContain("&amp;");
   });
 
-  it("mostra i giorni mancanti solo quando sono utili", () => {
-    expect(formatItemLine(row({ deadline: "2026-11-24" }), NOW)).toContain("⏳4gg");
-    expect(formatItemLine(row({ id: 2, deadline: "2027-05-01" }), NOW)).not.toContain("⏳");
+  it("l'elenco ha due righe: titolo, poi premio e scadenza", () => {
+    const riga = formatItemLine(
+      row({ title: "Concorso Nutella", prize: "Teglia brandizzata", deadline: "2026-11-24" }),
+      NOW,
+    );
+    const [prima, seconda] = riga.split("\n");
+    expect(prima).toBe('⭐85 · <a href="https://esempio.it/concorso/1">Concorso Nutella</a>');
+    expect(seconda).toBe("🏆 Teglia brandizzata · ⏳ 4 giorni (24/11)");
+
+    // Lontana: il conto dei giorni sparisce, la data resta (con l'anno, perché
+    // è un altro).
+    expect(
+      formatItemLine(row({ id: 2, prize: "Viaggio", deadline: "2027-05-01" }), NOW).split("\n")[1],
+    ).toBe("🏆 Viaggio · ⏳ 01/05/27");
+    // Scaduta: si dice, non si nasconde.
+    expect(formatItemLine(row({ id: 3, deadline: "2026-11-19" }), NOW)).toContain("⛔ scaduto il 19/11");
+    // Il premio arriva dalle fonti: passa dall'escape come il titolo.
+    expect(formatItemLine(row({ prize: "Buono <b>&</b>" }), NOW)).toContain("🏆 Buono &lt;b&gt;&amp;&lt;/b&gt;");
+  });
+
+  it("anche il digest porta le due righe per concorso", () => {
+    const messaggi = formatDigest(
+      [
+        {
+          title: "📋 Altri",
+          items: [row({ title: "Concorso Nutella", prize: "Teglia brandizzata", deadline: "2026-11-24" })],
+        },
+      ],
+      NOW,
+    );
+    const testo = messaggi.join("\n");
+    expect(testo).toContain("⭐85 · <a href=\"https://esempio.it/concorso/1\">Concorso Nutella</a>");
+    expect(testo).toContain("🏆 Teglia brandizzata · ⏳ 4 giorni (24/11)");
   });
 
   it("calcola giorni e date locali italiane", () => {
@@ -325,6 +355,16 @@ describe("bottoni · costruzione delle tastiere", () => {
   it("un articolo si riconosce dal bottone: 📰 invece di ⭐", () => {
     expect(itemButtonLabel(row({ kind: "news", title: "Tutti i concorsi del mese" }), NOW)).toContain("📰");
     expect(itemButtonLabel(row({ kind: "contest", title: "Concorso Barilla" }), NOW)).toContain("⭐");
+  });
+
+  it("il bottone dell'elenco dice premio e scadenza sulla seconda riga", () => {
+    const label = itemButtonLabel(
+      row({ title: "Concorso Nutella", prize: "Teglia brandizzata", deadline: "2026-11-24" }),
+      NOW,
+    );
+    const [prima, seconda] = label.split("\n");
+    expect(prima).toBe("⭐85 · Concorso Nutella");
+    expect(seconda).toBe("🏆 Teglia brandizzata · ⏳ 4 giorni (24/11)");
   });
 
   it("l'elenco ha un bottone per concorso e i numeri di pagina solo se servono", () => {
@@ -2322,6 +2362,25 @@ describe("vantaggio di tempistica · comando /vantaggio", () => {
 
     const testo = String(lastWith(calls, "editMessageText")?.payload.text ?? "");
     expect(testo).toContain("Gli aggregatori l'hanno visto <b>7 ore</b> prima");
+  });
+});
+
+describe("elenchi · due righe per concorso", () => {
+  it("il bottone dell'elenco vero porta premio e scadenza sotto il titolo", async () => {
+    const store = createMemoryStore();
+    await store.upsertPrefs(prefs());
+    await seed(store, [
+      { title: "Concorso Nutella", prize: "Teglia brandizzata", deadline: "2026-11-24" },
+    ]);
+    const { tg, calls } = makeTg();
+    await handleUpdate(command(1, "/oggi"), deps(store, tg));
+
+    // Il testo che Telegram riceve davvero, non solo quello della funzione.
+    const bottoni = lastKeyboard(calls)?.inline_keyboard.flat() ?? [];
+    const bottone = bottoni.find((b) => b.callback_data?.startsWith("open:"));
+    const [prima, seconda] = String(bottone?.text ?? "").split("\n");
+    expect(prima).toBe("⭐85 · Concorso Nutella");
+    expect(seconda).toBe("🏆 Teglia brandizzata · ⏳ 4 giorni (24/11)");
   });
 });
 

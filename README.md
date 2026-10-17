@@ -892,7 +892,12 @@ persona**: se tu ignori un concorso, alla tua amica arriva lo stesso.
 
 **Le notifiche** (avvisi immediati, promemoria della watchlist e digest) sono
 messaggi a sé, e hanno gli stessi bottoni: dal digest tocchi un concorso e si
-apre la scheda nella schermata viva.
+apre la scheda nella schermata viva. Nel digest e negli elenchi ogni concorso
+occupa **due righe**: `⭐85 · titolo` e sotto `🏆 premio sintetico · ⏳ scadenza`,
+così premio e data si leggono senza aprire la scheda. Il conto dei giorni compare
+negli ultimi sette (`⏳ 4 giorni (24/11)`), più lontano basta la data, e chi è
+chiuso lo dice (`⛔ scaduto il 19/11`). Sui coupon la seconda riga è la cifra che
+torna indietro; sugli articoli è il tipo.
 
 La differenza è cosa succede dopo: il digest **resta** (è contenuto da rileggere),
 mentre l'avviso immediato ha già fatto il suo lavoro appena lo usi e il bot lo

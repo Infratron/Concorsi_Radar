@@ -514,9 +514,12 @@ describe("pipeline · notifiche", () => {
 
     const testo = sent.join("\n");
     for (const message of sent) expect(message.length).toBeLessThanOrEqual(MAX_MESSAGE_CHARS);
-    // Maiuscolo: la forma minuscola è dentro l'URL, non nel titolo.
-    expect(testo.match(/Barilla/g) ?? []).toHaveLength(1);
-    expect(testo.match(/Findus/g) ?? []).toHaveLength(1);
+    // Un concorso una volta sola: si contano i LINK, non le parole. Dalla
+    // seconda riga in poi il premio può ripetere il nome del concorso ("una
+    // Fiat Panda con il concorso Barilla"), e contare le parole scambierebbe
+    // quella ripetizione per un doppione.
+    expect(testo.match(/href="https:\/\/a\.example\/barilla"/g) ?? []).toHaveLength(1);
+    expect(testo.match(/href="https:\/\/a\.example\/findus"/g) ?? []).toHaveLength(1);
     // Nessun item chiude entro 7 giorni: le sezioni piene sono Alto valore e Altri.
     expect(testo).toContain("🔥 Alto valore");
     expect(testo).toContain("📋 Altri");
