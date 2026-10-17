@@ -22,6 +22,7 @@ import {
   listKeyboard,
   menuKeyboard,
   settingsKeyboard,
+  shareUrlFor,
   sourceToggleLabel,
 } from "../src/telegram/keyboard.ts";
 import { SCORE_WEIGHTS } from "../src/enrich/score.ts";
@@ -335,10 +336,41 @@ describe("bottoni · costruzione delle tastiere", () => {
   it("la scheda mostra il Regolamento trovato sulla pagina del concorso", () => {
     const item = row({ id: 7, url: "https://esempio.it/concorso", summary: "", rulesUrl: "https://esempio.it/bando.pdf" });
     const keyboard = cardKeyboard(item, null, regolamentoUrl(item));
+    // 🔗 Apri e 📤 Condividi stanno insieme: sono le due cose che si fanno con
+    // quel link. Il bando, quando c'è, ha la sua riga.
     expect(keyboard.inline_keyboard[1]?.map((b) => [b.text, b.url])).toEqual([
       ["🔗 Apri", "https://esempio.it/concorso"],
+      ["📤 Condividi", shareUrlFor(item)],
+    ]);
+    expect(keyboard.inline_keyboard[2]?.map((b) => [b.text, b.url])).toEqual([
       ["📄 Regolamento", "https://esempio.it/bando.pdf"],
     ]);
+  });
+
+  it("condividere manda solo frase e link, non la scheda del bot", () => {
+    const item = row({
+      id: 7,
+      kind: "contest",
+      title: "Concorso Barilla vinci una Fiat Panda",
+      url: "https://esempio.it/concorso?utm=1&x=2",
+      score: 88,
+    });
+    const share = shareUrlFor(item);
+    const url = new URL(share);
+    expect(url.origin + url.pathname).toBe("https://t.me/share/url");
+    // La frase preimpostata, e il link così com'è: dopo la decodifica deve
+    // tornare esattamente quello dell'item, `&` compresa.
+    expect(url.searchParams.get("text")).toBe("Hey! Dai un'occhiata a questo concorso!");
+    expect(url.searchParams.get("url")).toBe(item.url);
+    // Niente dettagli del bot: chi riceve il messaggio non ce l'ha.
+    expect(share).not.toContain("Barilla");
+    expect(share).not.toContain("88");
+    const keyboard = cardKeyboard(item, null, null);
+    const bottone = keyboard.inline_keyboard.flat().find((b) => b.text === "📤 Condividi");
+    expect(bottone?.url).toBe(share);
+    // Un coupon non è un concorso, e un articolo non è né l'uno né l'altro.
+    expect(new URL(shareUrlFor(row({ kind: "coupon" }))).searchParams.get("text")).toContain("offerta");
+    expect(new URL(shareUrlFor(row({ kind: "news" }))).searchParams.get("text")).toContain("articolo");
   });
 
   it("nella scheda il bottone della decisione già presa è inerte", () => {
@@ -347,8 +379,9 @@ describe("bottoni · costruzione delle tastiere", () => {
     const prima = keyboard.inline_keyboard[0] ?? [];
     expect(prima[0]).toEqual({ text: "⭐ In watchlist", callback_data: "noop" });
     expect(prima[1]?.callback_data).toBe("ign:7");
-    expect(keyboard.inline_keyboard[1]?.map((b) => b.text)).toEqual(["🔗 Apri", "📄 Regolamento"]);
-    expect(keyboard.inline_keyboard[2]?.map((b) => b.callback_data)).toEqual(["back", "refresh", "home"]);
+    expect(keyboard.inline_keyboard[1]?.map((b) => b.text)).toEqual(["🔗 Apri", "📤 Condividi"]);
+    expect(keyboard.inline_keyboard[2]?.map((b) => b.text)).toEqual(["📄 Regolamento"]);
+    expect(keyboard.inline_keyboard[3]?.map((b) => b.callback_data)).toEqual(["back", "refresh", "home"]);
   });
 
   it("le impostazioni marcano i valori attivi", () => {

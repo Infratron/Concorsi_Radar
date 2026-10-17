@@ -544,7 +544,18 @@ vale di più adesso (📰 News fa eccezione: lì l'ordine è l'ultimo arrivato, 
 l'informazione giusta per un articolo; e sulle offerte il numero **non c'è**
 affatto, `💶 · Buono sconto Novi…`: il punteggio risponde a "quanto vale la pena
 guardare questo concorso adesso" e su un buono sconto sarebbe inventato).Nella scheda ci sono le decisioni ⭐ Watchlist, 🚫 Non mi interessa, 🏆
-Vinto (quella già presa resta visibile e inerte), 🔗 Apri e 📄 Regolamento.
+Vinto (quella già presa resta visibile e inerte), 🔗 Apri, 📤 Condividi e 📄
+Regolamento.
+
+**📤 Condividi** apre il foglio di condivisione del telefono (WhatsApp, un'altra
+chat, qualunque app) con un messaggio già scritto: `Hey! Dai un'occhiata a questo
+concorso!` e poi **solo l'URL dell'item** — la pagina del concorso, o quella che
+lo menziona. Niente titolo, niente punteggio, niente nome del bot: chi riceve il
+messaggio non ha il bot, e un testo pieno di etichette che non capisce sarebbe
+solo rumore. La frase cambia con la riga (`…questa offerta!` per un coupon,
+`…questo articolo!` per una news), e il link passa da `t.me/share/url`, che è
+l'unico modo che Telegram dà a un bot per far partire una condivisione
+([src/telegram/keyboard.ts](src/telegram/keyboard.ts)).
 
 ### 📊 Da dove viene il voto
 

@@ -375,8 +375,35 @@ export function listKeyboard(
 }
 
 /**
+ * La frase che accompagna il link condiviso, per tipo di riga.
+ *
+ * Non è il titolo dell'item e non parla del bot: chi riceve il messaggio deve
+ * capire in due parole che gli stanno mandando un concorso, non trovare il testo
+ * di una scheda pensata per chi il bot ce l'ha già.
+ */
+export function sharePhrase(kind: string): string {
+  if (kind === "coupon") return "Hey! Dai un'occhiata a questa offerta!";
+  if (kind === "news") return "Hey! Dai un'occhiata a questo articolo!";
+  return "Hey! Dai un'occhiata a questo concorso!";
+}
+
+/**
+ * Link di condivisione di Telegram: apre il foglio di condivisione del telefono,
+ * da cui si sceglie WhatsApp, un'altra chat o qualunque app.
+ *
+ * Telegram non ha un bottone "condividi" per i bot, ma `t.me/share/url` fa
+ * esattamente questo. Nel messaggio ci sono SOLO la frase e l'URL dell'item (la
+ * pagina del concorso, o quella che lo menziona): niente titolo, niente
+ * punteggio, niente nome del bot — quello che si manda deve reggersi da solo.
+ */
+export function shareUrlFor(item: Pick<ItemRow, "url" | "kind">): string {
+  const testo = sharePhrase(item.kind);
+  return `https://t.me/share/url?url=${encodeURIComponent(item.url)}&text=${encodeURIComponent(testo)}`;
+}
+
+/**
  * Scheda di un concorso: le tre decisioni (il tipo già scelto resta visibile ma
- * inerte), i link e il ritorno all'elenco da cui si è arrivati.
+ * inerte), i link, la condivisione e il ritorno all'elenco da cui si è arrivati.
  */
 export function cardKeyboard(
   item: ItemRow,
@@ -389,16 +416,17 @@ export function cardKeyboard(
     decision === "won" ? done("🏆 Vinto") : button("🏆 Vinto", `won:${item.id}`),
   ];
 
-  const link: InlineKeyboardButton[] = [{ text: "🔗 Apri", url: item.url }];
-  if (regolamentoUrl) link.push({ text: "📄 Regolamento", url: regolamentoUrl });
-
-  return {
-    inline_keyboard: [
-      decisioni,
-      link,
-      [button("⬅️ Torna all'elenco", "back"), button("🔄 Aggiorna", "refresh"), button("🏠 Menù", "home")],
-    ],
-  };
+  // 🔗 Apri e 📤 Condividi sulla stessa riga: sono le due cose che si fanno con
+  // quel link. 📄 Regolamento resta a parte quando c'è, che sono tre bottoni
+  // lunghi e su un telefono stretto si mangerebbero la riga.
+  const link: InlineKeyboardButton[] = [
+    { text: "🔗 Apri", url: item.url },
+    { text: "📤 Condividi", url: shareUrlFor(item) },
+  ];
+  const righe: InlineKeyboardButton[][] = [decisioni, link];
+  if (regolamentoUrl) righe.push([{ text: "📄 Regolamento", url: regolamentoUrl }]);
+  righe.push([button("⬅️ Torna all'elenco", "back"), button("🔄 Aggiorna", "refresh"), button("🏠 Menù", "home")]);
+  return { inline_keyboard: righe };
 }
 
 /** Bottoni sotto un avviso immediato: decide e apre il menù, senza lasciare il messaggio lì. */
