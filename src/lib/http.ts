@@ -97,6 +97,25 @@ export async function fetchText(
   };
 }
 
+/**
+ * HTML autoprodotto (una pagina sola, nessun asset). `no-store` perché non c'è
+ * niente da mettere in cache, e la CSP tiene fuori tutto tranne lo stile e lo
+ * script inline della pagina: non è una pagina che deve caricare risorse altrui.
+ */
+export function htmlResponse(html: string, status = 200): Response {
+  return new Response(html, {
+    status,
+    headers: {
+      "content-type": "text/html; charset=utf-8",
+      "cache-control": "no-store",
+      "content-security-policy":
+        "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; base-uri 'none'; form-action 'none'",
+      "referrer-policy": "no-referrer",
+      "x-content-type-options": "nosniff",
+    },
+  });
+}
+
 export function jsonResponse(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data, null, 2), {
     status,

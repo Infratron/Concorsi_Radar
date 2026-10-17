@@ -568,9 +568,20 @@ concorso!` e poi **solo l'URL dell'item** — la pagina del concorso, o quella c
 lo menziona. Niente titolo, niente punteggio, niente nome del bot: chi riceve il
 messaggio non ha il bot, e un testo pieno di etichette che non capisce sarebbe
 solo rumore. La frase cambia con la riga (`…questa offerta!` per un coupon,
-`…questo articolo!` per una news), e il link passa da `t.me/share/url`, che è
-l'unico modo che Telegram dà a un bot per far partire una condivisione
-([src/telegram/keyboard.ts](src/telegram/keyboard.ts)).
+`…questo articolo!` per una news).
+
+Il bottone non porta a `t.me/share/url`, che apre **solo le chat di Telegram**
+(era il difetto: "condividi" ma WhatsApp non c'era). Un bot non ha un pannello
+di condivisione, quindi il link apre una pagina nostra, `/share`
+([src/share.ts](src/share.ts)): lì `navigator.share()` chiama il pannello di
+sistema del telefono — WhatsApp, messaggi, mail, qualunque app — e dove quella
+API non c'è restano quattro vie esplicite: 💬 WhatsApp, ✈️ Telegram, ✉️ Email e
+📋 Copia frase e link. La pagina riceve solo `u` (il link) e `t` (la frase),
+accetta **solo http/https** (uno schema `javascript:` non viene mai servito),
+escape tutto quello che stampa e si porta dietro una CSP chiusa:
+`default-src 'none'` più lo stile e lo script inline della pagina. L'origine
+arriva dalla richiesta (`shareBase` in `BotDeps`), quindi funziona anche su un
+dominio custom senza costanti da aggiornare.
 
 ### 📊 Da dove viene il voto
 

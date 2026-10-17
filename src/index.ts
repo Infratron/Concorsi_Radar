@@ -10,7 +10,8 @@ import { ingestLog } from "./telegram/report.ts";
 import { COLLECTION_REMINDER_MARK, COLLECTION_REMINDER_SKIP, jobFor, shouldFallbackIngest } from "./schedule.ts";
 import { USER_AGENT } from "./config/sources.ts";
 import { benchDedupeLookup, benchSource, downloadBodies, summarise } from "./debug/bench.ts";
-import { jsonResponse } from "./lib/http.ts";
+import { htmlResponse, jsonResponse } from "./lib/http.ts";
+import { isShareableUrl, renderSharePage } from "./share.ts";
 import { dispatchIfSilent } from "./collect/dispatch.ts";
 
 /**
@@ -193,9 +194,23 @@ export default {
         store, tg, now: new Date(),
         adminChatId: access.adminChatId ?? access.allowed[0] ?? 0,
         allowedChatIds: access.allowed,
+        // L'origine vera della richiesta: la pagina di condivisione funziona
+        // anche su un dominio custom, senza una costante da aggiornare a mano.
+        shareBase: url.origin,
       });
       // Sempre 200: Telegram ritenta gli update non-2xx e noi li deduplichiamo.
       return jsonResponse({ ok: true, handled: result.handled });
+    }
+
+    // La pagina di condivisione: un bottone `url` del bot apre questa, e da qui
+    // `navigator.share()` chiama il pannello di sistema (WhatsApp, messaggi,
+    // mail) invece delle sole chat di Telegram. Pubblica di proposito: non legge
+    // niente e non ha segreti, riceve solo il link e la frase.
+    if (url.pathname === "/share") {
+      const target = url.searchParams.get("u") ?? "";
+      const testo = url.searchParams.get("t") ?? "";
+      if (!isShareableUrl(target)) return htmlResponse("<h1>Link non valido</h1>", 400);
+      return htmlResponse(renderSharePage(target, testo));
     }
 
     if (url.pathname === "/setup") {

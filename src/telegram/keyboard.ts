@@ -388,17 +388,31 @@ export function sharePhrase(kind: string): string {
 }
 
 /**
- * Link di condivisione di Telegram: apre il foglio di condivisione del telefono,
- * da cui si sceglie WhatsApp, un'altra chat o qualunque app.
+ * Dove vive la pagina di condivisione se chi chiama non lo dice.
  *
- * Telegram non ha un bottone "condividi" per i bot, ma `t.me/share/url` fa
- * esattamente questo. Nel messaggio ci sono SOLO la frase e l'URL dell'item (la
- * pagina del concorso, o quella che lo menziona): niente titolo, niente
- * punteggio, niente nome del bot — quello che si manda deve reggersi da solo.
+ * È la produzione: serve ai test e a un chiamante distratto, non alla chat — lì
+ * l'origine arriva dalla richiesta (`shareBase` in BotDeps), così un dominio
+ * custom non richiede di toccare questo file.
  */
-export function shareUrlFor(item: Pick<ItemRow, "url" | "kind">): string {
+export const SHARE_BASE_DEFAULT = "https://concorsi-radar.mg-infradev.workers.dev";
+
+/**
+ * Link al pannello di condivisione del telefono.
+ *
+ * Perché non `t.me/share/url`: quel bottone apre solo le chat di Telegram, e
+ * "condividi" per chi lo tocca vuol dire WhatsApp, messaggi, mail. I bot non
+ * hanno un "condividi" nativo, quindi il bottone porta a una nostra pagina
+ * (`/share`, src/share.ts) che chiama `navigator.share()` e, dove non c'è, offre
+ * WhatsApp/Telegram/Email/Copia.
+ *
+ * Nel messaggio ci sono SOLO la frase e l'URL dell'item (la pagina del concorso,
+ * o quella che lo menziona): niente titolo, niente punteggio, niente nome del
+ * bot — quello che si manda deve reggersi da solo.
+ */
+export function shareUrlFor(item: Pick<ItemRow, "url" | "kind">, base = SHARE_BASE_DEFAULT): string {
   const testo = sharePhrase(item.kind);
-  return `https://t.me/share/url?url=${encodeURIComponent(item.url)}&text=${encodeURIComponent(testo)}`;
+  const origine = base.replace(/\/+$/, "");
+  return `${origine}/share?u=${encodeURIComponent(item.url)}&t=${encodeURIComponent(testo)}`;
 }
 
 /**
@@ -409,6 +423,8 @@ export function cardKeyboard(
   item: ItemRow,
   decision: string | null,
   regolamentoUrl: string | null,
+  /** Origine della pagina /share (vedi shareUrlFor). */
+  shareBase = SHARE_BASE_DEFAULT,
 ): InlineKeyboardMarkup {
   const decisioni: InlineKeyboardButton[] = [
     decision === "saved" ? done("⭐ In watchlist") : button("⭐ Watchlist", `save:${item.id}`),
@@ -421,7 +437,7 @@ export function cardKeyboard(
   // lunghi e su un telefono stretto si mangerebbero la riga.
   const link: InlineKeyboardButton[] = [
     { text: "🔗 Apri", url: item.url },
-    { text: "📤 Condividi", url: shareUrlFor(item) },
+    { text: "📤 Condividi", url: shareUrlFor(item, shareBase) },
   ];
   const righe: InlineKeyboardButton[][] = [decisioni, link];
   if (regolamentoUrl) righe.push([{ text: "📄 Regolamento", url: regolamentoUrl }]);

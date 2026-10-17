@@ -175,7 +175,9 @@ function prefs(partial: Partial<Prefs> = {}): Prefs {
 }
 
 function deps(store: MemoryStore, tg: TelegramClient, adminChatId = CHAT) {
-  return { store, tg, now: NOW, adminChatId, allowedChatIds: [CHAT] };
+  // `shareBase` come in produzione arriva dalla richiesta: qui è un host fisso,
+  // così il test dice se il bottone 📤 Condividi ci passa davvero.
+  return { store, tg, now: NOW, adminChatId, allowedChatIds: [CHAT], shareBase: "https://bot.example" };
 }
 
 function command(updateId: number, text: string): TelegramUpdate {
@@ -355,22 +357,25 @@ describe("bottoni · costruzione delle tastiere", () => {
       url: "https://esempio.it/concorso?utm=1&x=2",
       score: 88,
     });
-    const share = shareUrlFor(item);
+    // Non si punta più a `t.me/share/url` (che apre solo le chat di Telegram):
+    // si punta alla pagina `/share` del Worker, dove il telefono apre il suo
+    // pannello di condivisione — WhatsApp compresa.
+    const share = shareUrlFor(item, "https://bot.example");
     const url = new URL(share);
-    expect(url.origin + url.pathname).toBe("https://t.me/share/url");
+    expect(url.origin + url.pathname).toBe("https://bot.example/share");
     // La frase preimpostata, e il link così com'è: dopo la decodifica deve
     // tornare esattamente quello dell'item, `&` compresa.
-    expect(url.searchParams.get("text")).toBe("Hey! Dai un'occhiata a questo concorso!");
-    expect(url.searchParams.get("url")).toBe(item.url);
+    expect(url.searchParams.get("t")).toBe("Hey! Dai un'occhiata a questo concorso!");
+    expect(url.searchParams.get("u")).toBe(item.url);
     // Niente dettagli del bot: chi riceve il messaggio non ce l'ha.
-    expect(share).not.toContain("Barilla");
-    expect(share).not.toContain("88");
-    const keyboard = cardKeyboard(item, null, null);
+    expect(decodeURIComponent(share)).not.toContain("Barilla");
+    expect(decodeURIComponent(share)).not.toContain("88/100");
+    const keyboard = cardKeyboard(item, null, null, "https://bot.example/");
     const bottone = keyboard.inline_keyboard.flat().find((b) => b.text === "📤 Condividi");
     expect(bottone?.url).toBe(share);
     // Un coupon non è un concorso, e un articolo non è né l'uno né l'altro.
-    expect(new URL(shareUrlFor(row({ kind: "coupon" }))).searchParams.get("text")).toContain("offerta");
-    expect(new URL(shareUrlFor(row({ kind: "news" }))).searchParams.get("text")).toContain("articolo");
+    expect(new URL(shareUrlFor(row({ kind: "coupon" }))).searchParams.get("t")).toContain("offerta");
+    expect(new URL(shareUrlFor(row({ kind: "news" }))).searchParams.get("t")).toContain("articolo");
   });
 
   it("nella scheda il bottone della decisione già presa è inerte", () => {
@@ -536,6 +541,10 @@ describe("interfaccia · un solo messaggio per chat", () => {
     const scheda = lastWith(calls, "editMessageText")?.payload.text ?? "";
     expect(scheda).toContain("Barilla vinci una Fiat Panda");
     expect(scheda).toContain("🆔 <code>1</code>");
+    // Il bottone di condivisione porta alla pagina `/share` di QUESTO Worker (il
+    // dominio arriva dalla richiesta), non alle sole chat di Telegram.
+    const condividi = lastKeyboard(calls)?.inline_keyboard.flat().find((b) => b.text === "📤 Condividi");
+    expect(condividi?.url?.startsWith("https://bot.example/share?")).toBe(true);
 
     await handleUpdate(tap(3, "back", 100), deps(store, tg));
     stato = await store.getUiState(CHAT);

@@ -25,7 +25,7 @@ import type { NotifyDeps } from "./digest.ts";
 import { regolamentoUrl } from "./digest.ts";
 import { localDateString, sourceLabel, startOfLocalDay } from "./format.ts";
 import { leadHours, summarizeLead } from "../enrich/lead.ts";
-import { BRANDS_PAGE_SIZE, PAGE_SIZE } from "./keyboard.ts";
+import { BRANDS_PAGE_SIZE, PAGE_SIZE, SHARE_BASE_DEFAULT } from "./keyboard.ts";
 import { SCORE_MAX, SCORE_MIN, hourLabel, parseQuietRange, toggleDigestHour } from "./prefs-config.ts";
 import {
   applyIntent,
@@ -59,6 +59,13 @@ export interface BotDeps extends NotifyDeps {
   adminChatId: number;
   /** Chat autorizzati; se assente vale solo adminChatId. */
   allowedChatIds?: number[];
+  /**
+   * Origine pubblica del Worker (es. https://bot.example). Serve al bottone 📤
+   * Condividi per puntare alla pagina `/share` (src/share.ts): lì il telefono
+   * apre il suo pannello di condivisione, che è l'unico modo per arrivare a
+   * WhatsApp e alle altre app. Assente = la costante di produzione.
+   */
+  shareBase?: string;
 }
 
 const WEEK_MS = 7 * 86_400_000;
@@ -755,6 +762,7 @@ async function loadScreenData(
     filterSourcesTotal: tutteLeFonti.length,
     brandChoices: marche.slice(page * BRANDS_PAGE_SIZE, page * BRANDS_PAGE_SIZE + BRANDS_PAGE_SIZE),
     brandChoicesTotal: marche.length,
+    shareBase: deps.shareBase ?? SHARE_BASE_DEFAULT,
   };
 }
 

@@ -392,6 +392,11 @@ export interface ScreenData {
   brandChoices: BrandChoice[];
   /** Quante marche ha il registro in tutto (per la paginazione). */
   brandChoicesTotal: number;
+  /**
+   * Origine pubblica del Worker: l'URL della pagina di condivisione
+   * (`/share`, src/share.ts). Arriva dalla richiesta, non da una costante.
+   */
+  shareBase: string;
 }
 
 function oreMinuti(iso: string | null): string {
@@ -703,7 +708,7 @@ function cardScreen(state: UiState, data: ScreenData, now: Date): Screen {
   righe.push(`🆔 <code>${item.id}</code> · 📥 fonte: ${escapeHtml(sourceLabel(item.sourceId))}`);
   return {
     text: righe.join("\n"),
-    keyboard: cardKeyboard(item, data.decision, data.regolamentoUrl),
+    keyboard: cardKeyboard(item, data.decision, data.regolamentoUrl, data.shareBase),
   };
 }
 
