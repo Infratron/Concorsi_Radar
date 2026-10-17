@@ -427,15 +427,16 @@ scrivere `/start`.
 | Sezione | Cosa mostra |
 |---|---|
 | 🆕 Nuovi | quello che è arrivato **dall'ultimo controllo** (il numero è sulla voce del menù) |
-| 📋 Oggi / 📅 7 giorni | l'archivio recente, ordinato per punteggio |
+| 📋 Oggi / 📅 7 giorni | l'archivio recente, ordinato per punteggio. **Oggi è il giorno di calendario**: alle 01:00 contiene quello che è arrivato da mezzanotte, non la giornata di ieri (che resta in 📅 7 giorni) |
 | ⏳ Scadenze | chi chiude entro 7 giorni e **non è già chiuso** |
 | 🆓 Gratis | i concorsi dove non si compra niente: **senza scontrino, senza codice sulla confezione, senza spesa minima** (qui sotto) |
 | 🎁 Tipi di premio | cinque porte per tipo di premio — 💳 gift card, 🚗 auto e moto, ✈️ viaggi, 🛒 buoni spesa, 🆓 gratis: si entra, si guarda, si esce, senza accendere nessun filtro (qui sotto) |
 | ⭐ Watchlist | i concorsi che hai salvato, **ordinati per scadenza** (chi chiude prima sta in cima) e con il promemoria a 3 giorni e 1 giorno dalla chiusura — a 30, 7 e 1 per raccolte punti e premi da richiedere (qui sotto) |
 | 📰 News | gli articoli e le pagine-elenco che parlano di concorsi: **non** sono concorsi, e il link porta al pezzo, non alla pagina ufficiale |
 | 💶 Coupon e rimborsi | i buoni sconto, i rimborsi e le operazioni a cashback da spendere al negozio o online: **non** sono concorsi e **non** producono notifiche (qui sotto) |
-| 🗂 Storico | cosa è successo a quello che hai visto: 🏆 vinti, ⌛ chiusi (chi ha chiuso per ultimo in cima) e 🚫 scartati, che da lì puoi riprendere |
-| 🔍 Cerca | scrivi una parola: il bot cancella il tuo messaggio e mostra i risultati (concorsi e news insieme, gli articoli marcati 📰) |
+| 🗂 Storico | cosa è successo a quello che hai visto: 🏆 vinti, ⌛ chiusi (chi ha chiuso per ultimo in cima) e 🚫 scartati, che da lì puoi riprendere. Da qui si entra in 📚 Archivio |
+| 📚 Archivio | **tutto quello che il bot ha mai visto**, dal più recente: concorsi chiusi e coupon scaduti compresi, con le fette 🎁 Concorsi / 💶 Coupon / 📰 Articoli. I filtri di 🎛 Cosa vedi qui non valgono (qui sotto) |
+| 🔍 Cerca | scrivi una parola: il bot cancella il tuo messaggio e mostra i risultati (concorsi e news insieme, gli articoli marcati 📰, e adesso anche il passato, marcato ⛔) |
 | 🏷 Preferiti per marca | le marche che segui: filtrano i concorsi, valgono **10 punti in più** e hanno una sezione loro (qui sotto) |
 | 🎛 Cosa vedi | i tuoi filtri: quali tipi di concorso, quali categorie di fonti e quali fonti vuoi vedere (qui sotto) |
 | 📡 Fonti | quali fonti rispondono: ora, codice HTTP e item dell'ultimo tentativo, più le ultime raccolte (e le porte a 🌡 Diagnostica e — solo per l'admin — a 🧾 Log delle raccolte) |
@@ -494,7 +495,7 @@ si sfoglia tutto l'archivio, non solo le prime righe.
 Sotto l'elenco dei concorsi c'è **una riga sola** per le stelle — `⭐ Tutte`,
 `⭐ 70+`, `⭐ 80+` — con il pallino sulla soglia attiva: serve a tenere la testa
 della classifica senza aprire nessun menù, e non compare dove non ha senso (📰
-News, ⭐ Watchlist, 🗂 Storico, 🔍 Cerca). Se un elenco resta vuoto con i filtri
+News, ⭐ Watchlist, 🗂 Storico, 📚 Archivio, 🔍 Cerca). Se un elenco resta vuoto con i filtri
 accesi il bot lo dice (`🎛 Hai N filtri attivi`) e mette lì il bottone per
 allargare: "non c'è niente" e "hai spento tu le fonti" sono due cose diverse.
 
@@ -527,8 +528,30 @@ valgono nelle sezioni che *suggeriscono* cosa guardare (🆕 Nuovi, 📋 Oggi, �
 giorni, ⏳ Scadenze, 📰 News, ⌛ Scaduti), nei **numeri del menù** (che contano
 quello che vedi, con la riga `🎛 Filtri tuoi: 12 di 40 concorsi` a dire quanto
 stai lasciando fuori) e nelle **notifiche** — digest e avvisi immediati. Non
-valgono invece su ⭐ Watchlist, 🗂 Storico e 🔍 Cerca: lì hai scelto tu cosa
-guardare, e un concorso salvato non deve sparire perché hai spento la sua fonte.
+valgono invece su ⭐ Watchlist, 🗂 Storico, 📚 Archivio e 🔍 Cerca: lì hai scelto
+tu cosa guardare, e un concorso salvato non deve sparire perché hai spento la sua
+fonte — né un coupon che esiste deve restare invisibile perché non risponde alle
+tue preferenze.
+
+### 📚 Archivio: la memoria completa, e perché è un posto a parte
+
+Le sezioni dei concorsi rispondono a "cosa guardo adesso", quindi un concorso
+chiuso e un coupon scaduto escono dall'elenco: giusto, ma restava senza risposta
+la domanda che si fa più spesso, *"questo l'avevamo già visto?"*. **📚 Archivio**
+è quel posto: tutto quello che è passato dal bot, di qualunque tipo e in qualunque
+stato, dal più recente, con i concorsi già chiusi segnati **⛔** perché non si
+aprono credendo di poterci ancora partecipare. Il numero sulla porta e in 🗂 Storico
+è l'archivio intero — non la somma di 🏆 vinti, ⌛ chiusi e 🚫 scartati, che sono
+le *tue* decisioni: qui c'è anche quello che non ti è mai stato consegnato.
+
+I filtri di 🎛 Cosa vedi non valgono qui, come in ⭐ Watchlist e 🔍 Cerca: un
+coupon che non trovi più perché hai spento la sua fonte sarebbe la sorpresa
+peggiore di una schermata che promette "se l'abbiamo visto, si trova". Le fette
+sono `archivio:<tipo>` (`archivio:coupon`, `archivio:contest`, `archivio:news`) e
+si accettano solo per i tre tipi veri: una sezione inventata non legge niente,
+mentre un tipo sbagliato letto come "tutto" mostrerebbe l'archivio completo
+credendo di averne chiesto una fetta. `/archivio` (o `/passati`) è la stessa cosa
+scritta come comando.
 
 Misurato il 16/10/2026 con la chat vera sopra uno store D1 su SQLite: spegnendo
 le raccolte punti e la categoria scontrino, l'elenco passa da 3 a 2 concorsi, il
@@ -619,7 +642,8 @@ digest e nella scheda — non sposta i pesi due volte.
 I comandi funzionano ancora ma sono scorciatoie, non il modo normale: `/start`
 (che è anche l'iscrizione, ed è l'unico pubblicato nel menù "/" di Telegram),
 `/menu`, `/nuovi`, `/oggi`, `/settimana`, `/scadenze`, `/gratis`, `/salvati` (o
-`/watchlist`), `/news`, `/coupon`, `/storico`, `/vinti`, `/scaduti`, `/cerca`, `/fonti`,
+`/watchlist`), `/news`, `/coupon`, `/storico`, `/archivio` (o `/passati`),
+`/vinti`, `/scaduti`, `/cerca`, `/fonti`,
 `/diagnostica`, `/vantaggio`, `/impostazioni`, `/stop` e
 `/salva|/vinto|/ignora <id>`.
 

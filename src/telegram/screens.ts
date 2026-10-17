@@ -369,6 +369,11 @@ function listScreen(state: UiState, data: ScreenData, now: Date): Screen {
       ignorati: "Non hai scartato niente: quello che tocchi 🚫 finisce qui, e da qui puoi riprenderlo.",
       "preferiti-lista":
         "Non segui ancora nessuna marca, quindi non c'è niente da mostrare qui: aprine una in 🏷 Preferiti per marca.",
+      // 📋 Oggi si svuota ogni mezzanotte: a notte fonda è normale che sia
+      // vuota, e senza dirlo sembrerebbe una sezione rotta (o peggio, si
+      // aspetterebbe 🔄 Aggiorna che non può far comparire il giorno prima).
+      oggi:
+        "Oggi non è ancora arrivato niente: questa sezione conta il giorno di calendario e riparte da zero a mezzanotte. I concorsi di ieri sono in 📅 7 giorni, quelli chiusi in 📚 Archivio.",
       coupon:
         "Nessun coupon valido adesso: qui restano solo quelli ancora spendibili — i buoni scaduti sono in 📚 Archivio — e i nuovi arrivano appena le fonti li trovano.",
       gratis:

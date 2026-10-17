@@ -2427,6 +2427,24 @@ describe("📋 Oggi · il giorno di calendario", () => {
     expect(bottoni).not.toContain("Concorso di ieri sera");
   });
 
+  it("a notte fonda lo dice: vuota è la risposta giusta, non una sezione rotta", async () => {
+    const store = createMemoryStore();
+    await store.upsertPrefs(prefs());
+    // Solo roba di ieri: alle 11:00 del 20/11 la sezione è piena, alle 01:00 di
+    // oggi sarebbe vuota — ed è quello che deve spiegare, invece di rimandare a
+    // 🔄 Aggiorna come se mancasse qualcosa.
+    await seed(store, [{ title: "Concorso di ieri sera", firstSeenAt: "2026-11-19T22:30:00.000Z" }]);
+    const { tg, calls } = makeTg();
+
+    await handleUpdate(command(1, "/oggi"), deps(store, tg));
+
+    const testo = String(lastWith(calls, "sendMessage")?.payload.text ?? "");
+    expect(testo).toContain("Oggi (dalle 00:00)");
+    expect(testo).toContain("riparte da zero a mezzanotte");
+    expect(testo).toContain("📅 7 giorni");
+    expect(testo).not.toContain("Tocca 🔄 Aggiorna più tardi");
+  });
+
   it("mezzanotte è quella italiana, e d'estate si sposta di un'ora", () => {
     // 20/11/2026 11:00 a Roma (CET, +1) → il giorno è cominciato alle 23:00Z del 19.
     expect(startOfLocalDay(NOW)).toBe("2026-11-19T23:00:00.000Z");
