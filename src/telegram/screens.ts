@@ -12,8 +12,9 @@ import {
   type FilterSource,
 } from "../filters.ts";
 import type { LeadStats } from "../enrich/lead.ts";
+import { explainScore, insightFromRow } from "../enrich/score.ts";
 import { MAX_MESSAGE_CHARS, type InlineKeyboardMarkup } from "./api.ts";
-import { escapeHtml, formatDate, formatItemCard, sourceLabel } from "./format.ts";
+import { escapeHtml, formatDate, formatItemCard, formatScoreBreakdown, sourceLabel } from "./format.ts";
 import { esitoUltimoTentativo } from "./report.ts";
 import { truncate } from "../lib/text.ts";
 import { runOrigin } from "../schedule.ts";
@@ -572,6 +573,17 @@ function cardScreen(state: UiState, data: ScreenData, now: Date): Screen {
   const righe: string[] = [];
   if (stato) righe.push(stato, "");
   righe.push(formatItemCard(item, now));
+  // Le voci del punteggio: solo per i concorsi. Un coupon non si giudica con
+  // "quanto vale la pena guardare questo concorso" (lì il numero non c'è
+  // proprio) e su un articolo la soglia delle stelle non si applica: una
+  // spiegazione che parla di un filtro che non c'è sarebbe peggio di nessuna.
+  if (item.kind === "contest") {
+    const spiegazione = explainScore(insightFromRow(item), item, data.prefs.weights, now, data.prefs.filters.favoriteBrands);
+    righe.push(
+      "",
+      formatScoreBreakdown(spiegazione, { soglia: data.prefs.filters.minScore, salvato: item.score }),
+    );
+  }
   // Il vantaggio misurato su QUESTO concorso: è la riga che rende il numero del
   // comando /vantaggio verificabile caso per caso.
   if (data.leadDelConcorso !== null) {

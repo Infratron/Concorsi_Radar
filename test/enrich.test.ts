@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createMemoryStore } from "../src/db/memory.ts";
 import { extractDeadline, extractParticipation, extractPrize, extractTags, enrichWithRules } from "../src/enrich/rules.ts";
-import { SCORE_WEIGHTS, applyBrandBonus, applyWeights, baseScore, rescoreRow, scoreItem } from "../src/enrich/score.ts";
+import { SCORE_WEIGHTS, applyBrandBonus, applyWeights, baseScore, explainScore, rescoreRow, scoreItem } from "../src/enrich/score.ts";
 import { MAX_NEURONS_PER_DAY, enrichWithAi, mergeInsight, needsAi } from "../src/enrich/ai.ts";
 import type { AiBinding, Insight, RawItem } from "../src/types.ts";
 
@@ -270,6 +270,113 @@ describe("punteggio", () => {
     expect(rescoreRow(riga, { giftcard: 1 }, ["ferrero"], NOW)).toBe(atteso);
     expect(rescoreRow(riga, { giftcard: 1 }, [], NOW)).toBe(atteso - SCORE_WEIGHTS.favoriteBrand);
     expect(rescoreRow(riga, { giftcard: 1 }, ["ferrero"], NOW)).not.toBe(riga.score);
+  });
+
+  it("la spiegazione somma esattamente al punteggio, anche con pesi e marca", () => {
+    // Il patto della scheda: i numeri che leggi sommano al voto. Non "circa":
+    // il voto è ciò che decide se un concorso passa il filtro delle stelle, e una
+    // spiegazione che non torna è peggio di nessuna spiegazione.
+    const casi: Array<{
+      nome: string;
+      insight: ReturnType<typeof insight>;
+      item: { title: string; summary: string; publishedAt?: string | null; brand?: string | null };
+      weights: Record<string, number>;
+      favorites: string[];
+    }> = [
+      {
+        nome: "concorso tipico con gift card",
+        insight: insight({ prizeValue: 0.8, effort: 0.9, deadline: "2026-11-30", tags: ["giftcard"] }),
+        item: { title: "Concorso Nutella", summary: "Partecipa e vinci", publishedAt: NOW.toISOString(), brand: "ferrero" },
+        weights: { giftcard: 1 },
+        favorites: ["ferrero"],
+      },
+      {
+        nome: "titolo debole e scadenza passata",
+        insight: insight({ prizeValue: 0.2, effort: 0.1, deadline: "2026-10-01", requiresPurchase: true }),
+        item: { title: "Gadget", summary: "" },
+        weights: {},
+        favorites: [],
+      },
+      {
+        nome: "premio massimo: la base sfonda il tetto 100",
+        insight: insight({ prizeValue: 1, effort: 1, deadline: "2026-10-18", tags: ["giftcard"] }),
+        item: { title: "In palio una Fiat Panda", summary: "Concorso gratuito", publishedAt: NOW.toISOString() },
+        weights: { giftcard: 5 },
+        favorites: [],
+      },
+      {
+        nome: "pesi negativi: il punteggio tocca il pavimento",
+        insight: insight({ prizeValue: 0.05, effort: 0.05, deadline: "2027-12-31", requiresPurchase: true }),
+        item: { title: "Concorso piccolo", summary: "x" },
+        weights: { giftcard: -10 },
+        favorites: [],
+      },
+    ];
+
+    for (const caso of casi) {
+      const spiegazione = explainScore(caso.insight, caso.item, caso.weights, NOW, caso.favorites);
+      const somma = spiegazione.parts.reduce((totale, voce) => totale + voce.points, 0);
+      expect(spiegazione.total, caso.nome).toBe(scoreItem(caso.insight, caso.item, caso.weights, NOW, caso.favorites));
+      // La somma delle voci fa il totale: nessun resto nascosto.
+      expect(somma, caso.nome).toBe(spiegazione.total);
+      // Le voci del corpo ci sono sempre, anche a zero: è il "premio 0/30" che
+      // spiega un voto basso.
+      for (const chiave of ["premio", "sforzo", "scadenza", "freschezza", "senzaAcquisto"]) {
+        expect(spiegazione.parts.some((voce) => voce.key === chiave), `${caso.nome}: manca ${chiave}`).toBe(true);
+      }
+    }
+  });
+
+  it("la spiegazione dice il tetto, e nomina gusti e marca solo quando contano", () => {
+    const somma = (spiegazione: ReturnType<typeof explainScore>): number =>
+      spiegazione.parts.reduce((totale, voce) => totale + voce.points, 0);
+
+    // Base sotto zero (scaduta, con acquisto, titolo debole): il taglio a 0 è una
+    // voce, non un mistero — e le voci sommano comunque al totale.
+    const pavimento = explainScore(
+      insight({ prizeValue: 0, effort: 0, deadline: "2026-10-01", requiresPurchase: true }),
+      { title: "Gadget", summary: "" },
+      {},
+      NOW,
+      [],
+    );
+    const limite = pavimento.parts.find((voce) => voce.key === "limite");
+    expect(limite?.points).toBeGreaterThan(0);
+    expect(limite?.label).toContain("Minimo");
+    expect(pavimento.total).toBe(0);
+    expect(somma(pavimento)).toBe(0);
+
+    // Il tetto 100 arriva dai pesi (la base da sola non ci arriva: il massimo
+    // teorico è 95): quello che conta è che le voci non raccontino più di 100.
+    const conPesi = explainScore(
+      insight({ prizeValue: 1, effort: 1, deadline: "2026-10-18", tags: ["giftcard"] }),
+      { title: "In palio una Fiat Panda", summary: "Concorso gratuito", publishedAt: NOW.toISOString(), brand: "ferrero" },
+      { giftcard: 20 },
+      NOW,
+      ["ferrero"],
+    );
+    expect(conPesi.total).toBe(100);
+    expect(somma(conPesi)).toBe(100);
+
+    const senzaGusti = explainScore(
+      insight({ prizeValue: 0.5, effort: 0.5, deadline: "2027-05-01" }),
+      { title: "Concorso Esselunga", summary: "x" },
+      {},
+      NOW,
+      [],
+    );
+    expect(senzaGusti.parts.some((voce) => voce.key === "gusti")).toBe(false);
+    expect(senzaGusti.parts.some((voce) => voce.key === "marca")).toBe(false);
+
+    const conTutto = explainScore(
+      insight({ prizeValue: 0.5, effort: 0.5, deadline: "2027-05-01", tags: ["giftcard"] }),
+      { title: "Concorso Esselunga", summary: "x", brand: "esselunga" },
+      { giftcard: -2 },
+      NOW,
+      ["esselunga"],
+    );
+    expect(conTutto.parts.find((voce) => voce.key === "gusti")?.points).toBe(-6);
+    expect(conTutto.parts.find((voce) => voce.key === "marca")?.points).toBe(SCORE_WEIGHTS.favoriteBrand);
   });
 });
 

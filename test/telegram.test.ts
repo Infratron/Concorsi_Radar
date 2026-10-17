@@ -2699,3 +2699,80 @@ describe("🧾 Log delle raccolte · la schermata dell'admin", () => {
     expect(lastKeyboard(calls)?.inline_keyboard.flat().map((b) => b.callback_data)).not.toContain("page:1");
   });
 });
+
+describe("📊 punteggio trasparente · la scheda spiega il voto", () => {
+  /** Il testo dell'ultima schermata, comunque sia stata mandata. */
+  const ultimoTesto = (calls: Call[]): string =>
+    String((lastWith(calls, "editMessageText") ?? lastWith(calls, "sendMessage"))?.payload.text ?? "");
+
+  it("mostra le voci che hanno fatto il voto, non solo il numero", async () => {
+    const store = createMemoryStore();
+    await store.upsertPrefs(prefs());
+    const [id] = await seed(store, [{ score: 72 }]);
+    const { tg, calls } = makeTg();
+
+    await handleUpdate(tap(2, `open:${id}`, 100), deps(store, tg));
+
+    const testo = ultimoTesto(calls);
+    expect(testo).toContain("Come nasce il 72");
+    // Le voci del corpo, coi loro massimi: sono quelle che spiegano un voto
+    // basso ("premio 0/30" dice più di "20").
+    expect(testo).toContain("🏆 Premio");
+    expect(testo).toContain("/30");
+    expect(testo).toContain("💪 Sforzo");
+    expect(testo).toContain("⏳ Scadenza");
+    expect(testo).toContain("🕐 Freschezza");
+    expect(testo).toContain("🆓 Senza acquisto");
+    // Con la soglia spenta lo dice: niente sta tagliando niente.
+    expect(testo).toContain("Nessuna soglia accesa");
+    // Il voto salvato e quello ricalcolato coi gusti di adesso possono divergere:
+    // la scheda lo dichiara, perché il filtro usa il primo.
+    expect(testo).toContain("Alla raccolta <b>72</b>");
+    expect(testo).toContain("con i gusti di adesso");
+  });
+
+  it("con la soglia delle stelle dice quanti punti mancano, o di quanto la passa", async () => {
+    const store = createMemoryStore();
+    await store.upsertPrefs(prefs({ filters: { ...defaultFilters(), minScore: 80 } }));
+    const [sotto, sopra] = await seed(store, [
+      { score: 72, title: "Concorso sotto soglia" },
+      { score: 90, title: "Concorso sopra soglia" },
+    ]);
+
+    const { tg, calls } = makeTg();
+    await handleUpdate(tap(2, `open:${sotto}`, 100), deps(store, tg));
+    expect(ultimoTesto(calls)).toContain("Soglia <b>80</b>");
+    expect(ultimoTesto(calls)).toContain("mancano <b>8</b> punti");
+
+    const { tg: tg2, calls: calls2 } = makeTg();
+    await handleUpdate(tap(3, `open:${sopra}`, 100), deps(store, tg2));
+    expect(ultimoTesto(calls2)).toContain("la passa di <b>10</b> punti");
+  });
+
+  it("i gusti della chat entrano nella spiegazione, e si vedono", async () => {
+    const store = createMemoryStore();
+    await store.upsertPrefs(prefs({ weights: { giftcard: 5 } }));
+    const [id] = await seed(store, [{ score: 72 }]);
+    const { tg, calls } = makeTg();
+
+    await handleUpdate(tap(2, `open:${id}`, 100), deps(store, tg));
+
+    // Cinque tocchi ✅ su gift card = +15 punti, e la voce lo dice: senza, la
+    // differenza fra il voto salvato e quello di adesso sarebbe un mistero.
+    expect(ultimoTesto(calls)).toContain("I tuoi gusti <b>+15</b>");
+  });
+
+  it("su un coupon non c'è nessun punteggio da spiegare", async () => {
+    const store = createMemoryStore();
+    await store.upsertPrefs(prefs());
+    const [id] = await seed(store, [{ kind: "coupon", title: "Buono sconto Novi" }]);
+    const { tg, calls } = makeTg();
+
+    await handleUpdate(tap(2, `open:${id}`, 100), deps(store, tg));
+
+    const testo = ultimoTesto(calls);
+    expect(testo).toContain("qui non si vince niente");
+    expect(testo).not.toContain("Come nasce");
+    expect(testo).not.toContain("Soglia");
+  });
+});

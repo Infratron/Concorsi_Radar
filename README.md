@@ -514,6 +514,43 @@ affatto, `💶 · Buono sconto Novi…`: il punteggio risponde a "quanto vale la
 guardare questo concorso adesso" e su un buono sconto sarebbe inventato).Nella scheda ci sono le decisioni ⭐ Watchlist, 🚫 Non mi interessa, 🏆
 Vinto (quella già presa resta visibile e inerte), 🔗 Apri e 📄 Regolamento.
 
+### 📊 Da dove viene il voto
+
+Il numero `🎁 83/100` da solo non dice niente su **perché** un concorso sta sotto
+la soglia delle stelle (`⭐ 70+`, `⭐ 80+`) o perché è in cima. La scheda lo
+spiega voce per voce, con i punti che ognuna ha aggiunto e il massimo che poteva
+aggiungere ([src/enrich/score.ts](src/enrich/score.ts)):
+
+```
+📊 Come nasce il 83
+🏆 Premio +29/30 · 💪 Sforzo +17/20
+⏳ Scadenza +18/18 · 🕐 Freschezza +6/12
+🆓 Senza acquisto +10/10
+💾 Alla raccolta 83 · con i gusti di adesso 80 (il filtro usa il primo)
+⭐ Soglia 80: la passa di 3 punti
+```
+
+Tre scelte che vale la pena conoscere:
+
+- **Le voci a zero si vedono.** `🏆 Premio +0/30` spiega un voto basso meglio di
+  qualsiasi frase: è la ragione per cui un concorso anonimo resta sotto i 70 e
+  non ti arriva mai.
+- **I numeri sommano al voto.** Le voci si arrotondano distribuendo il resto (chi
+  ha la parte decimale più alta prende il punto), e i due tagli veri — tetto 100 e
+  pavimento 0 — sono voci esplicite (`🚧 Tetto 100`, `🏁 Minimo 0`). Un test lo
+  verifica caso per caso: una spiegazione che non torna sarebbe peggio di nessuna
+  spiegazione, perché è quel numero che decide se passi il filtro.
+- **Due numeri, quando servono.** Il filtro delle stelle confronta il punteggio
+  SALVATO alla raccolta, che non cambia da solo; le voci sommano quello di
+  ADESSO, che può essere più basso perché la freschezza cala (l'esempio qui sopra
+  è un concorso entrato ieri a 83 ed è 80 oggi). La scheda dice tutti e due e
+  quale dei due decide, invece di mostrarne uno e far finta che sia l'altro.
+
+Le voci che dipendono da te — `🏷 I tuoi gusti` (i tocchi ✅/🚫, ±3 punti per tag)
+— compaiono solo quando cambiano qualcosa, come `⭐ Marca seguita` (+10, la marca
+che segui). Sui coupon la scheda non c'è: un buono sconto non si giudica con
+"quanto vale la pena guardare questo concorso", e lì il numero non esiste proprio.
+
 **📄 Regolamento** c'è quando il bando si trova, e si trova in due modi
 ([src/enrich/regulation.ts](src/enrich/regulation.ts)): dal testo dell'item —
 quando il feed lo cita nel riassunto — oppure **leggendo la pagina del concorso**,

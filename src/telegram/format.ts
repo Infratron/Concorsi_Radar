@@ -193,6 +193,76 @@ export function formatItemCard(item: ItemRow, now: Date): string {
   return lines.join("\n");
 }
 
+/** Il segno davanti a una voce del punteggio: +, −, o niente. */
+function segno(punti: number): string {
+  if (punti > 0) return "+";
+  // Il meno tipografico, non il trattino: in una fila di numeri si legge meglio.
+  if (punti < 0) return "−";
+  return "";
+}
+
+/**
+ * La scheda del punteggio: le voci che l'hanno prodotto, e la distanza dalla
+ * soglia delle stelle.
+ *
+ * Perché esiste. In chat il voto è un numero secco (`🎁 72/100`) e la riga delle
+ * stelle in fondo agli elenchi (`⭐ 70+`, `⭐ 80+`) è un filtro che taglia senza
+ * spiegarsi: chi vede un concorso sparire non ha modo di sapere se ha perso per
+ * il premio, per la scadenza o perché ha toccato 🚫 su quel tipo. Qui le voci si
+ * vedono una per una, coi punti che ognuna ha aggiunto e il massimo che poteva
+ * aggiungere — comprese le voci a zero, che sono quelle che spiegano un voto
+ * basso ("premio 0/30" dice più di "72").
+ *
+ * Due numeri, quando servono. Il filtro confronta il punteggio SALVATO alla
+ * raccolta; le voci qui sotto sommano quello di ADESSO, con i gusti e le marche
+ * che hai in questo momento. Se i due divergono si dicono tutti e due, invece di
+ * mostrarne uno e far finta che sia l'altro.
+ */
+export function formatScoreBreakdown(
+  spiegazione: { parts: Array<{ key: string; label: string; points: number; max: number | null }>; total: number },
+  opzioni: { soglia: number; salvato: number },
+): string {
+  const righe: string[] = [`📊 <b>Come nasce il ${opzioni.salvato}</b>`];
+
+  // Le voci che ci sono sempre: sono il corpo del punteggio, e vederle a zero è
+  // metà dell'informazione. Le altre compaiono solo quando hanno fatto qualcosa,
+  // perché "parole chiave +5" su chi non le ha sarebbe rumore.
+  const sempre = new Set(["premio", "sforzo", "scadenza", "freschezza", "senzaAcquisto", "limite"]);
+  const voci = spiegazione.parts.filter((voce) => sempre.has(voce.key) || voce.points !== 0);
+
+  const pezzi = voci.map((voce) => {
+    const massimo = voce.max === null || voce.max === 0 ? "" : `/${voce.max}`;
+    return `${voce.label} <b>${segno(voce.points)}${voce.points === 0 ? "0" : Math.abs(voce.points)}</b>${massimo}`;
+  });
+  // Due voci per riga: su un telefono ognuna sta su una riga sola e l'occhio
+  // scorre la colonna dei numeri invece di andare a capo a caso.
+  for (let indice = 0; indice < pezzi.length; indice += 2) {
+    righe.push(pezzi.slice(indice, indice + 2).join(" · "));
+  }
+
+  if (opzioni.salvato !== spiegazione.total) {
+    righe.push(
+      `💾 Alla raccolta <b>${opzioni.salvato}</b> · con i gusti di adesso <b>${spiegazione.total}</b> ` +
+        "(il filtro usa il primo)",
+    );
+  }
+
+  if (opzioni.soglia > 0) {
+    const scarto = opzioni.soglia - opzioni.salvato;
+    righe.push(
+      scarto > 0
+        ? `⭐ Soglia <b>${opzioni.soglia}</b>: mancano <b>${scarto}</b> ${scarto === 1 ? "punto" : "punti"} per passarla`
+        : scarto < 0
+          ? `⭐ Soglia <b>${opzioni.soglia}</b>: la passa di <b>${-scarto}</b> ${scarto === -1 ? "punto" : "punti"}`
+          : `⭐ Soglia <b>${opzioni.soglia}</b>: esattamente al limite`,
+    );
+  } else {
+    righe.push("⭐ Nessuna soglia accesa: le stelle in fondo agli elenchi non stanno tagliando niente.");
+  }
+
+  return righe.join("\n");
+}
+
 /**
  * Compone il digest impacchettando blocchi interi (mai un item spezzato a metà)
  * fino al limite di caratteri per messaggio. Restituisce un array di messaggi.
