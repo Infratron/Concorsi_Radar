@@ -12,6 +12,29 @@ import type { Env } from "../src/types.ts";
  * http/https, niente escursione dall'HTML, e i link delle app costruiti bene.
  */
 
+/**
+ * Luminanza relativa WCAG: serve a dire con un numero se la frase si legge,
+ * invece di fidarsi dell'occhio (o del tema chiaro del portatile).
+ */
+function luminanza(hex: string): number {
+  const cifre = hex.replace("#", "");
+  const canali = [0, 2, 4].map((offset) => parseInt(cifre.slice(offset, offset + 2), 16) / 255);
+  const lineare = (canale: number) => (canale <= 0.03928 ? canale / 12.92 : ((canale + 0.055) / 1.055) ** 2.4);
+  return 0.2126 * lineare(canali[0]) + 0.7152 * lineare(canali[1]) + 0.0722 * lineare(canali[2]);
+}
+
+function contrasto(primo: string, secondo: string): number {
+  const [chiaro, scuro] = [luminanza(primo), luminanza(secondo)].sort((a, b) => b - a);
+  return (chiaro + 0.05) / (scuro + 0.05);
+}
+
+function colore(html: string, selettore: string, proprieta: "background" | "color"): string {
+  const blocco = new RegExp(`\\${selettore} \\{[^}]*${proprieta}: (#[0-9a-fA-F]{6})`);
+  const trovato = blocco.exec(html)?.[1];
+  if (!trovato) throw new Error(`colore ${proprieta} assente per ${selettore}`);
+  return trovato;
+}
+
 describe("condivisione · la pagina /share", () => {
   it("accetta solo link http/https", () => {
     expect(isShareableUrl("https://esempio.it/concorso")).toBe(true);
@@ -28,7 +51,8 @@ describe("condivisione · la pagina /share", () => {
     const html = renderSharePage("https://esempio.it/concorso?utm=1&x=2", "Hey! Dai un'occhiata a questo concorso!");
     // WhatsApp: la via che i bottoni di Telegram non davano. Nell'attributo
     // l'apostrofo è `&#39;` (è HTML, non testo), quindi si confronta su quello.
-    const atteso = `https://wa.me/?text=${encodeURIComponent("Hey! Dai un'occhiata a questo concorso!\nhttps://esempio.it/concorso?utm=1&x=2")}`;
+    // Riga vuota fra frase e link: con un solo a capo i client li incollavano.
+    const atteso = `https://wa.me/?text=${encodeURIComponent("Hey! Dai un'occhiata a questo concorso!\n\nhttps://esempio.it/concorso?utm=1&x=2")}`;
     expect(html).toContain(atteso.replace(/'/g, "&#39;"));
     // Telegram resta, come alternativa esplicita.
     expect(html).toContain("https://t.me/share/url?url=");
@@ -39,6 +63,22 @@ describe("condivisione · la pagina /share", () => {
     expect(html).toContain("navigator.share");
     // Il link compare visitabile ma con rel che non passa referrer.
     expect(html).toContain('rel="noopener noreferrer nofollow"');
+  });
+
+  it("frase e link sono due blocchi leggibili, non una riga sola", () => {
+    const html = renderSharePage("https://esempio.it/concorso", "Hey! Dai un'occhiata a questo concorso!");
+    // Due paragrafi distinti: il browser non può incollarli.
+    expect(html).toContain('<p class="frase" id="frase">Hey! Dai un&#39;occhiata a questo concorso!</p>');
+    expect(html).toContain('<p class="link"><a href="https://esempio.it/concorso"');
+    // Testo scuro su carta chiara, con il tema di sistema disattivato: dentro la
+    // WebView di Telegram il tema scuro forzato rendeva la frase illeggibile.
+    expect(html).toContain("color-scheme: light");
+    expect(html).not.toContain("prefers-color-scheme");
+    expect(html).toContain(".frase { margin: 0 0 12px; color: #111827;");
+    // Il testo si legge su ogni schermo: contrasto misurato, non "a occhio".
+    const carta = colore(html, ".card", "background");
+    expect(contrasto(colore(html, ".frase", "color"), carta)).toBeGreaterThan(4.5);
+    expect(contrasto(colore(html, ".link a", "color"), carta)).toBeGreaterThan(4.5);
   });
 
   it("non lascia uscire il testo dall'HTML né dallo script", () => {
@@ -66,6 +106,8 @@ describe("condivisione · la rotta del Worker", () => {
     const html = await risposta.text();
     expect(html).toContain("https://esempio.it/concorso");
     expect(html).toContain("Ciao");
+    // La frase sta nel suo blocco, separata dal link.
+    expect(html).toContain('<p class="frase" id="frase">Ciao</p>');
   });
 
   it("rifiuta uno schema eseguibile invece di servirlo", async () => {

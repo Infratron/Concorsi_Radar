@@ -66,7 +66,9 @@ function escapeHtml(value: string): string {
  */
 export function renderSharePage(target: string, text: string): string {
   const messaggio = text.trim().length > 0 ? text.trim().slice(0, MAX_TEXT) : "";
-  const insieme = messaggio.length > 0 ? `${messaggio}\n${target}` : target;
+  // Riga vuota fra frase e link: con un solo a capo, in WhatsApp e in altri
+  // client il testo sembrava incollato all'URL (e alcuni lo incollano davvero).
+  const insieme = messaggio.length > 0 ? `${messaggio}\n\n${target}` : target;
   const host = (() => {
     try {
       return new URL(target).host;
@@ -86,24 +88,36 @@ export function renderSharePage(target: string, text: string): string {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Condividi</title>
 <style>
-  :root { color-scheme: light dark; }
-  body { font: 16px/1.4 -apple-system, system-ui, sans-serif; margin: 0; padding: 24px 18px 40px; background: #f6f7f9; color: #111; }
-  @media (prefers-color-scheme: dark) { body { background: #16181c; color: #f2f3f5; } .card { background: #1f2228; } a.via { background: #2a2e36; color: #f2f3f5; } }
-  h1 { font-size: 20px; margin: 0 0 4px; }
-  p.host { margin: 0 0 18px; opacity: .65; font-size: 14px; word-break: break-all; }
-  .card { background: #fff; border-radius: 14px; padding: 16px; margin: 0 0 18px; box-shadow: 0 1px 2px rgba(0,0,0,.06); }
-  .msg { white-space: pre-wrap; word-break: break-word; margin: 0; }
-  .msg a { color: inherit; }
+  /*
+   * Colori espliciti su OGNI elemento e color-scheme: light obbligatorio.
+   * Il primo tentativo lasciava i colori in ereditarietà e usava una media query
+   * per il tema scuro: dentro il browser in-app di Telegram (che forza il tema
+   * scuro sulle pagine) il risultato era testo chiaro su carta chiara — la frase
+   * non si leggeva affatto. Una pagina sempre chiara, con i suoi colori scritti,
+   * non ha un secondo tema che possa sovrapporsi.
+   */
+  :root { color-scheme: light; }
+  html, body { background: #eef1f5; }
+  body { font: 16px/1.5 -apple-system, system-ui, sans-serif; margin: 0; padding: 24px 18px 40px; color: #111827; }
+  h1 { font-size: 20px; margin: 0 0 4px; color: #111827; }
+  p.host { margin: 0 0 18px; color: #5b6472; font-size: 14px; word-break: break-all; }
+  .card { background: #ffffff; color: #111827; border-radius: 14px; padding: 16px; margin: 0 0 18px; box-shadow: 0 1px 2px rgba(0,0,0,.06); }
+  /* Frase e link sono due blocchi, non una riga con un a capo dentro: così non
+     possono incollarsi, qualunque cosa faccia il browser con gli spazi. */
+  .frase { margin: 0 0 12px; color: #111827; font-size: 16px; white-space: pre-wrap; word-break: break-word; }
+  .link { margin: 0; }
+  .link a { color: #1d4ed8; font-size: 14px; text-decoration: underline; word-break: break-all; }
   button, a.via { display: block; width: 100%; box-sizing: border-box; text-align: center; border: 0; border-radius: 12px; padding: 15px 14px; margin: 0 0 10px; font: inherit; font-weight: 600; text-decoration: none; cursor: pointer; }
-  button.primary { background: #2563eb; color: #fff; font-size: 17px; }
-  a.via { background: #e9ecf1; color: #111; }
-  .nota { font-size: 13px; opacity: .7; margin: 14px 0 0; }
+  button.primary { background: #2563eb; color: #ffffff; font-size: 17px; }
+  a.via { background: #dfe4ec; color: #111827; }
+  button.via { background: #dfe4ec; color: #111827; }
+  .nota { font-size: 13px; color: #5b6472; margin: 14px 0 0; }
 </style>
 </head>
 <body>
 <h1>Condividi</h1>
 <p class="host">${escapeHtml(host)}</p>
-<div class="card"><p class="msg" id="msg">${escapeHtml(messaggio)}${messaggio.length > 0 ? "\n" : ""}<a href="${escapeHtml(target)}" rel="noopener noreferrer nofollow">${escapeHtml(target)}</a></p></div>
+<div class="card">${messaggio.length > 0 ? `<p class="frase" id="frase">${escapeHtml(messaggio)}</p>` : ""}<p class="link"><a href="${escapeHtml(target)}" rel="noopener noreferrer nofollow">${escapeHtml(target)}</a></p></div>
 <button class="primary" id="share" type="button">📱 Condividi con un'app…</button>
 <a class="via" href="${escapeHtml(wa)}" rel="noopener noreferrer">💬 WhatsApp</a>
 <a class="via" href="${escapeHtml(tg)}" rel="noopener noreferrer">✈️ Telegram</a>
