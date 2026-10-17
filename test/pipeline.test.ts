@@ -119,6 +119,10 @@ function prefs(minScoreInstant: number): Prefs {
     minScoreInstant,
     quietHours: "23-7",
     digestHours: [8, 19],
+    // Questi test descrivono una chat che ha acceso sia il digest sia gli avvisi
+    // per punteggio: è lo scenario in cui le due consegne si possono misurare.
+    // Il caso "spenti di default" ha i suoi test in test/telegram.test.ts.
+    instantAlerts: true,
     filters: defaultFilters(),
   };
 }

@@ -1,9 +1,10 @@
 # Concorsi Radar
 
 Bot Telegram che scandaglia le fonti italiane di **concorsi a premi** e ti avvisa
-*solo* di quello che conta: due digest al giorno più un avviso immediato per i
-concorsi di alto valore o in scadenza. Gira su Cloudflare Workers (piano
-gratuito) con database D1. Costo: **€0**.
+*solo* di quello che conta — e **solo se gliel'hai chiesto**: digest e avvisi per
+punteggio nascono spenti, e arrivano i messaggi legati a un tuo gesto (un
+concorso in watchlist, una marca seguita) più l'allarme tecnico all'admin. Gira
+su Cloudflare Workers (piano gratuito) con database D1. Costo: **€0**.
 
 Ideato per l'uso in due (tu + una persona di fiducia, o più): ognuno ha le
 proprie preferenze, i propri pesi appresi dai bottoni e le proprie consegne,
@@ -27,7 +28,7 @@ Cron Worker */15 ──► item sopra soglia ──► avviso immediato ✅ 🚫
                       archivio dei concorsi scaduti
                       e, se la raccolta su Actions tace da 2 ore,
                       raccolta di riserva (solo le fonti raggiungibili)
-Cron 06:05 e 17:05 UTC ──► digest ──► Telegram
+Cron 06:05 e 17:05 UTC ──► digest (solo se acceso) ──► Telegram
 Telegram ──webhook──► comandi e feedback
 ```
 
@@ -145,7 +146,8 @@ Decisioni di progetto che contano:
   anche rumore: le sue notizie passano un filtro di pertinenza prima di entrare e
   restano comunque in 📰 News, perché il link è la pagina del giornale.
 - **Al primo giro in assoluto nessun avviso immediato**: si riempirebbe
-  l'archivio di concorsi vecchi. Ci pensa il digest.
+  l'archivio di concorsi vecchi. Ci pensa il digest — e se il digest è spento,
+  che è il default, li trovi in 📋 Oggi e 📅 7 giorni.
 
 ## 2. Requisiti
 
@@ -243,10 +245,11 @@ continuo) e poi i quattro `secrets:*`. Finché i segreti mancano, `/status`
 risponde elencandoli in `missing`: è il modo normale di accorgersene.
 
 Poi, **da entrambi gli account Telegram**, aprite il bot e premete `/start`:
-è quello che vi iscrive alle notifiche (il bot non può scrivere per primo a
-chi non ha mai avviato la conversazione) e vi mostra il menù. Da lì si va a
-pulsanti: provate 📡 Fonti per vedere chi risponde e ⚙️ Impostazioni per soglia
-e orari (sezione 5).
+è quello che vi iscrive alla chat (il bot non può scrivere per primo a chi non
+ha mai avviato la conversazione) e vi mostra il menù. Le consegne automatiche
+però restano **spente**: se le volete, si accendono da ⚙️ Impostazioni — digest
+(scegliendo le ore) e avvisi per punteggio (un interruttore). Da lì si va a
+pulsanti: provate anche 📡 Fonti per vedere chi risponde (sezione 5).
 
 ### Prova in locale
 
@@ -545,7 +548,7 @@ all'una e venticinque" quando il radar aveva raccolto mezz'ora prima.
 | 🎛 Cosa vedi | i tuoi filtri: quali tipi di concorso, quali categorie di fonti, quali fonti e quali marche vuoi vedere (qui sotto) |
 | 📡 Fonti | quali fonti rispondono: ora, codice HTTP e item dell'ultimo tentativo, più le ultime raccolte (e le porte a 🌡 Diagnostica e — solo per l'admin — a 🧾 Log delle raccolte) |
 | 🏁 Vantaggio | `/vantaggio`: di quanto arriviamo prima degli aggregatori, e quanto spesso non arriviamo affatto |
-| ⚙️ Impostazioni | soglia degli avvisi, fascia di silenzio e orari dei digest, regolabili di fino, più la porta ai filtri |
+| ⚙️ Impostazioni | avvisi per punteggio (spenti di default), fascia di silenzio e orari dei digest, regolabili di fino, più la porta ai filtri |
 | 🔄 Aggiorna | rilegge tutto e dice se è arrivato qualcosa di nuovo |
 | ❓ Aiuto | la wiki nella chat: un indice di bottoni, uno per argomento, e una pagina breve per sezione (qui sotto) |
 
@@ -892,7 +895,9 @@ persona**: se tu ignori un concorso, alla tua amica arriva lo stesso.
 
 **Le notifiche** (avvisi immediati, promemoria della watchlist e digest) sono
 messaggi a sé, e hanno gli stessi bottoni: dal digest tocchi un concorso e si
-apre la scheda nella schermata viva. Nel digest e negli elenchi ogni concorso
+apre la scheda nella schermata viva. Nessuna parte da sola: digest e avvisi per
+punteggio sono spenti finché non li accendi in ⚙️ Impostazioni, e i promemoria
+esistono solo per i concorsi che hai salvato. Nel digest e negli elenchi ogni concorso
 occupa **due righe**: `⭐85 · titolo` e sotto `🏆 premio sintetico · ⏳ scadenza`,
 così premio e data si leggono senza aprire la scheda. Il conto dei giorni compare
 negli ultimi sette (`⏳ 4 giorni (24/11)`), più lontano basta la data, e chi è
@@ -1425,22 +1430,29 @@ togliere.
 
 ### ⚙️ Impostazioni: le tre cose che si regolano
 
-`/impostazioni` (o ⚙️ nel menù) è l'unica schermata che cambia qualcosa: soglia
-degli **avvisi immediati**, **fascia di silenzio** e **orari dei digest**. Valgono
-**solo per la tua chat**, come i filtri e i pesi.
+`/impostazioni` (o ⚙️ nel menù) è l'unica schermata che cambia qualcosa: gli
+**avvisi per punteggio** (con la soglia), la **fascia di silenzio** e gli
+**orari del digest**. Valgono **solo per la tua chat**, come i filtri e i pesi.
+
+**Tutto nasce spento.** Una chat nuova ha `digestHours: []` e
+`instantAlerts: false`: il radar non scrive se non gliel'hai chiesto, e quello
+che arriva comunque è solo ciò che hai già chiesto con un gesto — le marche che
+segui e i concorsi salvati in watchlist.
 
 Ogni voce si regola di fino e di solito:
 
 | Cosa | Di fino | Di solito |
 |---|---|---|
-| 🔔 Avvisi immediati | `➖ 5` / `➕ 5`, da 0 a 100; ai bordi il cursore c'è ma è inerte, così la riga non si sposta sotto il dito | `60` `70` `80` `90` |
+| 🔔 Avvisi per punteggio | l'interruttore `🔔 Accendi` / `🔕 Spegni` decide **se** arrivano; poi `➖ 5` / `➕ 5` sposta la soglia da 0 a 100 (ai bordi il cursore c'è ma è inerte, così la riga non si sposta sotto il dito) | spenti / `60` `70` `80` `90` |
 | 🌙 Silenzio | due cursori, `dalle` e `alle`, un'ora per tocco: dalle 23 alle 22 **allunga** la fascia all'indietro, alle 7 alle 8 la allunga in avanti | `23–7`, `22–8`, `Off` |
-| 📬 Digest | le **24 ore** una per una: un tocco accende l'ora, lo stesso tocco la spegne | `8 + 19`, `7 + 13 + 20`, `Off` |
+| 📬 Digest | le **24 ore** una per una: un tocco accende l'ora, lo stesso tocco la spegne | spento, `8 + 19`, `7 + 13 + 20` |
 
-Dentro la **fascia di silenzio** non parte nessuna notifica — avvisi immediati,
-digest, promemoria della watchlist (raccolte punti comprese) e promemoria della
-raccolta ferma — e gli item
-restano in attesa del digest successivo. Con il silenzio spento i due cursori
+Con gli **avvisi per punteggio spenti** non parte nessun avviso scelto dal
+radar: la soglia resta lì ma non ha effetto, e le marche seguite avvisano lo
+stesso (seguirle è la richiesta). Dentro la **fascia di silenzio** non parte
+nessuna notifica — avvisi immediati, digest, promemoria della watchlist (raccolte
+punti comprese) e promemoria della raccolta ferma — e gli item restano in attesa
+del digest successivo. Con il silenzio spento i due cursori
 partono dalla fascia solita (23–7) e lo riaccendono: chi tocca ➖ ➕ vuole una
 fascia, e `Off` resta a un tocco per disfarlo.
 
@@ -1448,7 +1460,9 @@ Le ore del **digest** valgono anche nell'ora prima e in quella dopo (è la
 tolleranza per l'ora legale, in `isDigestWindow` in [src/schedule.ts](src/schedule.ts)):
 8 e 9 accese sono quasi la stessa richiesta. Spegnendo l'ultima ora il digest si
 ferma, e la chat lo dice invece di lasciare la griglia tutta spenta senza
-spiegazione.
+spiegazione. Con nessuna ora accesa — che è il default — nessun cron fa il
+digest: i due cron fissi diventano tick normali (avvisi accesi, promemoria,
+pulizia), quindi il riepilogo non può ripartire da solo dopo un deploy.
 
 I conti dei cursori stanno in un posto solo, [src/telegram/prefs-config.ts](src/telegram/prefs-config.ts):
 la tastiera ci scrive il valore sul bottone e il router lo rilegge da lì, quindi
@@ -1931,7 +1945,7 @@ automatico, quindi non vengono bloccati da robots (decisione documentata in
 | Richieste Worker | ~100/giorno | 100.000/giorno |
 | D1 | qualche centinaio di righe/giorno | 5M righe lette · 100k scritte |
 | Workers AI | ≤ 40 chiamate/giorno | 10.000 Neurons/giorno (solo nel Worker, che non raccoglie) |
-| Telegram | 2 digest + pochi avvisi | gratuito |
+| Telegram | 0 messaggi con le notifiche spente (il default); 2 digest + pochi avvisi se le accendi | gratuito |
 
 La raccolta sulle Actions ha un tetto di CPU suo (`ACTIONS_CPU_BUDGET_MS` nello
 script): è altissimo apposta, perché lì il limite di 10 ms non esiste. Le misure
@@ -2128,6 +2142,14 @@ log (`log`) ce l'hanno solo le raccolte — i tick e i digest lo lasciano vuoto,
 - Promo ibride (cashback con buoni) possono passare il filtro pertinenza.
 - Il digest delle 06:05/17:05 UTC slitta di un'ora tra ora solare e legale: la
   finestra lo tollera, ma se vuoi orari fissi cambia i cron in `wrangler.toml`.
+  È comunque spento di default: parte solo se una chat ha acceso un'ora.
+- **Nessun messaggio non richiesto è un default, non una promessa del codice**:
+  `prefs.digest_hours = '[]'` e `prefs.instant_alerts = 0` sono i valori di una
+  chat nuova, e `jobFor` (in [src/schedule.ts](src/schedule.ts)) non fa un giro
+  di digest senza ore accese. Le righe nate col vecchio default `[8,19]` le
+  spegne una volta sola il passo `2026-10-17-notifiche-opt-in` di
+  [src/db/upgrade.ts](src/db/upgrade.ts), registrato in `migrations` perché il
+  deploy dopo non risvuoti la scelta di chi il digest l'ha riacceso.
 - Il codice gira senza build anche su Node (type-stripping): evita `enum`,
   `namespace` e le "parameter properties" di TypeScript, non supportate.
 - **Tutto ciò che è esportato da `src/index.ts` diventa un entry point** del

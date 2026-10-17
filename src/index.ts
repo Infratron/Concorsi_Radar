@@ -26,7 +26,7 @@ const FALLBACK_MAX_SOURCES = 12;
  *  - POST /telegram  → webhook (protetto dall'header segreto di Telegram)
  *  - GET  /setup     → registra webhook e menu comandi (protetto dal secret)
  *  - GET  /health    → stato di esecuzioni e fonti (protetto dal secret)
- *  - scheduled()     → digest programmati oppure avvisi e pulizia, in base al cron
+ *  - scheduled()     → digest (solo se acceso) oppure avvisi e pulizia, in base al cron
  *
  * La raccolta dei feed non gira più qui: la rete di Cloudflare viene bloccata da
  * diverse fonti italiane (403/503), quindi la fa GitHub Actions con la stessa
@@ -52,10 +52,12 @@ async function runCron(env: Env, cron: string, now: Date): Promise<void> {
   const deps = { store, fetcher: (input: string, init?: RequestInit) => fetch(input, init), ai: env.AI };
 
   // Le ore di digest valgono per tutti gli autorizzati: basta che una combaci.
+  // Una chat senza preferenze non ne ha nessuna accesa: il digest è spento di
+  // default, non un orologio che parte da solo.
   const digestHours = new Set<number>();
   for (const chatId of access.allowed) {
     const prefs = await store.getPrefs(chatId);
-    for (const hour of prefs?.digestHours ?? [8, 19]) digestHours.add(hour);
+    for (const hour of prefs?.digestHours ?? []) digestHours.add(hour);
   }
 
   if (jobFor(cron, now, [...digestHours]) === "digest") {

@@ -32,6 +32,7 @@ function prefs(quietHours: string): Prefs {
     minScoreInstant: 80,
     quietHours,
     digestHours: [8, 19],
+    instantAlerts: true,
     filters: defaultFilters(),
   };
 }

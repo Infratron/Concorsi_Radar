@@ -250,7 +250,8 @@ export const HELP_PAGES: HelpPage[] = [
     section: "impostazioni",
     title: "⚙️ Impostazioni",
     lines: [
-      "La soglia degli avvisi, la fascia di silenzio e gli orari del digest.",
+      "Gli avvisi per punteggio, la fascia di silenzio e gli orari del digest: partono tutti spenti e si accendono qui.",
+      "Il digest è un riepilogo periodico: si accende scegliendo le ore, e si spegne svuotandole.",
       "La soglia non vale per le marche che segui: quelle avvisano comunque.",
       "Sono di questa chat: quello che cambi tu non cambia la chat dell'altra persona.",
     ],

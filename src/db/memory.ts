@@ -44,8 +44,14 @@ interface RefundStoreRow {
   receivedAt: string | null;
 }
 
-const DEFAULT_DIGEST_HOURS = [8, 19];
-
+/**
+ * Le preferenze di una chat che non ha mai toccato ⚙️ Impostazioni.
+ *
+ * Nessun messaggio non richiesto: `digestHours` vuoto e `instantAlerts` spento
+ * non sono due dimenticanze, sono il default. Il radar scrive in chat solo per
+ * quello che l'utente ha chiesto (un concorso salvato, una marca seguita) o per
+ * il riepilogo e gli avvisi per punteggio, una volta accesi da lì.
+ */
 function defaultPrefs(chatId: number): Prefs {
   return {
     chatId,
@@ -53,7 +59,8 @@ function defaultPrefs(chatId: number): Prefs {
     weights: {},
     minScoreInstant: 80,
     quietHours: "23-7",
-    digestHours: [...DEFAULT_DIGEST_HOURS],
+    digestHours: [],
+    instantAlerts: false,
     filters: defaultFilters(),
   };
 }

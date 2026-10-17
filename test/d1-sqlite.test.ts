@@ -354,14 +354,21 @@ describe("store D1 · SQL vero su SQLite", () => {
   it("gestisce preferenze, pesi con tetto e chat attive", async () => {
     await store.upsertPrefs({
       chatId: 111, active: true, weights: { giftcard: 1 }, minScoreInstant: 70, quietHours: "23-7", digestHours: [8, 19],
+      instantAlerts: true,
       filters: defaultFilters(),
     });
     await store.upsertPrefs({
       chatId: 222, active: false, weights: {}, minScoreInstant: 80, quietHours: "0-0", digestHours: [9],
+      instantAlerts: false,
       filters: { ...defaultFilters(), mutedTags: ["raccolta_punti"], freeOnly: true },
     });
 
     expect((await store.getPrefs(111))?.weights).toEqual({ giftcard: 1 });
+    // L'interruttore degli avvisi sopravvive al giro, nei due sensi: leggere
+    // `0` come "spento" (e non come assente) è ciò che impedisce a un default
+    // di riaccendere gli avvisi di chi li ha spenti.
+    expect((await store.getPrefs(111))?.instantAlerts).toBe(true);
+    expect((await store.getPrefs(222))?.instantAlerts).toBe(false);
     expect(await store.listChats()).toEqual([111]);
 
     for (let i = 0; i < 10; i++) await store.bumpWeights(111, { giftcard: 1 });
@@ -496,6 +503,7 @@ describe("store D1 · SQL vero su SQLite", () => {
   it("conserva i filtri della chat senza toccare le altre preferenze", async () => {
     await store.upsertPrefs({
       chatId: 111, active: true, weights: {}, minScoreInstant: 80, quietHours: "23-7", digestHours: [8, 19],
+      instantAlerts: false,
       filters: { ...defaultFilters(), mutedTags: ["food"], mutedCategories: ["scontrino"], freeOnly: true },
     });
     const prefs = await store.getPrefs(111);

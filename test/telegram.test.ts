@@ -30,7 +30,7 @@ import { activeFilterCount, defaultFilters, filterableSources, parseFilters, wit
 import { applyIntent, parseCallback } from "../src/telegram/screens.ts";
 import { HELP_PAGES } from "../src/telegram/help.ts";
 import { channelOf } from "../src/enrich/lead.ts";
-import { STALE_CHAT_MS, handleUpdate, isStaleChat } from "../src/telegram/bot.ts";
+import { STALE_CHAT_MS, defaultPrefs, handleUpdate, isStaleChat } from "../src/telegram/bot.ts";
 import {
   isQuietHour,
   regolamentoUrl,
@@ -170,9 +170,13 @@ function prefs(partial: Partial<Prefs> = {}): Prefs {
     minScoreInstant: 80,
     quietHours: "23-7",
     digestHours: [8, 19],
+    // Il default VERO delle consegne (digest spento, avvisi spenti) ha i suoi
+    // test dedicati più sotto, con `defaultPrefs` e con il caso "spenti". Qui
+    // l'acceso rende misurabili digest e avvisi senza ripeterlo in ogni test.
+    instantAlerts: true,
     filters: defaultFilters(),
     ...partial,
-  };
+  } as Prefs;
 }
 
 function deps(store: MemoryStore, tg: TelegramClient, adminChatId = CHAT) {
@@ -621,6 +625,16 @@ describe("bottoni · costruzione delle tastiere", () => {
     expect(keyboard.inline_keyboard[3]?.map((b) => b.callback_data)).toEqual(["back", "refresh", "home"]);
   });
 
+  it("l'interruttore degli avvisi mostra lo stato opposto al tocco", () => {
+    const spenti = settingsKeyboard(prefs({ instantAlerts: false })).inline_keyboard.flat();
+    expect(spenti.find((b) => b.callback_data === "cfg:alerts:on")?.text).toBe("🔔 Accendi gli avvisi per punteggio");
+    expect(spenti.some((b) => b.callback_data === "cfg:alerts:off")).toBe(false);
+
+    const accesi = settingsKeyboard(prefs({ instantAlerts: true })).inline_keyboard.flat();
+    expect(accesi.find((b) => b.callback_data === "cfg:alerts:off")?.text).toBe("🔕 Spegni gli avvisi per punteggio");
+    expect(accesi.some((b) => b.callback_data === "cfg:alerts:on")).toBe(false);
+  });
+
   it("le impostazioni marcano i valori attivi", () => {
     const keyboard = settingsKeyboard(prefs({ minScoreInstant: 90, quietHours: "22-8", digestHours: [] }));
     expect(rigaCon(keyboard, "cfg:score:90")?.find((b) => b.text.startsWith("•"))?.text).toBe("• 90");
@@ -974,6 +988,15 @@ describe("interfaccia · un solo messaggio per chat", () => {
     await handleUpdate(tap(7, "cfg:notify:off", 100), deps(store, tg));
     expect((await store.getPrefs(CHAT))?.active).toBe(false);
     expect(lastWith(calls, "answerCallbackQuery")?.payload.text).toBe("⏸ Notifiche sospese");
+
+    // L'interruttore degli avvisi per punteggio: spenti di default, e il tocco
+    // scrive davvero il valore opposto a quello che il bottone mostrava.
+    await handleUpdate(tap(8, "cfg:alerts:off", 100), deps(store, tg));
+    expect((await store.getPrefs(CHAT))?.instantAlerts).toBe(false);
+    expect(lastWith(calls, "answerCallbackQuery")?.payload.text).toBe("🔕 Avvisi per punteggio spenti");
+    await handleUpdate(tap(9, "cfg:alerts:on", 100), deps(store, tg));
+    expect((await store.getPrefs(CHAT))?.instantAlerts).toBe(true);
+    expect(lastWith(calls, "answerCallbackQuery")?.payload.text).toBe("🔔 Avvisi per punteggio accesi");
 
     const testo = lastWith(calls, "editMessageText")?.payload.text ?? "";
     expect(testo).toContain("📣 Notifiche: <b>sospese</b>");
@@ -1886,6 +1909,37 @@ describe("filtri personali · due chat, due feed", () => {
 });
 
 describe("digest e avvisi", () => {
+  it("le preferenze di una chat nuova non accendono niente: il radar non scrive da solo", () => {
+    expect(defaultPrefs(CHAT)).toMatchObject({ digestHours: [], instantAlerts: false });
+  });
+
+  it("gli avvisi per punteggio sono spenti finché non li accendi", async () => {
+    const store = createMemoryStore();
+    await store.upsertPrefs(prefs({ instantAlerts: false, minScoreInstant: 60 }));
+    await seed(store, [{ title: "Concorso da novantanove", score: 99 }]);
+    const { tg, calls } = makeTg();
+
+    // La soglia è bassa e il concorso ha il punteggio massimo: con l'interruttore
+    // spento non parte niente lo stesso. È il punto della richiesta — nessuna
+    // notifica che l'utente non abbia chiesto.
+    expect(await sendInstantAlerts({ store, tg, now: NOW })).toEqual({ sent: 0 });
+    expect(calls).toHaveLength(0);
+  });
+
+  it("con gli avvisi per punteggio spenti, la marca che segui avvisa lo stesso", async () => {
+    const store = createMemoryStore();
+    await store.upsertPrefs(
+      prefs({ instantAlerts: false, filters: { ...defaultFilters(), favoriteBrands: ["ferrero"] } }),
+    );
+    await seed(store, [{ title: "Concorso Ferrero Nutella: vinci 10 euro di spesa", brand: "ferrero", score: 30 }]);
+    const { tg, calls } = makeTg();
+
+    // Seguire una marca È la richiesta: l'interruttore spegne solo gli avvisi
+    // che il radar sceglie da sé.
+    expect(await sendInstantAlerts({ store, tg, now: NOW })).toEqual({ sent: 1 });
+    expect(String(lastWith(calls, "sendMessage")?.payload.text ?? "")).toContain("marca che segui");
+  });
+
   it("riconosce la fascia di silenzio", () => {
     expect(isQuietHour(prefs(), new Date("2026-11-20T23:30:00Z"))).toBe(true); // 00:30 a Roma
     expect(isQuietHour(prefs(), new Date("2026-11-20T12:00:00Z"))).toBe(false); // 13:00 a Roma

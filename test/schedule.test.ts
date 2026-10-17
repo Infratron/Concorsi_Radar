@@ -39,6 +39,14 @@ describe("jobFor", () => {
     expect(jobFor("0 * * * *", new Date("2026-10-16T06:05:00.000Z"), [8, 19])).toBe("digest");
     expect(jobFor("0 * * * *", new Date("2026-10-16T12:00:00.000Z"), [8, 19])).toBe("notify");
   });
+
+  it("senza ore accese nessun cron fa il digest: si consegnano solo avvisi e scadenze", () => {
+    // `[]` è il default di oggi: i cron fissi restano in piedi, ma fanno il tick
+    // normale invece di mandare un riepilogo che nessuno ha chiesto.
+    for (const cron of [...DIGEST_CRONS, NOTIFY_CRON]) {
+      expect(jobFor(cron, new Date("2026-10-16T06:05:00.000Z"), [])).toBe("notify");
+    }
+  });
 });
 
 describe("shouldFallbackIngest", () => {

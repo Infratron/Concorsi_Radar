@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { createD1HttpBinding } from "../src/db/d1-http.ts";
 import { SOURCES } from "../src/config/sources.ts";
 import { sourceSeedStatements } from "../src/db/seeds.ts";
-import { colonneAttese, upgradeDatabase } from "../src/db/upgrade.ts";
+import { colonneAttese, migrazioniDiDati, upgradeDatabase } from "../src/db/upgrade.ts";
 import { d1OptionsForLocalRun } from "./wrangler-auth.ts";
 
 /**
@@ -40,6 +40,12 @@ try {
   for (const nome of risultato.colonne) {
     const attesa = colonneAttese().find((voce) => voce.colonna === nome);
     console.log(`  + ${nome}${attesa ? ` — ${attesa.perche}` : ""}`);
+  }
+  // Un passo di dati tocca righe esistenti: si racconta sempre, perché è
+  // l'unica cosa di questo comando che può cambiare quello che l'utente vede.
+  for (const id of risultato.migrazioni) {
+    const passo = migrazioniDiDati().find((voce) => voce.id === id);
+    console.log(`  ~ dati: ${id}${passo ? ` — ${passo.perche}` : ""}`);
   }
 
   if (conFonti) {

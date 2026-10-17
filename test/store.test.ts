@@ -322,6 +322,7 @@ describe("memory store · prefs, consegne e peso dei tag", () => {
       minScoreInstant: 75,
       quietHours: "23-7",
       digestHours: [8, 19],
+      instantAlerts: false,
       filters: defaultFilters(),
     });
     const prefs = await store.getPrefs(999);

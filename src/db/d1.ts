@@ -103,6 +103,8 @@ interface PrefsDbRow {
   min_score_instant: number;
   quiet_hours: string;
   digest_hours: string;
+  /** Assente su un database antecedente alla colonna: vale "spenti". */
+  instant_alerts?: number | null;
   /** JSON dei filtri della chat. Assente su un database antecedente alla colonna. */
   filters?: string | null;
 }
@@ -332,6 +334,10 @@ function rowToPrefs(row: PrefsDbRow): Prefs {
     minScoreInstant: row.min_score_instant,
     quietHours: row.quiet_hours,
     digestHours: parseNumberArray(row.digest_hours),
+    // Una riga scritta prima della colonna risponde `undefined`: si legge come
+    // "spenti", che è il default di oggi (e il solo valore sicuro: mandare un
+    // avviso a chi non l'ha mai acceso è l'errore che questa colonna evita).
+    instantAlerts: row.instant_alerts === 1,
     filters: parseFilters(row.filters ?? null),
   };
 }
@@ -765,14 +771,15 @@ export function createD1Store(db: D1Like): Store {
     async upsertPrefs(prefs: Prefs): Promise<void> {
       await db
         .prepare(
-          `INSERT INTO prefs (chat_id, active, weights, min_score_instant, quiet_hours, digest_hours, filters, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+          `INSERT INTO prefs (chat_id, active, weights, min_score_instant, quiet_hours, digest_hours, instant_alerts, filters, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(chat_id) DO UPDATE SET
              active = excluded.active,
              weights = excluded.weights,
              min_score_instant = excluded.min_score_instant,
              quiet_hours = excluded.quiet_hours,
              digest_hours = excluded.digest_hours,
+             instant_alerts = excluded.instant_alerts,
              filters = excluded.filters,
              updated_at = excluded.updated_at`,
         )
@@ -783,6 +790,7 @@ export function createD1Store(db: D1Like): Store {
           prefs.minScoreInstant,
           prefs.quietHours,
           JSON.stringify(prefs.digestHours),
+          prefs.instantAlerts ? 1 : 0,
           JSON.stringify(prefs.filters),
           new Date().toISOString(),
         )
@@ -940,7 +948,8 @@ export function createD1Store(db: D1Like): Store {
             weights: {},
             minScoreInstant: 80,
             quietHours: "23-7",
-            digestHours: [8, 19],
+            digestHours: [],
+            instantAlerts: false,
             filters: defaultFilters(),
           };
       const weights: Record<string, number> = { ...current.weights };
@@ -951,8 +960,8 @@ export function createD1Store(db: D1Like): Store {
 
       await db
         .prepare(
-          `INSERT INTO prefs (chat_id, active, weights, min_score_instant, quiet_hours, digest_hours, filters, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+          `INSERT INTO prefs (chat_id, active, weights, min_score_instant, quiet_hours, digest_hours, instant_alerts, filters, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(chat_id) DO UPDATE SET weights = excluded.weights, updated_at = excluded.updated_at`,
         )
         .bind(
@@ -962,6 +971,7 @@ export function createD1Store(db: D1Like): Store {
           current.minScoreInstant,
           current.quietHours,
           JSON.stringify(current.digestHours),
+          current.instantAlerts ? 1 : 0,
           JSON.stringify(current.filters),
           new Date().toISOString(),
         )

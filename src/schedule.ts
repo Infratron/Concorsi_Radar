@@ -7,7 +7,10 @@ import { localHour } from "./telegram/format.ts";
  * entry point del Worker — una costante esportata lì fa fallire l'avvio.
  */
 
-/** Cron dei digest, come dichiarati in wrangler.toml. */
+/**
+ * Cron dei digest, come dichiarati in wrangler.toml. Partono solo se qualche
+ * chat ha acceso un'ora: senza, sono due tick in più (vedi jobFor).
+ */
 export const DIGEST_CRONS = ["5 6 * * *", "5 17 * * *"];
 /**
  * Cron dei 15 minuti: avvisi istantanei e pulizia dell'archivio. La raccolta
@@ -26,8 +29,15 @@ export function isDigestWindow(now: Date, hours: number[]): boolean {
   return hours.some((candidate) => Math.abs(hour - candidate) <= 1);
 }
 
-/** Quale lavoro tocca a questo giro di cron. */
+/**
+ * Quale lavoro tocca a questo giro di cron.
+ *
+ * Con nessuna ora accesa (`digestHours: []`, che è il default) nessun giro è di
+ * digest: i cron fissi fanno il tick normale — avvisi per chi li ha accesi,
+ * promemoria, pulizia dei scaduti. Il riepilogo è una scelta, non un orologio.
+ */
 export function jobFor(cron: string, now: Date, digestHours: number[]): "digest" | "notify" {
+  if (digestHours.length === 0) return "notify";
   if (DIGEST_CRONS.includes(cron)) return "digest";
   if (cron !== NOTIFY_CRON && isDigestWindow(now, digestHours)) return "digest";
   return "notify";

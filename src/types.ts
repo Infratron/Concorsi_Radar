@@ -365,6 +365,13 @@ export interface Prefs {
   quietHours: string;
   digestHours: number[];
   /**
+   * Avvisi immediati "per punteggio" (sopra minScoreInstant). SPENTI di default:
+   * il radar non scrive in chat se non gliel'hai chiesto. Le marche che segui
+   * avvisano comunque, anche con questi spenti (vedi src/telegram/digest.ts):
+   * seguirle è già una richiesta esplicita.
+   */
+  instantAlerts: boolean;
+  /**
    * Cosa vuole vedere QUESTA chat. Sta in `prefs` perché è una preferenza come
    * le altre: due persone sullo stesso bot hanno due feed diversi, e nessun
    * filtro è globale (vedi src/filters.ts).

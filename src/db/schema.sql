@@ -182,13 +182,25 @@ CREATE INDEX IF NOT EXISTS idx_refunds_chat ON refunds (chat_id, received_at, cl
 -- persone sullo stesso bot vedono due feed diversi. Su un database già creato la
 -- colonna va aggiunta a mano PRIMA di pubblicare il codice che la usa:
 --   ALTER TABLE prefs ADD COLUMN filters TEXT NOT NULL DEFAULT '{}';
+--
+-- `digest_hours` parte VUOTO: il riepilogo periodico non è un default, è una
+-- scelta. Prima nasceva con '[8,19]' e ogni chat riceveva due riepiloghi al
+-- giorno senza averli mai chiesti. Una riga vuota = digest spenti (vedi
+-- sendDigests), e la scelta si fa in ⚙️ Impostazioni con la griglia delle ore.
+--
+-- `instant_alerts` è lo stesso discorso per gli avvisi "sopra il punteggio":
+-- 0 = spenti, e restano le marche seguite, che sono una richiesta esplicita.
+-- Su un database già creato la colonna va aggiunta a mano PRIMA di pubblicare il
+-- codice che la legge:
+--   ALTER TABLE prefs ADD COLUMN instant_alerts INTEGER NOT NULL DEFAULT 0;
 CREATE TABLE IF NOT EXISTS prefs (
   chat_id           INTEGER PRIMARY KEY,
   active            INTEGER NOT NULL DEFAULT 1,
   weights           TEXT NOT NULL DEFAULT '{}',
   min_score_instant INTEGER NOT NULL DEFAULT 80,
   quiet_hours       TEXT NOT NULL DEFAULT '23-7',
-  digest_hours      TEXT NOT NULL DEFAULT '[8,19]',
+  digest_hours      TEXT NOT NULL DEFAULT '[]',
+  instant_alerts    INTEGER NOT NULL DEFAULT 0,
   filters           TEXT NOT NULL DEFAULT '{}',
   updated_at        TEXT NOT NULL
 );
@@ -214,6 +226,16 @@ CREATE TABLE IF NOT EXISTS runs (
 -- già creato la colonna va aggiunta a mano PRIMA di pubblicare il codice che la
 -- legge:
 --   ALTER TABLE runs ADD COLUMN log TEXT;
+
+-- `migrations`: i passi di DATI già eseguiti (non di schema). Serve a fare una
+-- volta sola una modifica alle righe esistenti — per esempio svuotare i
+-- `digest_hours` che le righe vecchie avevano ereditato dal default — senza
+-- ripeterla a ogni deploy e senza sovrascrivere le scelte fatte dopo. Il passo e
+-- la sua chiave stanno in src/db/upgrade.ts.
+CREATE TABLE IF NOT EXISTS migrations (
+  id         TEXT PRIMARY KEY,
+  applied_at TEXT NOT NULL
+);
 
 -- Idempotenza del webhook Telegram: Telegram ritenta gli update non-2xx.
 CREATE TABLE IF NOT EXISTS updates (

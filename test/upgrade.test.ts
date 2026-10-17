@@ -64,7 +64,7 @@ describe("allineamento del database", () => {
 
     expect(nomi("table", db)).toEqual(
       expect.arrayContaining([
-        "ai_usage", "deliveries", "items", "prefs", "refunds", "robots", "runs", "sightings", "sources", "ui", "updates",
+        "ai_usage", "deliveries", "items", "migrations", "prefs", "refunds", "robots", "runs", "sightings", "sources", "ui", "updates",
       ]),
     );
     // Su un database vuoto le tabelle nascono già complete: niente da alterare.
@@ -138,6 +138,37 @@ describe("allineamento del database", () => {
     expect(riga).toMatchObject({ chat_id: 7, section: "settimana", page: 4, history: null });
   });
 
+  it("spegne una volta sola i digest ereditati dal vecchio default", async () => {
+    // Il caso vero della produzione: righe nate con `digest_hours = '[8,19]'`,
+    // che continuerebbero a ricevere due riepiloghi al giorno anche ora che il
+    // default è `'[]'`. La tabella non ha `instant_alerts`: deve nascere spenta.
+    db.exec(`CREATE TABLE prefs (
+      chat_id INTEGER PRIMARY KEY, active INTEGER NOT NULL DEFAULT 1,
+      weights TEXT NOT NULL DEFAULT '{}', min_score_instant INTEGER NOT NULL DEFAULT 80,
+      quiet_hours TEXT NOT NULL DEFAULT '23-7', digest_hours TEXT NOT NULL DEFAULT '[8,19]',
+      filters TEXT NOT NULL DEFAULT '{}', updated_at TEXT NOT NULL
+    )`);
+    db.exec(`INSERT INTO prefs (chat_id, digest_hours, updated_at) VALUES (7, '[8,19]', '2026-10-01T00:00:00.000Z')`);
+
+    const primo = await upgradeDatabase(binding, SCHEMA);
+    expect(primo.colonne).toContain("prefs.instant_alerts");
+    expect(primo.migrazioni).toEqual(["2026-10-17-notifiche-opt-in"]);
+    const riga = db.prepare("SELECT digest_hours, instant_alerts FROM prefs WHERE chat_id = 7").get() as {
+      digest_hours: string;
+      instant_alerts: number;
+    };
+    expect(riga.digest_hours).toBe("[]");
+    expect(riga.instant_alerts).toBe(0);
+
+    // Il passo ha lasciato il segno: chi RIACCENDE il digest dopo non se lo vede
+    // svuotare dal deploy successivo — è il motivo per cui esiste `migrations`
+    // invece di un UPDATE senza memoria.
+    db.exec("UPDATE prefs SET digest_hours = '[8]' WHERE chat_id = 7");
+    const secondo = await upgradeDatabase(binding, SCHEMA);
+    expect(secondo.migrazioni).toEqual([]);
+    expect((db.prepare("SELECT digest_hours FROM prefs WHERE chat_id = 7").get() as { digest_hours: string }).digest_hours).toBe("[8]");
+  });
+
   it("la semina delle fonti aggiorna la definizione e lascia lo stato runtime", async () => {
     await upgradeDatabase(binding, SCHEMA);
     db.exec(`INSERT INTO sources (id, name, kind, url, category, tags, cadence_min, enabled, etag, fail_streak, last_ok_at)
@@ -193,6 +224,7 @@ describe("allineamento del database", () => {
         "items.brand",
         "runs.log",
         "prefs.filters",
+        "prefs.instant_alerts",
         "ui.history",
         "sources.include_pattern",
         "sources.max_items",

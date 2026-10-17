@@ -15,6 +15,11 @@ import { parseQuietRange } from "./prefs-config.ts";
  * Regola d'oro: mai un messaggio vuoto, mai lo stesso concorso due volte,
  * mai più di un avviso istantaneo ogni 20 minuti.
  *
+ * E soprattutto: NIENTE per default. Il digest è spento finché una chat non
+ * accende un'ora e gli avvisi per punteggio sono spenti finché non li accende
+ * (`instantAlerts`). Restano i messaggi che l'utente ha già chiesto con un gesto —
+ * una marca seguita, un concorso salvato — e l'allarme tecnico all'admin.
+ *
  * Qui passano SOLO i concorsi: un articolo che parla di un concorso non merita
  * una notifica, perché non c'è niente da fare con quel link. Le notizie si
  * leggono nella sezione 📰 News, quando si vuole.
@@ -381,18 +386,24 @@ export async function sendInstantAlerts(deps: NotifyDeps): Promise<{ sent: numbe
     const last = await store.lastDeliveryAt(chatId, "instant");
     if (last && now.getTime() - Date.parse(last) < INSTANT_MIN_GAP_MS) continue;
 
-    const candidates = await store.queryItems(
-      filtersFor(prefs.filters, {
-        minScore: prefs.minScoreInstant,
-        kinds: SOLO_CONCORSI,
-        orderBy: "score",
-        limit: 5,
-      }),
-    );
+    // Gli avvisi "sopra il punteggio" si mandano SOLO se la chat li ha accesi:
+    // sono la cosa che il radar sceglie da sé, quindi non possono partire da un
+    // default. Si accendono da ⚙️ Impostazioni (vedi withConfig, caso `alerts`).
+    const candidates: ItemRow[] = prefs.instantAlerts
+      ? await store.queryItems(
+          filtersFor(prefs.filters, {
+            minScore: prefs.minScoreInstant,
+            kinds: SOLO_CONCORSI,
+            orderBy: "score",
+            limit: 5,
+          }),
+        )
+      : [];
 
-    // Le marche che segui non aspettano la soglia. La soglia risponde a "quanto
-    // vale la pena guardarlo adesso" — premio grande, sforzo basso, scadenza
-    // vicina — e un concorso Ferrero uscito dieci minuti fa vale la pena
+    // Le marche che segui non aspettano la soglia — né l'interruttore di sopra:
+    // seguire una marca È la richiesta di essere avvisato. La soglia risponde a
+    // "quanto vale la pena guardarlo adesso" — premio grande, sforzo basso,
+    // scadenza vicina — e un concorso Ferrero uscito dieci minuti fa vale la pena
     // guardarlo comunque, anche se il premio è piccolo e chiude fra due mesi:
     // è proprio quello che "seguo questa marca" voleva dire. Restano i filtri
     // veri (fonti spente, tag spenti, solo gratis), perché quelli dicono "questo

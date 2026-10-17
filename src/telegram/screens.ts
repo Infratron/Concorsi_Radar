@@ -77,10 +77,12 @@ export interface Screen {
 /**
  * Cosa cambia un tocco nelle impostazioni: le preferenze delle consegne (soglia,
  * silenzio, ore del digest, notifiche) più i filtri ("cosa vedi") di QUESTA chat.
- * "hour" accende o spegne una singola ora del digest.
+ * "hour" accende o spegne una singola ora del digest; "alerts" è l'interruttore
+ * degli avvisi per punteggio, spenti di default.
  */
 export type ConfigKey =
   | "score"
+  | "alerts"
   | "quiet"
   | "digest"
   | "hour"
@@ -97,7 +99,7 @@ export type ConfigKey =
   | "reset";
 
 const CONFIG_KEYS: readonly ConfigKey[] = [
-  "score", "quiet", "digest", "hour", "notify", "cat", "tag", "src", "free", "star", "brand", "brands", "reset",
+  "score", "alerts", "quiet", "digest", "hour", "notify", "cat", "tag", "src", "free", "star", "brand", "brands", "reset",
 ];
 
 /** Cosa vuole fare l'utente: i bottoni e i comandi si traducono tutti qui. */
@@ -1051,12 +1053,18 @@ function settingsScreen(data: ScreenData): Screen {
   const righe = [
     "⚙️ <b>Impostazioni</b>",
     "",
-    `🔔 Avvisi immediati: solo sopra <b>${prefs.minScoreInstant}</b>/100`,
+    prefs.instantAlerts
+      ? `🔔 Avvisi per punteggio: solo sopra <b>${prefs.minScoreInstant}</b>/100`
+      : "🔔 Avvisi per punteggio: <b>spenti</b>",
     `🌙 Silenzio: <b>${silenzio}</b>`,
     `📬 Digest: <b>${digest}</b>`,
     `📣 Notifiche: <b>${prefs.active ? "attive" : "sospese"}</b>`,
     `🎛 Cosa vedi: <b>${isSeeingAll(prefs.filters) ? "tutto" : `${data.counts.filtri} filtri attivi`}</b>`,
     "",
+    "Tutto parte spento: digest e avvisi per punteggio arrivano solo se li accendi qui.",
+    prefs.filters.favoriteBrands.length > 0
+      ? "Le marche che segui avvisano comunque, senza soglia."
+      : "Le marche seguite avvisano comunque, senza soglia: si scelgono in 🎛 Cosa vedi.",
     "➖ ➕ spostano di poco; le voci in fondo sono i valori soliti.",
     "Le ore del digest valgono anche nell'ora prima e dopo: è la tolleranza per l'ora legale.",
     "Valgono solo per te: l'altra persona ha le sue.",

@@ -741,6 +741,15 @@ export function settingsKeyboard(prefs: Prefs): InlineKeyboardMarkup {
     ),
   );
 
+  // 🔔 Interruttore degli avvisi per punteggio: spento di default, perché è il
+  // radar a scegliere cosa mandare. Resta sopra la soglia, che senza di lui non
+  // ha effetto — e il bottone dice qual è lo stato, non solo cosa fa il tocco.
+  righe.push([
+    prefs.instantAlerts
+      ? button("🔕 Spegni gli avvisi per punteggio", "cfg:alerts:off")
+      : button("🔔 Accendi gli avvisi per punteggio", "cfg:alerts:on"),
+  ]);
+
   // 🌙 Fascia di silenzio. Con il silenzio spento i cursori partono dalla fascia
   // solita e lo accendono: chi tocca ➖ ➕ vuole una fascia, e "Off" resta a un
   // tocco di distanza per disfarlo.

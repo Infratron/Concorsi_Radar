@@ -89,6 +89,14 @@ const VANTAGGIO_MS = 30 * 86_400_000;
  */
 const LOGS_SHOWN = 20;
 
+/**
+ * Le preferenze di una chat che non ha mai toccato ⚙️ Impostazioni.
+ *
+ * Nessuna notifica non richiesta: il digest nasce spento (`digestHours: []`) e
+ * anche gli avvisi per punteggio (`instantAlerts: false`). Quello che arriva
+ * senza che nessuno l'abbia acceso è solo ciò che l'utente ha chiesto con un
+ * gesto: un concorso in watchlist, una marca seguita.
+ */
 export function defaultPrefs(chatId: number): Prefs {
   return {
     chatId,
@@ -96,7 +104,8 @@ export function defaultPrefs(chatId: number): Prefs {
     weights: {},
     minScoreInstant: 80,
     quietHours: "23-7",
-    digestHours: [8, 19],
+    digestHours: [],
+    instantAlerts: false,
     filters: defaultFilters(),
   };
 }
@@ -325,6 +334,8 @@ function withConfig(prefs: Prefs, key: ConfigKey, value: string): Prefs {
       // così "23 - 07" e "23-7" restano la stessa preferenza.
       return fascia === null ? prefs : { ...prefs, quietHours: `${fascia.start}-${fascia.end}` };
     }
+    case "alerts":
+      return { ...prefs, instantAlerts: value === "on" };
     case "digest": {
       if (value === "off") return { ...prefs, digestHours: [] };
       const hours = value
@@ -374,6 +385,9 @@ function toastFor(intent: Intent, prefs: Prefs): string | null {
       if (intent.key === "score") return `🔔 Avvisi sopra ${prefs.minScoreInstant}/100`;
       if (intent.key === "quiet") {
         return prefs.quietHours ? `🌙 Silenzio ${prefs.quietHours.replace("-", "–")}` : "🌙 Silenzio disattivato";
+      }
+      if (intent.key === "alerts") {
+        return prefs.instantAlerts ? "🔔 Avvisi per punteggio accesi" : "🔕 Avvisi per punteggio spenti";
       }
       if (intent.key === "digest") {
         return prefs.digestHours.length > 0 ? `📬 Digest alle ${prefs.digestHours.join(" e ")}` : "📬 Digest spenti";

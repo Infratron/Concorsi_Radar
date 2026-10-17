@@ -78,12 +78,44 @@ const COLONNE_ATTESE: ColonnaAttesa[] = [
   { tabella: "items", colonna: "brand", tipo: "TEXT", perche: "marca riconosciuta: preferiti e sezione per marca" },
   { tabella: "items", colonna: "rules_url", tipo: "TEXT", perche: "bando trovato leggendo la pagina del concorso" },
   { tabella: "prefs", colonna: "filters", tipo: "TEXT NOT NULL DEFAULT '{}'", perche: "filtri personali della chat" },
+  {
+    tabella: "prefs",
+    colonna: "instant_alerts",
+    tipo: "INTEGER NOT NULL DEFAULT 0",
+    perche: "avvisi per punteggio: spenti finché la chat non li accende",
+  },
   { tabella: "runs", colonna: "log", tipo: "TEXT", perche: "racconto fonte per fonte di una raccolta" },
   {
     tabella: "ui",
     colonna: "history",
     tipo: "TEXT",
     perche: "storia di navigazione per il ritorno alla pagina di prima",
+  },
+];
+
+/**
+ * Un passo di DATI, da eseguire una volta sola.
+ *
+ * Perché non basta lo schema: cambiare il DEFAULT di una colonna non tocca le
+ * righe che ci sono già. Il caso vero è il digest: le righe nate con
+ * `digest_hours = '[8,19]'` continuerebbero a ricevere due riepiloghi al giorno
+ * anche dopo che il default è diventato `'[]'` — e chi li riceve non li ha mai
+ * chiesti. La riga in `migrations` è il "già fatto": senza, ogni deploy
+ * risvuoterebbe la scelta di chi il digest l'ha acceso davvero.
+ */
+interface MigrazioneDati {
+  /** Chiave stabile: è la riga in `migrations`, quindi non si cambia più. */
+  id: string;
+  /** Perché esiste: finisce nel messaggio del comando, non nel database. */
+  perche: string;
+  sql: string[];
+}
+
+const MIGRAZIONI_DATI: MigrazioneDati[] = [
+  {
+    id: "2026-10-17-notifiche-opt-in",
+    perche: "toglie i digest che le righe vecchie avevano ereditato dal default [8,19]",
+    sql: ["UPDATE prefs SET digest_hours = '[]' WHERE digest_hours <> '[]'"],
   },
 ];
 
@@ -94,6 +126,8 @@ export interface UpgradeResult {
   colonne: string[];
   /** Indici che mancavano e sono stati creati. */
   indici: string[];
+  /** Passi di dati eseguiti ADESSO (le chiavi); quelli già fatti non compaiono. */
+  migrazioni: string[];
 }
 
 /**
@@ -130,6 +164,19 @@ export async function upgradeDatabase(db: D1Like, schemaSql: string): Promise<Up
     colonne.push(`${attesa.tabella}.${attesa.colonna}`);
   }
 
+  const migrazioni: string[] = [];
+  // Tabella dei passi già fatti: la crea schema.sql, ma il comando deve poter
+  // partire anche con uno schema più vecchio di questa riga (DB di test, o
+  // chiamata diretta): `IF NOT EXISTS` costa niente e toglie il caso.
+  await db.prepare("CREATE TABLE IF NOT EXISTS migrations (id TEXT PRIMARY KEY, applied_at TEXT NOT NULL)").run();
+  for (const passo of MIGRAZIONI_DATI) {
+    const fatto = await db.prepare("SELECT 1 AS hit FROM migrations WHERE id = ?").bind(passo.id).first<{ hit: number }>();
+    if (fatto !== null && fatto !== undefined) continue;
+    for (const sql of passo.sql) await db.prepare(sql).run();
+    await db.prepare("INSERT INTO migrations (id, applied_at) VALUES (?, ?)").bind(passo.id, new Date().toISOString()).run();
+    migrazioni.push(passo.id);
+  }
+
   const indici: string[] = [];
   // `CREATE INDEX IF NOT EXISTS` è già idempotente: si esegue e si guarda se
   // l'indice c'era, solo per poterlo raccontare.
@@ -148,10 +195,15 @@ export async function upgradeDatabase(db: D1Like, schemaSql: string): Promise<Up
     if (esistente === null && nome !== null) indici.push(nome);
   }
 
-  return { istruzioni: istruzioni.length, colonne, indici: [...new Set(indici)] };
+  return { istruzioni: istruzioni.length, colonne, indici: [...new Set(indici)], migrazioni };
 }
 
 /** L'elenco delle colonne attese, per il comando che le racconta. */
 export function colonneAttese(): Array<{ colonna: string; perche: string }> {
   return COLONNE_ATTESE.map((voce) => ({ colonna: `${voce.tabella}.${voce.colonna}`, perche: voce.perche }));
+}
+
+/** I passi di dati, per il comando che li racconta. */
+export function migrazioniDiDati(): Array<{ id: string; perche: string }> {
+  return MIGRAZIONI_DATI.map((passo) => ({ id: passo.id, perche: passo.perche }));
 }
