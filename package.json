@@ -24,7 +24,7 @@
     "db:seed:local": "node --experimental-strip-types scripts/seed-sources.ts && wrangler d1 execute concorsi-radar --local --file=./.wrangler/sources-seed.sql",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "check": "npm run typecheck && vitest run --no-file-parallelism",
+    "check": "npm run typecheck && npm test",
     "test:sqlite": "vitest run test/d1-sqlite.test.ts test/d1-http.test.ts",
     "test:watch": "vitest",
     "dry-run": "node --experimental-strip-types scripts/dry-run.ts",

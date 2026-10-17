@@ -352,15 +352,19 @@ scegli il repository e imposta:
 Il *build command* è la rete di sicurezza: se il typecheck o l'intera suite
 fallisce, la build si ferma e **il deploy non parte**. `npm ci` serve a rendere
 l'installazione riproducibile dal `package-lock.json`, e `npm run check` è
-`npm run typecheck && vitest run --no-file-parallelism`.
+`npm run typecheck && npm test` (pochi secondi).
 
-Perché la suite gira **senza parallelismo di file**: i worker di vitest, su
-macchine piccole o cariche, vanno in timeout sul *transform* (`Timeout calling
-"fetch"`), cioè su un guasto dell'ambiente che non c'entra niente con il codice —
-e un cancello di deploy che si blocca a caso è peggio di un cancello lento. In
-sequenza la suite passa intera (misurato qui: 2-5 minuti contro ~30 secondi in
-parallelo). Se la build di Cloudflare ha fretta, si può togliere il flag e
-lasciare il parallelismo: la suite è la stessa.
+Se in build i worker di vitest vanno in timeout sul *transform* (`Timeout calling
+"fetch"` — succede su macchine molto cariche, mai sul codice), si aggiunge
+`--no-file-parallelism`: la suite è la stessa e passa, solo più lenta (2-5 minuti
+contro ~30 secondi). Il default resta il parallelo perché una build da venti
+minuti a ogni push non è un cancello: è un motivo per non pubblicare.
+
+**Il deploy automatico è già attivo su questo repository**: ogni push su `main`
+produce una versione nuova ~1 minuto dopo (misurato il 17/10/2026: commit
+`9591e40` alle 06:37:21, versione `5b4ca1bd` alle 06:38:13; commit `7da5e9d` alle
+07:00:18, versione `f0d3272e` alle 07:01:17). `npm run deploy` da qui è solo un
+modo per pubblicare *senza* passare da git, e non serve più.
 
 **Versione di Node della build**: i test eseguono l'SQL vero su `node:sqlite`, che
 senza flag esiste da Node **22.13**. La versione è fissata in
