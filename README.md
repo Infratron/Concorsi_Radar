@@ -190,10 +190,10 @@ npx wrangler login                # una volta sola: apre il browser su Cloudflar
 
 # 1. database
 npm run db:create                 # copia il database_id restituito in wrangler.toml
-npm run db:init                   # crea le tabelle
-npm run db:seed                   # sincronizza le fonti dal file di configurazione
-                                  # (rieseguilo a ogni aggiornamento che ne aggiunge:
-                                  #  es. i sei feed di coupon e rimborsi)
+npm run db:sync                   # tabelle, colonne e fonti in un comando solo
+                                  # (idempotente: si riesegue a ogni aggiornamento)
+# npm run db:init e npm run db:seed restano, e fanno le due metà dello stesso
+# lavoro — ma db:sync è quello che gira da solo (sezione «Deploy continuo»)
 
 # 2. segreti (uno alla volta, incolla il valore quando richiesto)
 npm run secrets:token
@@ -349,9 +349,10 @@ scegli il repository e imposta:
 | Deploy command | `npx wrangler deploy` |
 | Preview builds | **disattivate** (vedi sotto) |
 
-Il *build command* è la rete di sicurezza: se il typecheck o uno dei 534 test
+Il *build command* è la rete di sicurezza: se il typecheck o l'intera suite
 fallisce, la build si ferma e **il deploy non parte**. `npm ci` serve a rendere
-l'installazione riproducibile dal `package-lock.json`.
+l'installazione riproducibile dal `package-lock.json`, e `npm run check` esegue
+esattamente le due cose del comando qui sopra.
 
 **Versione di Node della build**: i test eseguono l'SQL vero su `node:sqlite`, che
 senza flag esiste da Node **22.13**. La versione è fissata in
@@ -365,10 +366,44 @@ database D1 e i suoi dati, il webhook Telegram già registrato. Non serve
 rieseguire `/setup` né `/start`. Serve invece che `wrangler.toml` abbia il
 `database_id` vero: con il segnaposto la build fallisce.
 
-Cosa **non** fa il deploy: le modifiche allo schema del database. Se aggiungi
-una tabella, esegui `npm run db:init` a mano (è idempotente, usa
-`CREATE TABLE IF NOT EXISTS`) oppure passa alle migrazioni tracciate di D1
-(`wrangler d1 migrations`).
+Cosa **non** fa il deploy: le modifiche allo schema del database. Da qui in poi
+non serve farlo a mano — se ne occupa il workflow `Database` (sotto).
+
+**Il passo che resta a te, e perché.** La connessione al repository nasce solo
+dalla dashboard: Cloudflare deve installare la sua GitHub App sull'account e
+ricevere l'autorizzazione al repository, e quella è una decisione dell'utente,
+non una chiamata API. Una volta autorizzata, il resto lo si può anche pilotare
+da fuori ([Builds API](https://developers.cloudflare.com/workers/ci-cd/builds/api-reference/)),
+ma serve un token **utente** con permesso *Workers Builds Configuration: Edit*:
+la CLI di wrangler non ha un comando per questa connessione, e il login OAuth di
+wrangler la Builds API lo rifiuta (403, verificato il 17/10/2026).
+
+### Il database si allinea da solo
+
+`.github/workflows/db.yml` esegue **`npm run db:sync`** a ogni push su `main` che
+tocca lo schema o la configurazione delle fonti, e a mano quando vuoi
+(`workflow_dispatch`). `npm run db:sync` è idempotente in tutte e tre le sue parti:
+
+| Cosa | Come | Se è già a posto |
+|---|---|---|
+| Tabelle e indici | le istruzioni di `src/db/schema.sql` (`CREATE ... IF NOT EXISTS`) | non fa niente |
+| Colonne | `ALTER TABLE ... ADD COLUMN` solo per quelle che `pragma_table_info` dice mancanti | non fa niente |
+| Fonti | una UPSERT per fonte, dai file di configurazione | aggiorna la definizione, **non** lo stato runtime |
+
+L'ordine conta ed è: **tabelle → colonne → indici**. Su un archivio vecchio gli
+indici citano colonne che ancora non esistono (`items (kind, first_seen_at)`),
+quindi crearli per primi fallirebbe con *no such column*.
+
+Le colonne che il codice si aspetta stanno in un elenco in
+[src/db/upgrade.ts](src/db/upgrade.ts) (`COLONNE_ATTESE`): aggiungerne una lì è
+l'unica cosa da fare quando una migrazione è solo un `ADD COLUMN`, e da quel
+momento non va più eseguita a mano né ricordata prima del deploy. Quello che il
+comando **non** fa: rinominare, cambiare tipo, cancellare — una migrazione
+distruttiva resta una decisione da prendere con il database davanti.
+
+Sul database di produzione il comando è stato eseguito il 17/10/2026: 20
+istruzioni di schema, nessuna colonna mancante, nessun indice mancante, 34 fonti
+sincronizzate con `etag` e `last_ok_at` intatti.
 
 **Se un deploy va storto**: dashboard → Worker → **Deployments** → scegli la
 versione precedente → Rollback (istantaneo, non ricompila nulla); da riga di
@@ -1517,49 +1552,40 @@ log (`log`) ce l'hanno solo le raccolte — i tick e i digest lo lasciano vuoto,
   modificarne uno che potresti non avere più davanti; aprendo il bot da due
   dispositivi con lo stesso account la schermata è la stessa, perché è la stessa
   chat.
-- **Aggiornando un archivio già esistente serve una riga di SQL a mano.** `npm
-  run db:init` usa `CREATE TABLE IF NOT EXISTS`, quindi non tocca le tabelle già
-  create: la colonna `kind` (concorso, offerta o articolo) va aggiunta con
-  `ALTER TABLE items ADD COLUMN kind TEXT NOT NULL DEFAULT 'contest';` — altrimenti
-  il Worker nuovo non legge l'archivio. Le righe già dentro diventano concorsi,
+- **Aggiornando un archivio già esistente non serve più una riga di SQL a mano.**
+  `npm run db:sync` — e il workflow `Database` a ogni push — crea tabelle e indici
+  mancanti e aggiunge le colonne che il codice si aspetta: la colonna `kind`
+  (concorso, offerta o articolo), per esempio, nasce con `ALTER TABLE items ADD
+  COLUMN kind TEXT NOT NULL DEFAULT 'contest';`, che è quello che il comando fa da
+  sé quando la trova assente, senza che nessuno lo ricordi prima del deploy. Le righe già dentro diventano concorsi,
   che è il valore giusto per un archivio nato prima della divisione. Il valore
   `coupon` invece **non chiede nessun `ALTER`**: è un valore nuovo di una colonna
   che c'è già, quindi chi ha già la `kind` è a posto. Per il resto, la sezione
   coupon non porta tabelle nuove: le sei fonti si portano in D1 con `npm run
   db:seed` (le fonti si seminano, non si alterano).
-- **Stessa cosa per la diagnostica delle fonti**: le colonne `last_status`,
-  `last_error` e `last_items` di `sources` vanno aggiunte con
-  `ALTER TABLE sources ADD COLUMN last_status INTEGER;`,
-  `ALTER TABLE sources ADD COLUMN last_error TEXT;` e
-  `ALTER TABLE sources ADD COLUMN last_items INTEGER NOT NULL DEFAULT 0;` prima di
-  pubblicare il codice che le scrive (l'`ALTER` è già stato eseguito sul database
-  di produzione il 16/10/2026). Su un database non ancora migrato la schermata
+- **La diagnostica delle fonti**: le colonne `last_status`, `last_error` e
+  `last_items` di `sources` le aggiunge `npm run db:sync` (in produzione ci sono
+  dal 16/10/2026). Su un database non ancora migrato la schermata
   legge `null` e `0` — "non lo so" — invece di inventare un successo, e per una
   fonte riprovata prima della migrazione scrive `ok, codice non registrato`
   invece di uno `0 item` che sarebbe una misura inventata: ogni fonte torna alla
   riga completa al primo tentativo successivo.
-- **Stessa cosa per i log delle raccolte**: la colonna `log` di `runs` va
-  aggiunta con `ALTER TABLE runs ADD COLUMN log TEXT;` prima di pubblicare il
-  codice che la scrive — la raccolta **inserisce** quella colonna, quindi su un
-  database non migrato ogni lancio nuovo fallirebbe. Le righe scritte prima
+- **I log delle raccolte**: la colonna `log` di `runs` la aggiunge `npm run
+  db:sync`. La raccolta **inserisce** quella colonna, quindi su un database non
+  migrato ogni lancio nuovo fallirebbe: è il motivo per cui non basta "il codice
+  legge `null`" e per cui l'allineamento è automatico. Le righe scritte prima
   restano senza log (`null`, che significa "questo giro non ha un racconto", non
   "racconto vuoto") e in 🧾 Log delle raccolte non compaiono.
-- **Stessa cosa per i filtri personali**: la colonna `filters` di `prefs` va
-  aggiunta con `ALTER TABLE prefs ADD COLUMN filters TEXT NOT NULL DEFAULT '{}';`
-  prima di pubblicare il codice che la usa (l'`ALTER` è già stato eseguito sul
-  database di produzione il 16/10/2026). Il valore `{}` significa "vedi tutto":
+- **I filtri personali**: la colonna `filters` di `prefs` la aggiunge `npm run
+  db:sync` (in produzione dal 16/10/2026). Il valore `{}` significa "vedi tutto":
   chi non ha mai aperto 🎛 Cosa vedi continua a vedere l'archivio intero.
-- **Stessa cosa per la marca dei concorsi**: la colonna `brand` di `items` va
-  aggiunta con `ALTER TABLE items ADD COLUMN brand TEXT;` più
-  `CREATE INDEX IF NOT EXISTS idx_items_brand ON items (brand);` prima di
-  pubblicare il codice che la legge e la scrive (eseguiti in produzione il
-  16/10/2026). Un database non ancora migrato risponde `null` — "marca non
+- **La marca dei concorsi**: la colonna `brand` di `items` e il suo indice li
+  crea `npm run db:sync` (in produzione dal 16/10/2026). Un database non ancora migrato risponde `null` — "marca non
   riconosciuta" — invece di rompere la lettura, e le righe già in archivio si
   riempiono con `npm run brands -- --apply`.
-- **Stessa cosa per il regolamento dei concorsi**: la colonna `rules_url` di
-  `items` va aggiunta con `ALTER TABLE items ADD COLUMN rules_url TEXT;` prima di
-  pubblicare il codice che la scrive — la raccolta **inserisce** quella colonna,
-  quindi su un database non migrato ogni item nuovo fallirebbe. Un database
+- **Il regolamento dei concorsi**: la colonna `rules_url` di `items` la aggiunge
+  `npm run db:sync` — la raccolta **inserisce** quella colonna, quindi su un
+  database non migrato ogni item nuovo fallirebbe. Un database
   migrato e uno no si comportano diversamente solo in lettura, e in modo sicuro:
   senza la colonna la chat non trova nessun bando salvato e ricade sul testo
 dell'item, quindi il bottone 📄 Regolamento resta quello di prima. Le righe già in
@@ -1573,8 +1599,8 @@ dopo la registrazione, il link non c'è nell'HTML e il bottone non compare — m
   di promo che il regolamento non lo pubblicano affatto.
 - **La tabella `sightings` (vantaggio di tempistica) è nata con `npm run db:init`
   il 16/10/2026**, quindi in produzione c'è. Su un database nuovo la crea
-  `db:init` insieme alle altre: è una `CREATE TABLE IF NOT EXISTS`, non serve
-  nessun `ALTER`. La pipeline registra la vista in un blocco che non può far
+  `npm run db:sync` insieme alle altre: è una `CREATE TABLE IF NOT EXISTS`, non
+  serve nessun `ALTER`. La pipeline registra la vista in un blocco che non può far
   fallire l'ingestione, quindi anche se la tabella mancasse si perderebbe il
   numero e non il concorso — con il motivo scritto nella nota del giro.
 - **La misura del vantaggio parte dal giorno in cui è nata**: `sightings` non ha
