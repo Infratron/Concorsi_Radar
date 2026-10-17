@@ -3,7 +3,7 @@ import type { Store } from "./db/store.ts";
 import { CPU_BUDGET_MS, MAX_RULES_LOOKUPS_PER_RUN, MAX_SOURCES_PER_RUN, SOURCES, USER_AGENT } from "./config/sources.ts";
 import { ingestSource, robotsAllows } from "./ingest/index.ts";
 import { regulationUrlFromPage, regulationUrlFromText } from "./enrich/regulation.ts";
-import { enrichWithRules, looksLikeContest } from "./enrich/rules.ts";
+import { enrichWithRules, looksLikeNewsContest } from "./enrich/rules.ts";
 import { COUPON_TTL_DAYS, indexPageUrls, staleReason } from "./enrich/freshness.ts";
 import { MAX_AI_CALLS_PER_RUN, enrichWithAi, mergeInsight, needsAi } from "./enrich/ai.ts";
 import { applyBrandBonus, applyWeights, baseScore } from "./enrich/score.ts";
@@ -424,8 +424,11 @@ export async function runIngest(
       primo = false;
       itemsSeen++;
       // Le fonti news (Google News) pescano anche articoli che non sono concorsi:
-      // senza questo filtro il digest si riempie di notizie fuori tema.
-      if (source.kind === "news" && !looksLikeContest(`${raw.title} ${raw.summary}`)) {
+      // senza questo filtro il digest si riempie di notizie fuori tema: le
+      // estrazioni del lotto, le gare sportive ("in palio i titoli"), i premi
+      // professionali. `looksLikeContest` da solo non basta su un titolo di
+      // giornale — vedi looksLikeNewsContest in src/enrich/rules.ts.
+      if (source.kind === "news" && !looksLikeNewsContest(`${raw.title} ${raw.summary}`)) {
         filtered++;
         continue;
       }

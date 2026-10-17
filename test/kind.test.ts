@@ -59,6 +59,17 @@ describe("concorso o articolo", () => {
     expect(kind("https://premieconcorsi.com/concorsi", "Tutti i concorsi a premi", "sitemap")).toBe("news");
   });
 
+  it("non scambia per categoria una promozione con le date nel nome", () => {
+    // Caso reale (17/10/2026): il nome comincia con "dal-", quindi la regola
+    // della tassonomia le spostava in 📰 News, dove non c'entravano niente. Sono
+    // pagine di concorso, con marca e premio dentro lo slug.
+    const aia = (slug: string) => kind(`https://aiafood.com/it/concorsi/${slug}`, slug, "sitemap");
+    expect(aia("dal-15-ottobre-al-1-novembre-2026-vinci-un-barbecue-portatile-lotus-grill")).toBe("contest");
+    expect(aia("dal-25-novembre-al-10-dicembre-2024-vinci-con-aia")).toBe("contest");
+    // La tassonomia vera resta un contenitore.
+    expect(aia("a-partecipazione-gratuita")).toBe("news");
+  });
+
   it("sposta in news le notizie: la fonte news è un articolo per costruzione", () => {
     expect(
       kind(

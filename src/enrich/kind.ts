@@ -83,6 +83,15 @@ function repeatsFolder(parent: string, name: string): boolean {
 }
 
 /**
+ * Una promozione con le date nel nome: "dal-15-ottobre-al-1-novembre-2026-vinci-…".
+ * Comincia con una preposizione ("dal"), quindi la regola della tassonomia la
+ * scambierebbe per una categoria; è invece la pagina di QUELLA promozione, con la
+ * marca e il premio dentro. Caso reale: le sei pagine AIA finite in 📰 News il
+ * 17/10/2026, tre delle quali promozioni chiuse nel 2024 e nel 2025.
+ */
+const DATED_PROMO = /^(?:dal|dall|dalla)-\d{1,2}-/i;
+
+/**
  * "concorsi-a-premi" + "concorsi-fotografici" → prima parola della cartella:
  * "concorsi". Un figlio che comincia così E prende un'altra strada è una
  * categoria di quella cartella; uno che la ripete parola per parola è una sua
@@ -192,7 +201,14 @@ export function classifyKind(input: KindInput): ItemKind {
   //    comincia con la parola della cartella, o con una preposizione; lo slug di
   //    un concorso vero comincia con la marca o con "concorso"/"vinci".
   const parent = segments[segments.length - 2] ?? "";
-  if (parent.length > 0 && CONTEST_FOLDER.test(parent) && isTaxonomyName(parent, last)) return "news";
+  if (
+    parent.length > 0 &&
+    !DATED_PROMO.test(last) &&
+    CONTEST_FOLDER.test(parent) &&
+    isTaxonomyName(parent, last)
+  ) {
+    return "news";
+  }
 
   // 4. Permalink con la data: è la forma di un articolo, non di una pagina di concorso.
   if (DATE_PERMALINK.test(input.url)) return "news";

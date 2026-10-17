@@ -1,5 +1,5 @@
 import { SOURCES } from "../config/sources.ts";
-import { looksLikeListingContest } from "./rules.ts";
+import { endOfDateRange, looksLikeListingContest } from "./rules.ts";
 import type { ItemKind } from "../types.ts";
 
 /**
@@ -154,6 +154,13 @@ function pastYear(text: string, now: Date): number | null {
 export function staleReason(item: FreshnessInput, now: Date): string | null {
   // Una scadenza è la prova più forte: il concorso è aperto.
   if (item.deadline !== null) return null;
+
+  // Un intervallo di date finite è un'edizione chiusa anche senza una parola
+  // che lo dica, e anche se l'anno è quello corrente: "Dal 26 Agosto Al 16
+  // Settembre 2026" letto oggi è una promo finita da un mese, non una notizia
+  // fresca.
+  const fine = endOfDateRange(`${item.title} ${item.summary}`);
+  if (fine !== null && fine < now.toISOString().slice(0, 10)) return `edizione chiusa (${fine.slice(0, 4)})`;
 
   // I coupon invecchiano prima: la stessa regola della pulizia periodica, qui
   // all'ingresso (vedi COUPON_TTL_DAYS).

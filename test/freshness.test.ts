@@ -48,6 +48,36 @@ describe("cancello · concorso ancora attivo", () => {
     ).toBeNull();
   });
 
+  it("scarta una promozione il cui intervallo di date è già finito", () => {
+    // Caso reale (pagine AIA, 17/10/2026): nessuna parola di chiusura, nessuna
+    // scadenza estraibile (la data è passata), ma il titolo dice "Dal 26 Agosto
+    // Al 16 Settembre 2026": una promo stagionale conclusa da un mese.
+    expect(
+      staleReason(
+        item({
+          title: "Dal 26 Agosto Al 16 Settembre 2026 Vinci Con Negroni And Aia",
+          url: "https://aiafood.com/it/concorsi/dal-26-agosto-al-16-settembre-2026-vinci-con-negroni-and-aia",
+          publishedAt: "2026-08-26T10:25:09.606Z",
+          fromListing: true,
+        }),
+        NOW,
+      ),
+    ).toBe("edizione chiusa (2026)");
+    // Un intervallo ancora aperto invece passa.
+    expect(
+      staleReason(
+        item({
+          title: "Dal 15 Ottobre Al 1 Novembre 2026 Vinci Un Barbecue",
+          url: "https://aiafood.com/it/concorsi/dal-15-ottobre-al-1-novembre-2026-vinci-un-barbecue",
+          publishedAt: "2026-10-15T08:54:51.445Z",
+          deadline: "2026-11-01",
+          fromListing: true,
+        }),
+        NOW,
+      ),
+    ).toBeNull();
+  });
+
   it("scarta l'edizione di un anno passato", () => {
     expect(
       staleReason(item({ title: "Premia te e l'ambiente 2024", publishedAt: "2024-07-02T00:00:00.000Z" }), NOW),

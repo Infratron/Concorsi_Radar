@@ -359,6 +359,18 @@ describe("pipeline · rumore delle fonti news", () => {
               link: "https://n.example/inter",
               description: "Calcio femminile, biglietti e orari.",
             },
+            // Non solo fuori tema: cose che col "concorso" ci somigliano ma non
+            // sono un premio da consumatore — è il caso reale del 17/10/2026.
+            {
+              title: "Estrazione SuperEnalotto, Lotto e 10eLotto: i numeri vincenti di sabato",
+              link: "https://n.example/lotto",
+              description: "La combinazione estratta e il jackpot di stasera.",
+            },
+            {
+              title: "Mondiali Master 2026: in palio gli ultimi quattro titoli individuali",
+              link: "https://n.example/mondiali",
+              description: "Gare a Tbilisi, risultati live.",
+            },
             {
               title: "Concorso Condor Tailspotting: vinci un volo per il Messico per 2 persone",
               link: "https://n.example/condor",

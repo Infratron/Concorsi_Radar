@@ -77,6 +77,22 @@ function resolveYear(year: number | undefined, month: number, day: number, now: 
   return isoDate(now.getUTCFullYear() + 1, month, day);
 }
 
+/**
+ * L'anno scritto ACCANTO a una data, quando c'è: "dal 25 novembre al 10 dicembre
+ * 2024" ha l'anno in fondo, dopo l'altra data, e la regex della data presa da
+ * sola non lo vede.
+ *
+ * Perché serve: senza, quel "25 novembre" veniva portato all'anno corrente e una
+ * promozione chiusa nel 2024 entrava in archivio con la scadenza del 2026 — la
+ * sezione 📰 News si è riempita di pagine AIA morte proprio così (misurato il
+ * 17/10/2026: sei item, tre con l'anno sbagliato).
+ */
+function nearbyYear(text: string, from: number): number | undefined {
+  const window = text.slice(from, from + 48).split(/[.;\n]/, 1)[0] ?? "";
+  const found = /\b(20\d{2})\b/.exec(window);
+  return found ? Number(found[1]) : undefined;
+}
+
 function hasDeadlineKeyword(text: string, index: number): boolean {
   const window = text.slice(Math.max(0, index - 48), index);
   return DEADLINE_KEYWORDS.some((keyword) => window.includes(keyword));
@@ -103,7 +119,10 @@ function deadlineFrom(haystack: NormalizedText, now: Date): string | null {
   while ((match = textual.exec(text)) !== null) {
     const month = MONTHS[match[2]];
     if (month === undefined) continue;
-    const year = match[3] !== undefined ? Number(match[3]) : undefined;
+    // L'anno può stare dopo la SECONDA data di un intervallo: "dal 25 novembre
+    // al 10 dicembre 2024". Senza questo, la prima data veniva portata all'anno
+    // corrente e l'intervallo tornava a essere "aperto".
+    const year = match[3] !== undefined ? Number(match[3]) : nearbyYear(text, match.index + match[0].length);
     const date = resolveYear(year, month, Number(match[1]), now);
     if (date) candidates.push({ date, index: match.index, keyworded: hasDeadlineKeyword(text, match.index) });
   }
@@ -117,6 +136,30 @@ function deadlineFrom(haystack: NormalizedText, now: Date): string | null {
   const keyworded = usable.filter((candidate) => candidate.keyworded);
   const pool = keyworded.length > 0 ? keyworded : usable;
   return pool.reduce((latest, candidate) => (candidate.date > latest ? candidate.date : latest), pool[0].date);
+}
+
+/**
+ * La fine di un intervallo di date esplicito ("dal 26 agosto al 16 settembre
+ * 2026"), anche quando è nel passato.
+ *
+ * `deadlineFrom` guarda solo avanti — una scadenza passata non è una scadenza —
+ * ma per il cancello di freschezza quella è esattamente la prova che serve: una
+ * promozione stagionale il cui intervallo è finito è un'edizione chiusa, non un
+ * concorso appena uscito. Caso reale: le pagine AIA "Dal … Al …" finite in 📰
+ * News con la data di chiusura già passata (17/10/2026).
+ */
+const DATE_RANGE = /\bdal\s+(\d{1,2})\s+(?:di\s+)?([a-z]+)\s*(\d{4})?\s*(?:al|fino al|fino a)\s+(\d{1,2})\s+(?:di\s+)?([a-z]+)\s*(\d{4})?/i;
+
+export function endOfDateRange(text: string): string | null {
+  // `MONTHS` è in minuscolo: la corrispondenza va cercata sul testo normalizzato,
+  // come fa deadlineFrom. Senza, "Settembre" non trovava il mese.
+  const match = DATE_RANGE.exec(text.toLowerCase());
+  if (!match) return null;
+  const month = MONTHS[match[5] ?? ""];
+  if (month === undefined) return null;
+  const year = Number(match[6] ?? match[3]);
+  if (!Number.isInteger(year) || year < 2000) return null;
+  return isoDate(year, month, Number(match[4]));
 }
 
 /** Valore stimato del premio, 0..1, da importi in euro e parole chiave. */
@@ -296,6 +339,57 @@ const CONTEST_SIGNAL =
 
 export function looksLikeContest(titleOrText: string): boolean {
   return CONTEST_SIGNAL.test(titleOrText);
+}
+
+/**
+ * Il filtro di pertinenza di 📰 News.
+ *
+ * `looksLikeContest` basta per una pagina di elenco, dove "in palio" vuol dire
+ * un premio da riscuotere; su un articolo di giornale no. Il 17/10/2026 la
+ * sezione era piena di cose che con i concorsi non c'entrano: le estrazioni del
+ * SuperEnalotto e dell'Eurojackpot (gioco d'azzardo, non concorsi a premi), le
+ * gare sportive ("in palio i titoli regionali", "in palio i primi pass"), i
+ * premi professionali ("candidature per cronisti", "borse di studio") e perfino
+ * il titolo di un episodio TV ("Ep. 22 - Il concorso Video"). Chi tocca quei
+ * titoli si aspetta un concorso e finisce su un sito che non c'entra.
+ *
+ * Le tre classi di rumore sono trattate diversamente di proposito:
+ *  - il gioco d'azzardo e i risultati ("ha vinto", "numeri vincenti") sono
+ *    fuori SEMPRE: non c'è niente da partecipare, anche se la frase contiene
+ *    "concorso" o "vincita";
+ *  - lo sport e i premi professionali scartano solo se l'articolo non parla
+ *    anche di un concorso da consumatore: "Concorso Barilla: in palio biglietti
+ *    per la partita" è un concorso vero, e la parola "partita" non basta a
+ *    buttarlo via.
+ */
+// `\b…\b` su ogni alternativa: senza, "Premium" della PlayStation Plus passava
+// per "premi" — è il caso che il test delle fonti news aveva già in casa.
+const NEWS_TOPIC =
+  /\b(concors\w*|in palio|vinc\w*|premi|premio|estrazion\w*|gift ?card|buon[oi][\s-](?:spesa|regalo|sconto)|voucher|coupon|codice[\s-]sconto|rimborso|cashback|raccolta punti|scontrino|instant ?win|omaggi\w*|partecipa\w*|promozion\w*|offert[ae]|scont[oi])\b/i;
+
+const NEWS_ALWAYS_OFF = [
+  // Gioco d'azzardo: si gioca, non si partecipa.
+  /\b(superenalotto|super enalotto|10e ?lotto|eurojackpot|jackpot|gratta e vinci|lotteria|lotterie|numeri vincenti|vincite? al lotto)\b/i,
+  // Risultati: chi ha vinto ha già vinto, e la notizia non è un'occasione.
+  /\b(ha vinto|hanno vinto|vincita da|vincite da|vincitori|vincitrice)\b/i,
+  // Premi professionali, bandi e scuola.
+  /\b(bors[ae] di studio|premio (?:giornalistic\w*|letterari\w*|nazional\w*|internazional\w*)|candidatur\w*|scuol\w*|student\w*|universit\w*|terzo settore|firmacopie)\b/i,
+  // TV e spettacolo: il "concorso" di una serie non è un concorso.
+  /\b(ep\.?\s*\d+|episodio|puntata)\b/i,
+];
+
+const NEWS_SPORT =
+  /\b(campionat\w*|torneo|trofeo|mondial\w*|olimpiad\w*|olimpic\w*|finali? nazional\w*|qualificazion\w*|tricolori|coppa (?:italia|del mondo|europa)|serie [ab]\b|enduro|motocross|rally|calcio|basket|volley|atleti|atleta|ginnastica|nuoto|ciclismo|pallavolo|pallacanestro)/i;
+
+/** Le parole che dicono "c'è un premio da consumatore", non una gara. */
+const NEWS_CONSUMER =
+  /\b(concors\w*|gift ?card|buon[oi][\s-](?:spesa|regalo|sconto)|coupon|codice[\s-]sconto|rimborso|cashback|raccolta punti|scontrino|instant ?win)\b/i;
+
+export function looksLikeNewsContest(titleOrText: string): boolean {
+  if (!NEWS_TOPIC.test(titleOrText)) return false;
+  if (NEWS_ALWAYS_OFF.some((pattern) => pattern.test(titleOrText))) return false;
+  if (NEWS_SPORT.test(titleOrText) && !NEWS_CONSUMER.test(titleOrText)) return false;
+  return true;
 }
 
 /**

@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { createMemoryStore } from "../src/db/memory.ts";
-import { extractDeadline, extractParticipation, extractPrize, extractTags, enrichWithRules } from "../src/enrich/rules.ts";
+import {
+  endOfDateRange,
+  extractDeadline,
+  extractParticipation,
+  extractPrize,
+  extractTags,
+  enrichWithRules,
+  looksLikeNewsContest,
+} from "../src/enrich/rules.ts";
 import { SCORE_WEIGHTS, applyBrandBonus, applyWeights, baseScore, explainScore, rescoreRow, scoreItem } from "../src/enrich/score.ts";
 import { MAX_NEURONS_PER_DAY, enrichWithAi, mergeInsight, needsAi } from "../src/enrich/ai.ts";
 import type { AiBinding, Insight, RawItem } from "../src/types.ts";
@@ -42,6 +50,73 @@ describe("estrazione della scadenza", () => {
 
   it("restituisce null quando non c'è alcuna data", () => {
     expect(extractDeadline("Concorso senza indicazioni", NOW)).toBeNull();
+  });
+
+  it("legge l'intervallo con l'anno in fondo, e non lo riporta all'anno corrente", () => {
+    // Caso reale (pagine AIA, 17/10/2026): l'anno sta dopo la SECONDA data. Presa
+    // da sola, "25 novembre" veniva portata al 2026 e una promo chiusa nel 2024
+    // entrava in archivio con la scadenza dell'anno dopo.
+    expect(extractDeadline("Dal 25 Novembre Al 10 Dicembre 2024 Vinci Con Aia", NOW)).toBeNull();
+    expect(extractDeadline("Dal 15 Ottobre Al 1 Novembre 2026 Vinci Un Barbecue", NOW)).toBe("2026-11-01");
+  });
+
+  it("la fine di un intervallo di date si legge anche quando è passata", () => {
+    expect(endOfDateRange("Dal 26 Agosto Al 16 Settembre 2026 Vinci Con Negroni")).toBe("2026-09-16");
+    expect(endOfDateRange("Dal 25 Novembre Al 10 Dicembre 2024")).toBe("2024-12-10");
+    expect(endOfDateRange("Concorso senza date")).toBeNull();
+  });
+});
+
+describe("pertinenza delle fonti news", () => {
+  // I titoli sono quelli veri dell'archivio del 17/10/2026: la sezione 📰 News
+  // era piena di lotto, gare sportive e premi professionali.
+  it("tiene gli articoli su un concorso o un'offerta da consumatore", () => {
+    for (const titolo of [
+      "Concorso Purina ONE 2026, premi e come partecipare",
+      "TIM Star, Your Fashion Days: in palio anche un'esperienza di shopping a Milano",
+      "Torna il Gioco de L'Eco: in palio 175 gift card, vacanze e un'auto",
+      "Lievital rilancia il concorso #IoCucinoConLievital",
+      "Provami Gratis e Cashback 2026: elenco completo delle iniziative con rimborso attive",
+      "Pringles mette in palio un'urna a forma di tubo, con patatine per 200 anni",
+    ]) {
+      expect(looksLikeNewsContest(titolo), titolo).toBe(true);
+    }
+  });
+
+  it("scarta il gioco d'azzardo, anche quando parla di vincite", () => {
+    for (const titolo of [
+      "SuperEnalotto, vincita da 54.359,11 euro realizzata a Ranica (BG)",
+      "Estrazione SuperEnalotto, Lotto e 10eLotto oggi: i numeri vincenti di sabato 10 ottobre",
+      "Estrazione Eurojackpot: i numeri vincenti estratti oggi, 16 ottobre 2026",
+      "Un cliente, munito di scontrino, ha vinto 20 milioni di VND.",
+    ]) {
+      expect(looksLikeNewsContest(titolo), titolo).toBe(false);
+    }
+  });
+
+  it("scarta le gare sportive e i premi professionali", () => {
+    for (const titolo of [
+      "Le Olimpiadi in palio: As Gin ai Mondiali con Esposito e Marano",
+      "Mondiali Master 2026 - Ottava giornata di gare a Tbilisi: in palio gli ultimi quattro titoli",
+      "Casalmaggiore: Tricolori Multipli U16 in Palio",
+      "A Cervaro in palio i titoli enduro del Lazio e di Frosinone",
+      "Città di Lucca 2026, in palio le Finali Nazionali Coppa Italia Rally",
+      "Premio Umberto Chirici, aperte le candidature per cronisti e fotografi",
+      "Borse di studio BVLG 2026: 438 i premi messi in palio per gli studenti",
+      "L'Aquila, bando Il viaggio della memoria: premio per le scuole",
+      "Augusta | Trofeo regionale di pittura: in palio premi e una borsa di studio",
+    ]) {
+      expect(looksLikeNewsContest(titolo), titolo).toBe(false);
+    }
+  });
+
+  it("scarta il titolo di un episodio TV e un firmacopie", () => {
+    expect(looksLikeNewsContest("C.S.I. Scena del crimine: Ep. 22 - Il concorso Video")).toBe(false);
+    expect(looksLikeNewsContest("Saka Mikami a Lucca Comics 2026: come partecipare ai firmacopie")).toBe(false);
+  });
+
+  it("non scambia 'Premium' per 'premi'", () => {
+    expect(looksLikeNewsContest("PlayStation Plus Extra/Premium, ecco i nuovi giochi di ottobre 2026!")).toBe(false);
   });
 });
 

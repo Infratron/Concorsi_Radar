@@ -92,6 +92,21 @@ Decisioni di progetto che contano:
   pagina, non una categoria) e "scopri tutti i premi" è il premio di una
   raccolta punti, non il titolo di una rassegna — **24 promo vere su 24
   finivano in News**, ora zero.
+- **In News ci va solo roba che riguarda un concorso o un'offerta.** Il filtro
+  di pertinenza (`looksLikeNewsContest` in [src/enrich/rules.ts](src/enrich/rules.ts))
+  non si accontenta di "in palio": il 17/10/2026 la sezione era piena di
+  estrazioni del SuperEnalotto e dell'Eurojackpot, gare sportive ("in palio i
+  titoli regionali"), premi professionali (candidature, borse di studio) e
+  perfino il titolo di un episodio TV. Il gioco d'azzardo e i risultati
+  ("ha vinto", "numeri vincenti") restano fuori sempre; lo sport solo se
+  l'articolo non parla anche di un premio da consumatore — "Concorso Barilla: in
+  palio biglietti per la partita" è un concorso vero. Stessa giornata, stessa
+  causa: una promozione con le date nel nome (`dal-15-ottobre-al-1-novembre-2026-…`)
+  veniva scambiata per una categoria e finiva in News, e l'anno scritto in fondo
+  all'intervallo non veniva letto, così promo chiuse nel 2024 entravano con la
+  scadenza dell'anno dopo. I 48 articoli dell'archivio sono stati ripuliti: 20
+  sono rimasti, 22 archiviati perché fuori tema, 6 righe AIA sono tornate
+  concorsi (tre delle quali chiuse).
 - **Le offerte hanno una sezione loro, e una vita più corta.** Un buono sconto
   non si vince, si spende: le due cose si cercano in momenti diversi, quindi
   💶 Coupon e rimborsi è una sezione a sé (sei fonti dichiarano la categoria
