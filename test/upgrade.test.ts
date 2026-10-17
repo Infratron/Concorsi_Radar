@@ -64,7 +64,7 @@ describe("allineamento del database", () => {
 
     expect(nomi("table", db)).toEqual(
       expect.arrayContaining([
-        "ai_usage", "deliveries", "items", "prefs", "robots", "runs", "sightings", "sources", "ui", "updates",
+        "ai_usage", "deliveries", "items", "prefs", "refunds", "robots", "runs", "sightings", "sources", "ui", "updates",
       ]),
     );
     // Su un database vuoto le tabelle nascono già complete: niente da alterare.
@@ -153,18 +153,26 @@ describe("allineamento del database", () => {
         tags: ["giftcard"],
         cadenceMin: 45,
         enabled: false,
+        includePattern: "/concorso-",
+        maxItems: 20,
       },
     ]);
     db.prepare(sql).run();
 
     const riga = db
-      .prepare("SELECT name, cadence_min, enabled, tags, etag, fail_streak, last_ok_at FROM sources WHERE id = 'premieconcorsi'")
+      .prepare(
+        "SELECT name, cadence_min, enabled, tags, include_pattern, max_items, etag, fail_streak, last_ok_at FROM sources WHERE id = 'premieconcorsi'",
+      )
       .get() as Record<string, unknown>;
     // La configurazione vince.
     expect(riga.name).toBe("Nome nuovo");
     expect(riga.cadence_min).toBe(45);
     expect(riga.enabled).toBe(0);
     expect(riga.tags).toBe('["giftcard"]');
+    // Anche COME si legge la fonte viene dalla configurazione: senza queste due
+    // colonne il runner che esegue un commit vecchio non avrebbe nessun pattern.
+    expect(riga.include_pattern).toBe("/concorso-");
+    expect(riga.max_items).toBe(20);
     // La storia no: senza questa parte, ogni push azzererebbe la diagnostica
     // delle fonti e il prossimo giro ripartirebbe da zero (etag compreso).
     expect(riga.etag).toBe('"abc"');
@@ -180,7 +188,15 @@ describe("allineamento del database", () => {
   it("ogni colonna attesa dice a cosa serve", () => {
     const elenco = colonneAttese();
     expect(elenco.map((voce) => voce.colonna)).toEqual(
-      expect.arrayContaining(["items.kind", "items.brand", "runs.log", "prefs.filters", "ui.history"]),
+      expect.arrayContaining([
+        "items.kind",
+        "items.brand",
+        "runs.log",
+        "prefs.filters",
+        "ui.history",
+        "sources.include_pattern",
+        "sources.max_items",
+      ]),
     );
     expect(elenco.every((voce) => voce.perche.length > 10)).toBe(true);
   });

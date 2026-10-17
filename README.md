@@ -109,22 +109,31 @@ Decisioni di progetto che contano:
   concorsi (tre delle quali chiuse).
 - **Le offerte hanno una sezione loro, e una vita più corta.** Un buono sconto
   non si vince, si spende: le due cose si cercano in momenti diversi, quindi
-  💶 Coupon e rimborsi è una sezione a sé (sei fonti dichiarano la categoria
-  `coupon` in [src/config/sources.ts](src/config/sources.ts)) e le offerte **non
+  💶 Coupon e rimborsi è una sezione a sé (sette fonti dichiarano la categoria
+  `coupon` in [src/config/sources.ts](src/config/sources.ts), cinque accese) e le offerte **non
   producono notifiche** — avvisi e digest guardano i soli concorsi, perché un
   coupon da stampare non è mai urgente come una scadenza. La promozione che
   **annuncia anche un premio** resta invece un concorso, e lo fa in modo
   dichiarato: "Cashback Fabuloso: 5 € di rimborso **e vinci** una lavatrice" sta
   fra i concorsi, perché nasconderlo costerebbe più di un coupon di troppo (la
   regola sta in [src/enrich/kind.ts](src/enrich/kind.ts)).
-- **I concorsi che non costano niente hanno una sezione loro.** Un'altra domanda
-  secca — "quali posso fare senza comprare?" — che prima si otteneva solo
-  accendendo il filtro **🎁 solo senza acquisto** in 🎛 Cosa vedi e ricordandosi
-  di spegnerlo: `🆓 Gratis` è una sezione, e `/gratis` un comando. Il vincolo è
-  sulla colonna `requires_purchase` (chi dichiara "senza obbligo di acquisto"
-  vince sul resto del testo, chi non dichiara niente resta in elenco), non sui
-  tag; il numero sul bottone nasce dalla stessa query dell'elenco, e i filtri
-  della chat valgono anche qui (qui sotto).
+- **Le due metà dell'archivio hanno una sezione ciascuna.** "Quali posso fare
+  senza comprare?" e "quali chiedono di comprare?" sono due domande secche che
+  prima si ottenevano solo accendendo il filtro **🎁 solo senza acquisto** in
+  🎛 Cosa vedi e ricordandosi di spegnerlo: `🆓 Gratis` e `💸 Con acquisto` sono
+  due sezioni (e `/gratis` e `/spesa` due comandi). Il vincolo è sulla colonna
+  `requires_purchase` (chi dichiara "senza obbligo di acquisto" vince sul resto
+  del testo, chi non dichiara niente resta in elenco), non sui tag; il numero sul
+  bottone nasce dalla stessa query dell'elenco, e i filtri della chat valgono
+  anche qui (qui sotto).
+- **Premio certo e omaggio con acquisto sono due porte, non due parole.** "Il
+  premio me lo danno di sicuro?" e "che cosa ricevo comprando?" sono domande
+  diverse, e da oggi hanno un tag, una porta in 🎁 Tipi di premio e una
+  scorciatoia (`/premio-certo`, `/omaggi`). Il primo è un tag che leggono le
+  regole ("premio certo", "premio garantito"); il secondo è **derivato** dalla
+  spesa più il regalo scritto nel testo, e non è mai un'estrazione né un
+  rimborso. Prima di aprirle le ho misurate: i numeri e il perché stanno nella
+  sezione dei tipi di premio.
 - **Il bando si cerca dove c'è, e si salva sulla riga.** Il bottone 📄 Regolamento
   della scheda non dipende più dal fatto che il riassunto del feed nomini il
   bando: la raccolta legge la pagina del concorso, sceglie il link che somiglia al
@@ -508,6 +517,7 @@ scrivere `/start`.
 [⭐ Watchlist (1)]    [📰 News (7)]
 [🔍 Cerca]            [🗂 Storico]
 [💶 Coupon e rimborsi (67)]
+[💰 Rimborsi (2) · 12,50 €]
 [🏷 Marche seguite (4)] [🎛 Cosa vedi]
 [📡 Fonti]            [⚙️ Impostazioni]
 [🔄 Aggiorna]         [❓ Aiuto]
@@ -523,20 +533,21 @@ all'una e venticinque" quando il radar aveva raccolto mezz'ora prima.
 | 🆕 Nuovi | quello che è arrivato **dall'ultimo controllo** (il numero è sulla voce del menù) |
 | 📋 Oggi / 📅 7 giorni | l'archivio recente, ordinato per punteggio. **Oggi è il giorno di calendario**: alle 01:00 contiene quello che è arrivato da mezzanotte, non la giornata di ieri (che resta in 📅 7 giorni) |
 | ⏳ Scadenze | chi chiude entro 7 giorni e **non è già chiuso** |
-| 🎁 Tipi di premio | cinque porte per tipo di premio — 💳 gift card, 🚗 auto e moto, ✈️ viaggi, 🛒 buoni spesa, 🆓 gratis (**i concorsi dove non si compra niente**: senza scontrino, senza codice sulla confezione, senza spesa minima). Si entra, si guarda, si esce, senza accendere nessun filtro (qui sotto). 🆓 sta **solo** qui: nel menù sarebbe la stessa sezione da due posti |
+| 🎁 Tipi di premio | otto porte — 💳 gift card, 🚗 auto e moto, ✈️ viaggi, 🛒 buoni spesa, 🎁 premi certi e 🛍️ omaggi con acquisto, più le due metà dell'archivio: 🆓 gratis (**i concorsi dove non si compra niente**: senza scontrino, senza codice sulla confezione, senza spesa minima) e 💸 con acquisto (**quelli dove una spesa serve**). Si entra, si guarda, si esce, senza accendere nessun filtro (qui sotto). Le due metà stanno **solo** qui: nel menù sarebbero le stesse sezioni da due posti |
 | ⭐ Watchlist | i concorsi che hai salvato, **ordinati per scadenza** (chi chiude prima sta in cima) e con il promemoria a 3 giorni e 1 giorno dalla chiusura — a 30, 7 e 1 per raccolte punti e premi da richiedere (qui sotto) |
 | 📰 News | gli articoli e le pagine-elenco che parlano di concorsi: **non** sono concorsi, e il link porta al pezzo, non alla pagina ufficiale |
 | 💶 Coupon e rimborsi | i buoni sconto, i rimborsi e le operazioni a cashback da spendere al negozio o online: **non** sono concorsi e **non** producono notifiche (qui sotto) |
+| 💰 Rimborsi | le richieste fatte da **questa chat**: quanto denaro è già tornato, quanto è ancora in attesa, e per quali offerte (qui sotto) |
 | 🗂 Storico | cosa è successo a quello che hai visto: 🏆 vinti, ⌛ chiusi (chi ha chiuso per ultimo in cima) e 🚫 scartati, che da lì puoi riprendere. Da qui si entra in 📚 Archivio |
 | 📚 Archivio | **tutto quello che il bot ha mai visto**, dal più recente: concorsi chiusi e coupon scaduti compresi, con le fette 🎁 Concorsi / 💶 Coupon / 📰 Articoli. I filtri di 🎛 Cosa vedi qui non valgono (qui sotto) |
 | 🔍 Cerca | scrivi una parola: il bot cancella il tuo messaggio e mostra i risultati (concorsi e news insieme, gli articoli marcati 📰, e adesso anche il passato, marcato ⛔) |
 | 🏷 Marche seguite | le marche che segui (il numero sono **le marche**, non i loro concorsi): valgono **10 punti in più**, hanno una sezione loro e un avviso quando ne esce un concorso (qui sotto). Si chiamava "Preferiti per marca", e sembrava una watchlist |
-| 🎛 Cosa vedi | i tuoi filtri: quali tipi di concorso, quali categorie di fonti e quali fonti vuoi vedere (qui sotto) |
+| 🎛 Cosa vedi | i tuoi filtri: quali tipi di concorso, quali categorie di fonti, quali fonti e quali marche vuoi vedere (qui sotto) |
 | 📡 Fonti | quali fonti rispondono: ora, codice HTTP e item dell'ultimo tentativo, più le ultime raccolte (e le porte a 🌡 Diagnostica e — solo per l'admin — a 🧾 Log delle raccolte) |
 | 🏁 Vantaggio | `/vantaggio`: di quanto arriviamo prima degli aggregatori, e quanto spesso non arriviamo affatto |
 | ⚙️ Impostazioni | soglia degli avvisi, fascia di silenzio e orari dei digest, regolabili di fino, più la porta ai filtri |
 | 🔄 Aggiorna | rilegge tutto e dice se è arrivato qualcosa di nuovo |
-| ❓ Aiuto | la wiki nella chat: una pagina breve per sezione, con ⬅️ Prec e Succ ➡️ (qui sotto) |
+| ❓ Aiuto | la wiki nella chat: un indice di bottoni, uno per argomento, e una pagina breve per sezione (qui sotto) |
 
 `/vantaggio` (o `/anticipo`) apre la misura del **vantaggio di tempistica**: di
 quanto vediamo un concorso prima degli aggregatori. La schermata dichiara i suoi
@@ -558,9 +569,48 @@ il criterio con cui gli elenchi dei concorsi sono ordinati: in cima c'è quello 
 vale di più adesso (📰 News fa eccezione: lì l'ordine è l'ultimo arrivato, che è
 l'informazione giusta per un articolo; e sulle offerte il numero **non c'è**
 affatto, `💶 · Buono sconto Novi…`: il punteggio risponde a "quanto vale la pena
-guardare questo concorso adesso" e su un buono sconto sarebbe inventato).Nella scheda ci sono le decisioni ⭐ Watchlist, 🚫 Non mi interessa, 🏆
-Vinto (quella già presa resta visibile e inerte), 🔗 Apri, 📤 Condividi e 📄
-Regolamento.
+guardare questo concorso adesso" e su un buono sconto sarebbe inventato).
+
+Nella scheda ci sono le decisioni ⭐ Watchlist, 🚫 Non mi interessa, 🏆
+Vinto, oltre a 🔗 Apri, 📤 Condividi e 📄 Regolamento. ⭐ è un interruttore: su un
+concorso già salvato diventa `☆ Togli dalla watchlist` e lo rimette fuori
+(annullando anche il punto guadagnato dai pesi). 🚫 e 🏆 invece restano segnati.
+
+La scheda è divisa in **blocchi separati da una riga vuota**, non è un elenco
+unico: in cima che cosa è e il titolo (`🎁 85/100 · ⏳ 10 gg · 🛒 serve acquisto`),
+poi i fatti (`🏆 Premio · …`, `📝 Come partecipare · …`), poi gli obblighi, infine
+descrizione, tag e fonte. Le etichette sono in grassetto e il valore viene dopo
+un punto medio, così si scorrono le etichette in verticale invece di ricominciare
+a leggere ogni riga. Un coupon non si presenta come un concorso: niente punteggio,
+niente parola "premio", e la riga `ℹ️ Non è un concorso: qui non si vince niente,
+si spende meno.` al posto del blocco premio; un articolo ha `📰 Articolo` e
+l'avviso che il link non porta alla pagina ufficiale. La fonte si dice una volta
+sola, in fondo, e l'id resta l'ultima riga.
+
+La scheda tiene anche le due informazioni che si perdono senza accorgersene:
+`🧾 Da conservare · lo scontrino originale e il codice sulla confezione` e,
+quando il bando lo scrive, `🎫 Premio da richiedere entro il 31/12/2026 · 41 gg`
+(oppure il conto che alcuni bandi usano al posto della data: `entro 30 giorni
+dalla comunicazione della vincita`). Sono estratte dal testo dell'item quando la
+scheda viene disegnata ([src/enrich/proof.ts](src/enrich/proof.ts)), quindi
+valgono **subito anche per l'archivio già raccolto**: nessuna colonna nuova,
+nessuna migrazione, nessun comando di riempimento. Le due righe compaiono anche
+nei promemoria e negli avvisi, che usano la stessa scheda.
+
+Quando il testo non nomina la prova ma la prova c'è per forza, la riga è
+generica e vera invece di essere assente: `gli scontrini e i bollini` per una
+raccolta punti, `lo scontrino o la prova d'acquisto` per un concorso con
+acquisto. Nei concorsi che si dichiarano gratuiti **non compare**: lì la
+"confezione" nominata è il premio ("un kit da 3 confezioni"), non qualcosa da
+conservare, e un consiglio sbagliato costa più di una riga mancante. Misurato
+sull'archivio del 17/10/2026: **78 dei 163 concorsi attivi** mostrano la riga —
+46 con la prova d'acquisto generica, 15 con scontrini e bollini, 17 con una
+prova nominata dal testo. Quando la data della richiesta non c'è, resta solo
+`🎫 Premio da richiedere · la data è nel bando` per le raccolte e i premi da
+richiedere: **nessuna data inventata**. Nei 163 concorsi attivi la data della
+richiesta è dichiarata in uno solo (Prodeco Insyn, "la fase per richiedere il
+premio certo è valida dal 1° settembre al 31 dicembre"), ed è esattamente il
+caso in cui la scheda la mostra.
 
 **📤 Condividi** apre il foglio di condivisione del telefono (WhatsApp, un'altra
 chat, qualunque app) con un messaggio già scritto: `Hey! Dai un'occhiata a questo
@@ -678,9 +728,9 @@ dei pesi). I filtri stanno in `prefs.filters` in D1, una riga JSON per chat.
 Dentro 🎛 **Cosa vedi** ci sono tre gruppi di interruttori — ✅ mostra, 🚫
 nasconde:
 
-- **tipi di concorso**: raccolte punti, premio certo, gift card, viaggi,
-elettronica, casa, food, moda, bambini (sono i tag che le regole assegnano
-leggendo premio e testo);
+- **tipi di concorso**: raccolte punti, premio certo, omaggi con acquisto, gift
+  card, viaggi, elettronica, casa, food, moda, bambini (sono i tag che le regole
+  assegnano leggendo premio e testo);
 - **categorie di fonti**: online, punto vendita, scontrino, gift card — spegnere
 una categoria spegne tutte le fonti che la dichiarano;
 - **⭐ stelle minime**: `Tutte`, `70+` o `80+`. È lo stesso filtro della riga in
@@ -688,9 +738,11 @@ fondo agli elenchi, e come quello vale anche per le notifiche;
 - **🎁 solo senza acquisto**, che lascia fuori chi chiede uno scontrino, un codice
 sulla confezione o un minimo di spesa. È un filtro che **resta acceso** e cambia
 **tutte** le sezioni filtrate, mentre 🆓 Gratis è una domanda secca con una
-sezione sua: vedi la differenza qui sotto;
-- **📡 Scegli le fonti**: l'elenco delle fonti accese, una per riga e a pagine,
-per spegnere quella singola che ti manda rumore.
+sezione sua: vedi la differenza qui sotto;- **📡 Scegli le fonti**: l'elenco delle fonti accese, una per riga e a pagine,
+  per spegnere quella singola che ti manda rumore;
+- **🔕 Marche spente**: le insegne che hai spento dalla scheda di un concorso,
+  con 🔕 Mai più. È l'esclusione più fine che c'è — la fonte intera è troppo,
+  il singolo concorso è troppo poco — e si riaccende da qui con un tocco.
 
 Sono **esclusioni, non inclusioni**: una fonte o un tipo nuovi si vedono finché
 non li spegni, quindi un archivio che cresce non ti resta invisibile. I filtri
@@ -792,11 +844,29 @@ dichiarata: il **bonus di punteggio** si applica alle righe d'archivio, e una
 riga non è di nessuno in particolare — l'insieme delle marche seguite è l'unione
 delle chat attive (`mergedBrands`, in [src/pipeline.ts](src/pipeline.ts)).
 
+### 🔕 Mai più una marca
+
+Seguire e **spegnere** sono due cose opposte, e prima esisteva solo la prima: per
+non vedere più un'insegna si poteva spegnere la fonte intera (troppo) o ignorare
+un concorso alla volta (troppo poco). Dalla scheda di un concorso, **🔕 Mai più
+Ferrero** spegne la marca per questa chat: spariscono i suoi concorsi, anche
+quelli già in archivio, negli elenchi come negli avvisi e nel digest — perché il
+filtro passa da `filtersFor` e non da un controllo locale. Le righe **senza marca
+riconosciuta restano**: non si può escludere quello che non si conosce, e
+`brand NOT IN (…)` da solo le avrebbe fatte sparire (`NULL NOT IN (…)` è NULL).
+
+Si riaccende da 🎛 **Cosa vedi → 🔕 Marche spente**: una marca spenta non compare
+in nessun elenco, quindi senza quella porta resterebbe spenta per sempre. Sulle
+schede della ⭐ Watchlist il bottone diventa **🔔 Rivedi Ferrero**, perché lì i
+filtri non valgono e un concorso salvato non deve sparire da sotto le dita.
+
 **⭐ Watchlist** è il posto dove tieni i concorsi che vuoi fare davvero. Due cose
 la rendono utile: l'ordine per scadenza (chi chiude prima è in cima) e il
 promemoria automatico **tre giorni e un giorno prima della chiusura** — un
 messaggio con il link, così non si perde proprio quello che tenevi d'occhio. Chi
-non ha una scadenza resta in watchlist senza promemoria.
+non ha una scadenza resta in watchlist senza promemoria. Da lì si esce sempre:
+si apre il concorso e si tocca `☆ Togli dalla watchlist` — nessuna riga resta
+salvata per forza, nemmeno quelle messe lì per sbaglio o da un avviso.
 
 Se quello che hai salvato è una **raccolta punti** o un **premio da richiedere**,
 il promemoria arriva molto prima: sono le due cose per cui la data di chiusura è
@@ -830,8 +900,9 @@ digest e nella scheda — non sposta i pesi due volte.
 
 I comandi funzionano ancora ma sono scorciatoie, non il modo normale: `/start`
 (che è anche l'iscrizione, ed è l'unico pubblicato nel menù "/" di Telegram),
-`/menu`, `/nuovi`, `/oggi`, `/settimana`, `/scadenze`, `/gratis`, `/salvati` (o
-`/watchlist`), `/news`, `/coupon`, `/storico`, `/archivio` (o `/passati`),
+`/menu`, `/nuovi`, `/oggi`, `/settimana`, `/scadenze`, `/gratis`, `/spesa`,
+`/premio-certo` (o `/premicerti`), `/omaggi` (o `/omaggio`),
+`/salvati` (o `/watchlist`), `/news`, `/coupon` (o `/offerte`), `/rimborsi` (o `/cashback`), `/storico`, `/archivio` (o `/passati`),
 `/vinti`, `/scaduti`, `/cerca`, `/fonti`,
 `/diagnostica`, `/vantaggio`, `/impostazioni`, `/aiuto` (o `/help`), `/stop` e
 `/salva|/vinto|/ignora <id>`.
@@ -840,8 +911,15 @@ I comandi funzionano ancora ma sono scorciatoie, non il modo normale: `/start`
 
 La wiki è una sezione come le altre (una schermata sola, che si modifica), ma
 invece dell'archivio mostra **una pagina breve per sezione**: cosa vedi, cosa
-fare, e nient'altro. Le frecce ⬅️ Prec / Succ ➡️ sono lo stesso callback `page:`
-degli elenchi, quindi non c'è una seconda navigazione da tenere allineata.
+fare, e nient'altro. La prima schermata è un **indice di bottoni**, uno per
+argomento, due per riga: si arriva a ⚙️ Impostazioni in un tocco, non in
+dodici frecce. Non ci sono frecce: con quelle si poteva solo scorrere, e chi
+cercava un argomento doveva ricordarsi dove fosse.
+
+Il bottone **❓ Aiuto** non sta solo nel menù: ogni sezione che ha una pagina se
+lo porta dietro, in fondo alla schermata e prima della coda di navigazione. Da
+⚙️ Impostazioni o da 🎛 Cosa vedi si apre la pagina di quella sezione senza
+tornare al menù — ed è la pagina che spiega *dove sei*, non quella del menù.
 
 Le pagine stanno in [src/telegram/help.ts](src/telegram/help.ts), una voce
 dell'elenco `HELP_PAGES` per pagina.
@@ -853,13 +931,13 @@ dell'elenco `HELP_PAGES` per pagina.
 ] },
 ```
 
-Aggiungere una pagina = aggiungere una voce: la tastiera si costruisce dal numero
-di voci e `aiuto:<id>` è accettato solo per gli id che esistono davvero
+Aggiungere una pagina = aggiungere una voce: la tastiera si costruisce
+dall'elenco e `s:aiuto:<id>` è accettato solo per gli id che esistono davvero
 (`isKnownSection` in [src/telegram/screens.ts](src/telegram/screens.ts)), quindi
 una pagina inventata non apre il vuoto. Le regole di scrittura stanno in testa al
 file: tre o quattro righe, cosa vedi prima e cosa fare dopo, niente gergo.
 
-### 🎁 Tipi di premio: cinque porte, nessun filtro acceso
+### 🎁 Tipi di premio: otto porte, nessun filtro acceso
 
 "Voglio vedere le gift card" e "non voglio più vedere le raccolte punti" sono due
 richieste diverse, e prima c'era un posto solo per la seconda. I filtri di 🎛 Cosa
@@ -868,21 +946,26 @@ le sezioni — chi vuole dare un'occhiata ai viaggi non vuole smettere di vedere
 resto, e soprattutto non vuole ricordarsi di spegnere. 🎁 Tipi di premio è la
 porta per la prima richiesta: si entra, si guarda, si esce.
 
-Cinque bottoni, ognuno con quanti concorsi aprirebbe **adesso**, e dietro una
+Otto bottoni, ognuno con quanti concorsi aprirebbe **adesso**, e dietro una
 sezione che filtra in **inclusione** sul tag dell'item (`tags` nella query, che è
-il campo nuovo in [src/types.ts](src/types.ts)). La sezione rispetta i filtri che
-hai già — ⭐ stelle minime, fonti spente, marche seguite — e il numero sul bottone
-nasce dalla stessa query dell'elenco, come per tutte le altre sezioni.
+il campo nuovo in [src/types.ts](src/types.ts)) — tranne le ultime due, che
+filtrano sulla colonna dell'acquisto e dividono l'archivio in due metà. Le
+sezioni rispettano i filtri che hai già — ⭐ stelle minime, fonti spente, marche
+seguite — e il numero sul bottone nasce dalla stessa query dell'elenco, come per
+tutte le altre sezioni.
 
-| Porta | Come filtra | In archivio il 16/10/2026 |
+| Porta | Come filtra | In archivio il 17/10/2026 |
 |---|---|---|
-| 💳 Gift card | tag `giftcard` | 35 |
+| 💳 Gift card | tag `giftcard` | 39 |
 | 🚗 Auto e moto | tag `auto` | **2** |
-| ✈️ Viaggi | tag `viaggio` | 17 |
-| 🛒 Buoni spesa | tag `buoni_spesa` | 15 |
-| 🆓 Gratis | obbligo d'acquisto, non un tag | 88 |
+| ✈️ Viaggi | tag `viaggio` | 21 |
+| 🛒 Buoni spesa | tag `buoni_spesa` | 16 |
+| 🎁 Premio certo | tag `premio_certo` | **25** |
+| 🛍️ Omaggi con acquisto | tag `omaggio_con_acquisto` (derivato) | **30** |
+| 🆓 Gratis | `requires_purchase = 0`, non un tag | 94 |
+| 💸 Con acquisto | `requires_purchase = 1`, non un tag | 66 |
 
-Tre cose da sapere su questi numeri, perché sono misurati e non stimati:
+Quattro cose da sapere su questi numeri, perché sono misurati e non stimati:
 
 - **🚗 Auto e moto è quasi vuota, ed è vero.** I concorsi con un'auto in palio ci
   sono (una Fiat Panda è il premio classico), ma il tag lo assegna il testo —
@@ -893,16 +976,29 @@ Tre cose da sapere su questi numeri, perché sono misurati e non stimati:
   sbagliata è meglio, e il numero sul bottone lo dice subito com'è piccola;
 - **🆓 Gratis non è il tag `gratis`** (che sta su 31 item e vuol dire "la pagina
   dice gratis"): è lo stesso vincolo dell'omonima sezione, cioè
-  `requires_purchase = 0`, che ne conta **88**. La porta riapre quella sezione
+  `requires_purchase = 0`, che ne conta **94**. La porta riapre quella sezione
   invece di duplicarla: due query e due testi per lo stesso elenco sono due cose
   da tenere allineate, e prima o poi se ne allinea una sola;
+- **💸 Con acquisto è la gemella**: `requires_purchase = 1`, **66** concorsi, e
+  insieme a 🆓 Gratis copre tutto l'archivio attivo (94 + 66 = 160). Un concorso
+  può stare in più porte di premio (una gift card per un viaggio sta in due), ma
+  in una sola delle due metà: l'obbligo d'acquisto o c'è o non c'è;
 - **un item può stare in più porte** (una gift card per un viaggio sta in due): le
-  porte non si escludono a vicenda, e non c'è nessuna priorità fra loro.
+  porte non si escludono a vicenda, e non c'è nessuna priorità fra loro;
+- **🎁 Premio certo e 🛍️ Omaggi con acquisto sono le due classi nuove, e sono
+  quasi la stessa fonte.** Misurato il 17/10/2026 sull'archivio vero: premio
+  certo 25 concorsi (24 da `scontrinofelice-premio-certo`, uno da una sua scheda
+  nei gratuiti), omaggi con acquisto 30 (20 dei quali sono anche premi certi,
+  più 10 raccolte punti). Le altre 30 fonti non ne pubblicano quasi nessuno: è
+  il motivo per cui le porte sono due e non di più, e per cui il numero piccolo
+  non è un guasto. La differenza fra le due domande è reale — 5 premi certi non
+  chiedono una spesa, e 10 omaggi non dichiarano "premio certo" — ma nei dati
+  di oggi si sovrappongono per due terzi.
 
 La direzione dell'errore è quella dichiarata: nessun concorso finisce nella porta
 sbagliata, ma qualcuno che dichiara il premio in modo insolito resta fuori. Chi
 non vuole perdere niente guarda 📋 Oggi, dove i tag sono comunque una riga della
-scheda (`🏷 giftcard, viaggio`) — non un elenco separato.
+scheda (`🏷 giftcard · viaggio`) — non un elenco separato.
 
 ### 🧾 Raccolte punti e premi da richiedere: si ricordano prima
 
@@ -938,11 +1034,13 @@ fascia di silenzio rispettata, e nessun promemoria per chi non dichiara una
 scadenza.
 
 Perché la scala è anticipata e non calcolata su una data vera: la data della
-richiesta **nei testi non c'è**. Misurato sull'archivio del 16/10/2026: **13
+richiesta **nei testi quasi mai c'è**. Misurato sull'archivio del 16/10/2026: **13
 raccolte punti attive, 7 con una data, e una sola che nomina la scadenza della
-richiesta**. Una seconda data da estrarre sarebbe stata una colonna, una
-migrazione e un arricchimento per una riga su tredici — quindi il codice anticipa
-e lo dice, invece di far finta di sapere quando scade il premio.
+richiesta**. Una colonna per quella data sarebbe stata una migrazione per una
+riga su tredici — quindi il promemoria anticipa e lo dice, invece di far finta di
+sapere quando scade il premio. La scheda però la data la mostra quando il testo
+la dichiara (vedi sopra): è un'estrazione fatta al disegno della scheda, non una
+colonna, e quindi non ha richiesto nessuna migrazione.
 
 **Nota su un archivio già esistente**: `raccolta_punti` c'è già su tutte le
 raccolte in archivio (lo dichiara la fonte in
@@ -959,7 +1057,25 @@ riaccredita metà della spesa: sono la cosa che si cerca *quando si deve
 comprare*, e in mezzo ai concorsi sarebbero rumore. La sezione è una riga sola
 nel menù — `💶 Coupon e rimborsi (67)` — e dentro c'è solo questo.
 
-Tre differenze dalle altre sezioni, tutte volute:
+**Le viste sono le stesse dei concorsi.** Sotto l'elenco (e anche quando l'elenco
+è vuoto) ci sono cinque bottoni: `🗂 Tutti`, `📋 Oggi`, `📅 7 giorni`,
+`⏳ In scadenza`, `↩️ Rimborsi e cashback`. Le prime tre rispondono alle stesse
+domande delle omonime sezioni dei concorsi, applicate ai buoni: *quando è
+arrivato* (non quando scade), con la stessa regola del giorno di calendario per
+📋 Oggi. `⏳ In scadenza` è l'altra domanda — quali buoni finiscono entro 7 giorni
+— e per questo chiede una data dichiarata: chi non ne ha una resta in 🗂 Tutti,
+perchè "non lo so" non è una prova. `↩️ Rimborsi e cashback` tiene la fetta che
+interessa di più quando si compra tanto: spendi e riprendi, rimborsi e cashback
+(le offerte in cui tornano soldi, non i buoni da ritagliare). La vista attiva ha
+il `•` davanti, come nelle impostazioni; i filtri di 🎛 Cosa vedi valgono in
+tutte, perché sono sezioni che suggeriscono cosa guardare.
+
+**Niente conteggi sulle viste**, ed è voluto: i numeri sul menù restano quelli
+della sezione intera, e ogni vista dice quanti coupon ha nella sua intestazione
+(`Coupon in scadenza · 4 coupon`). Un numero su cinque bottoni sarebbero cinque
+query a ogni elenco per dire qualcosa che si legge già in cima.
+
+Quattro differenze dalle altre sezioni, tutte volute:
 
 - **niente punteggio sul bottone** (`💶 · Buono sconto Aia Spinacine…`): il numero
   risponde a "quanto vale la pena guardare questo concorso adesso" — premio,
@@ -1005,6 +1121,37 @@ chat: **6 fonti su 6 rispondono, 107 item letti, 72 nuovi di cui 67 coupon**,
 anche un premio. Si apre con `/coupon` e la schermata dice `67 coupon · pagina
 1/12`.
 
+### 💰 Rimborsi: quanto è tornato e quanto manca
+
+Un coupon si richiede e poi si aspetta. La sezione 💰 Rimborsi — il bottone
+sotto 💶 Coupon e rimborsi, oppure `/rimborsi` (o `/cashback`) — tiene per chat
+le richieste fatte, con due cifre separate: **recuperati** (i soldi tornati) e
+**in attesa** (una promessa, non un guadagno). La richiesta si registra dalla
+scheda di un coupon con `💰 Ho richiesto`; quando i soldi arrivano si tocca
+`✅ L'ho ricevuto`, e `↩️ Annulla` cancella la richiesta.
+
+L'importo lo legge il bando — prima il titolo, poi il riassunto — e distingue la
+cifra esatta dal **tetto** (`rimborso di 25 €` contro `fino a 6 euro`). La spesa
+richiesta non viene scambiata per il rimborso: in "10 € di rimborso con 20 € di
+acquisti" il rimborso è 10 €. Quando il bando dichiara una **percentuale** o un
+1+1 non c'è una cifra da leggere, quindi la chat chiede quanto è tornato davvero
+e quel rimborso entra nel conteggio solo dopo la risposta; se resta senza cifra,
+la schermata lo dice (`N senza cifra fissa`) invece di contarlo come zero. Un
+tetto resta nel totale, ma lì la schermata scrive **«fino a»** e avvisa che è una
+stima per eccesso: sommare un massimo come se fosse la cifra esatta è il modo più
+facile di mentire sui soldi.
+
+I totali sono un'aggregata SQL (`refundTotals`), non la somma di righe caricate:
+il numero sul bottone del menù (`💰 Rimborsi (2) · 12,50 €`) nasce dalla stessa
+query della schermata. Una riga per chat+offerta (`refunds`, chiave `chat_id,
+item_id`): due persone possono richiedere lo stesso coupon, e un doppio tocco non
+raddoppia niente. Cancellare un'offerta cancella anche la sua richiesta
+(`deleteItems`), così non restano rimborsi orfani.
+
+Limite dichiarato: il riconoscimento è per **formule** (euro, "fino a",
+percentuale). Un bando che scrive l'importo in un modo mai visto resta "importo
+variabile", e lo si registra scrivendo la cifra a mano.
+
 ### 🆓 Gratis: i concorsi che non costano niente
 
 "Quali posso fare **senza comprare**?" è una delle prime domande di chi usa il
@@ -1012,7 +1159,7 @@ bot, e fino a oggi si rispondeva girando intorno al problema: il filtro **🎁 s
 senza acquisto** in 🎛 Cosa vedi lascia fuori chi chiede uno scontrino, ma è un
 filtro che **resta acceso** e cambia **tutte** le sezioni — chi voleva solo dare
 un'occhiata ai gratis doveva accenderlo, guardare, e spegnerlo. Adesso c'è una
-sezione, `🆓 Gratis (88)`, e il comando `/gratis`.
+sezione, `🆓 Gratis (94)`, e il comando `/gratis`.
 
 Il numero sul bottone non è un conteggio a parte: nasce dalla **stessa query**
 della sezione (`kinds: ["contest"], statuses: ["new", "sent"],
@@ -1044,11 +1191,82 @@ Tre differenze dal filtro 🎁:
   il punteggio è quello delle altre sezioni (a differenza di 💶 Coupon, qui
   "quanto vale la pena" vuol dire qualcosa).
 
-Misurato il 16/10/2026 sull'archivio vero: **151 concorsi attivi, 88 senza
+Misurato il 17/10/2026 sull'archivio vero: **160 concorsi attivi, 94 senza
 acquisto** — quasi sei su dieci, il che dice anche quanto sia larga la falla di
-un elenco che li mescola a chi chiede lo scontrino. Si apre con `/gratis`, o dal
-bottone `🆓 Gratis` che sta nel menù su una riga sua, subito sotto le sezioni del
-periodo.
+un elenco che li mescola a chi chiede lo scontrino. Si apre con `/gratis`, o
+dalla porta `🆓 Gratis` in 🎁 Tipi di premio (non dal menù: nel menù sarebbe la
+stessa sezione da due posti).
+
+### 💸 Con acquisto: l'altra metà, e il filtro che scavalca
+
+"Quali chiedono di comprare?" è la stessa domanda dell'altra metà girata, e
+adesso ha la sua porta accanto a 🆓 Gratis, il suo comando `/spesa` (o
+`/acquisto`) e la sua sezione: `💸 Con acquisto (66)`.
+
+Il vincolo è la colonna, non il tag: `requires_purchase = 1`, ordinato per
+punteggio. Un concorso che chiede uno scontrino ma non scrive "acquisto" da
+nessuna parte entra lo stesso; chi non dichiara niente resta in 🆓 Gratis perché
+il default della colonna è 0. Insieme, le due sezioni coprono ogni concorso
+attivo senza sovrapporsi.
+
+Una cosa la sezione fa diversamente dalle altre, ed è dichiarata: **scavalca il
+filtro 🎁 solo senza acquisto**. Quel filtro dice l'esatto contrario della porta,
+e lasciarlo agire darebbe un elenco vuoto per costruzione (`requires_purchase =
+0` sommato a `= 1`). Gli altri filtri — fonti spente, tag spenti, stelle minime,
+marche seguite — valgono identici, e il numero sul bottone si accorcia con loro.
+Aprire la sezione non accende né spegne niente: è una domanda secca, come
+l'altra metà.
+
+Misurato il 17/10/2026 sull'archivio vero: **160 concorsi attivi, 94 senza
+acquisto e 66 con** — le due metà non si sovrappongono e non lasciano buchi.
+
+### 🎁 Premio certo e 🛍️ Omaggi con acquisto: misurati prima di aprirli
+
+Due cose che prima erano parole nel testo e adesso sono **contenuto di prima
+classe**: un tag che le regole assegnano, una porta in 🎁 Tipi di premio con il
+suo conteggio, una scorciatoia (`/premio-certo`, `/omaggi`), una pagina di wiki
+e una voce in 🎛 Cosa vedi per spegnerle.
+
+- **🎁 Premio certo**: il premio è garantito a chi partecipa, non un'estrazione.
+  Il tag lo prende dalla formula della pagina ("premio certo", "premi certi",
+  "premio garantito", "vincita garantita"), e la fonte che pubblica quel tipo di
+  concorso lo dichiara già nel suo elenco;
+- **🛍️ Omaggi con acquisto**: il regalo si riceve comprando (richiedi il set,
+  ritiri il gadget, ricevi il buono). Il tag è **derivato**: serve la colonna
+  `requires_purchase = 1` **e** un regalo scritto nel testo ("in regalo", "in
+  omaggio", "richiedi …", "ricevi …") oppure un premio certo o una raccolta
+  punti. Restano fuori le estrazioni con scontrino, i rimborsi e i coupon: un
+  cashback non è un regalo.
+
+**La misura, prima di aprire le porte.** Il 17/10/2026 ho letto dal vivo tutte e
+32 le fonti (422 item grezzi) e poi l'archivio (252 item, 163 concorsi):
+
+| Classe | Nell'archivio | Chi la pubblica davvero |
+|---|---|---|
+| 🎁 Premio certo | **25** | `scontrinofelice-premio-certo` 24 · `scontrinofelice-gratuiti` 1 |
+| 🛍️ Omaggi con acquisto | **30** | `scontrinofelice-premio-certo` 20 · `scontrinofelice-raccolte-punti` 10 |
+
+Sul giro dal vivo la formula "premio certo" compare **23 volte su 422 item**,
+ventidue nella fonte dedicata; gli omaggi **14**, dieci dei quali sono premi
+certi. Le altre trenta fonti ne pubblicano uno ciascuna o nessuno. È il dato che
+decide il disegno: due porte e non due sezioni del menù, perché due voci di menù
+per venti item della stessa fonte sarebbero rumore; e le porte si sovrappongono
+di proposito, perché "è certo?" e "che cosa ricevo comprando?" non sono la
+stessa domanda (5 premi certi non chiedono una spesa, 10 omaggi non dicono
+"premio certo").
+
+**L'archivio ha bisogno del riempimento.** I tag nascono all'ingestione, ma una
+riga già in archivio non ripassa dall'arricchimento (il percorso caldo dei
+duplicati lo salta quando la riga è completa). Il 17/10/2026 i tag nuovi erano
+zero su 163 concorsi: `npm run tags` li ha aggiunti a 30 righe, in sola aggiunta
+e senza toccare punteggi né date. Prima l'elenco, poi `--apply`; rilanciarlo non
+cambia niente. Senza, le porte direbbero 0 fino al prossimo giro di raccolta —
+e il numero sul bottone sarebbe l'unica bugia di questa schermata.
+
+**Un limite dichiarato**: il riconoscimento è per formule. Un premio garantito
+scritto in un modo che nessuna pagina usa oggi ("vinci sicuramente", "regalo
+assicurato") resta fuori dalla porta, e un regalo descritto solo con l'immagine
+pure. Meglio un elenco corto e vero che un elenco lungo da ripulire a mano.
 
 ### 📡 Fonti: chi ha risposto, senza aprire i log di GitHub
 
@@ -1160,7 +1378,7 @@ pagina sbagliata). Una fonte riconosciuta come catalogo non può essere anche
 
 Il verdetto **non è un ordine di cancellazione** — è un indizio, e la schermata
 lo dice: per togliere una fonte si mette `enabled: false` nella sua voce di
-[src/config/sources.ts](src/config/sources.ts) e si lancia `npm run db:seed`; per
+[src/config/sources.ts](src/config/sources.ts) e si lancia `npm run db:sync`; per
 non vederla solo per sé, senza toccare il codice, basta 🎛 **Cosa vedi** →
 **Scegli le fonti**.
 
@@ -1272,13 +1490,53 @@ Freni antispam, tutti attivi per default:
 
 ## 8. Fonti monitorate
 
-Verificate il 16/10/2026 (feed leggibili senza login): Premi e Concorsi,
-Scontrino Felice (**quattro** sezioni: con acquisto, gratuiti, premio certo,
-raccolte punti), DimmiCosaCerchi, Soldissimi, Vincimi, più sei query Google News
-e alcune sitemap — e, dallo stesso giorno, **sei feed di coupon e rimborsi** (la
-ricognizione e i motivi delle esclusioni stanno qui sotto). L'elenco completo con
-stato di verifica è in
+Verificate il 16/10/2026 (feed leggibili senza login): Scontrino Felice
+(**quattro** sezioni: con acquisto, gratuiti, premio certo, raccolte punti),
+DimmiCosaCerchi, Vincimi, più sei query Google News, alcune sitemap — e, dallo
+stesso giorno, **sei feed di coupon e rimborsi** (la ricognizione e i motivi
+delle esclusioni stanno qui sotto). L'elenco completo con stato di verifica è in
 [src/config/sources.ts](src/config/sources.ts).
+
+**Ricambio del 17/10/2026.** In produzione cinque fonti non portavano più un
+item: `soldissimi` (otto giri di 403 di fila), `premieconcorsi` e la sua sitemap
+(403 dal runner GitHub, anche se dal PC rispondono 200: è la protezione bot del
+sito a rifiutare gli IP da datacenter), `sitemap-burgerking` e `sitemap-payback`
+(zero item in tutta la storia), `scontomaggio-cashback` (un coupon) e i due feed
+coupon di scontOmaggio, che dal runner ricevono una pagina di verifica (**202 con
+0 item**) invece del feed.
+
+Le sostituzioni sono state misurate **due volte**: dal PC con i parser veri, e poi
+nel primo giro di produzione dal runner GitHub, che è l'unica rete che conta
+(vedi `.github/workflows/ingest.yml`). Il secondo passaggio ha cambiato il
+verdetto: **Your Contest** (10 concorsi nuovi) e **CouponVolantini** (9 rimborsi
+con l'importo nel titolo) hanno risposto 200 e sono in archivio; **OmaggioMania** e
+**scontOmaggio · concorsi con acquisto** hanno risposto 202 con 0 item dal runner
+(10 concorsi dal PC) e sono state rispente — un 202 non è un errore HTTP, quindi
+una fonte così resta verde nei log mentre non porta niente. **Penny** ed
+**Eurospin** hanno risposto 200 ma scartato tutte le 20 pagine lette, e qui è
+saltata fuori la causa vera: il runner esegue il codice del **commit**, non il
+working tree, e quelle due fonti erano nuove — quindi senza `includePattern`.
+Senza filtro una sitemap restituisce le prime venti pagine del sito (catalogo e
+indici), che il cancello di freschezza butta. Dal PC, con il pattern giusto,
+sono 6 pagine e 2 concorsi attivi a testa. Ora `include_pattern` e `max_items`
+viaggiano in D1 accanto alla fonte (`npm run db:sync` li semina) e
+[resolveSource](src/pipeline.ts) preferisce la riga alla configurazione: un
+pattern cambiato arriva al runner senza aspettare il push. Penny ed Eurospin
+restano spente finché questa modifica non è pubblicata, poi si riaccendono.
+
+La query `news-raccolta-punti` non è stata sostituita ma **riscritta**: `"raccolta
+punti" vincita` non trovava niente, `("raccolta punti" OR bollini OR "collezione
+punti") concorso` trova le tre parole con cui le insegne annunciano davvero una
+raccolta (3 item in un giro, tutti veri). Il trasporto — news.google.com — è uno
+dei pochi che risponde sempre anche dal runner. Carrefour è stata provata e
+scartata: 10 pagine lette e 10 scartate.
+
+Il conto finale: da 31 fonti accese a 27. Le quattro in meno sono fonti che in
+produzione non portavano item, e non sono state rimpiazzate per forza — un elenco
+più corto e tutto verde vale più di uno lungo con caselle che non rispondono.
+Il giro di produzione che ha fatto da collaudo (11:45 UTC) chiude con **zero fonti
+in errore**, e i nuovi arrivati hanno portato 10 concorsi (Your Contest), 9 coupon
+(CouponVolantini) e 3 item dalla query riscritta.
 
 **Scontrino Felice** è la fonte più ricca, e la sua sitemap e i suoi feed
 pubblicano gli **stessi URL**: la deduplica li tiene come una riga sola e vince il
@@ -1288,6 +1546,13 @@ successivo 0 nuovi su 20 riletti. Si legge con i suoi feed e non dalla sitemap
 perché i feed portano il titolo vero ("Concorso Lievital: vinci Forni e
 Scaldavivande") mentre la sitemap porta lo slug ("Concorso Lievital"): 25 item per
 sezione, che è tutto quello che il sito tiene in vetrina.
+
+È anche l'unica fonte che pubblica **premi certi** e **omaggi con acquisto** su
+larga scala: misurato il 17/10/2026, 24 dei 25 premi certi e 20 dei 30 omaggi
+vengono dal suo feed `premio-certo`; dieci raccolte punti arrivano da
+`scontrinofelice-raccolte-punti`. Le altre fonti ne portano uno ciascuna, o
+nessuno: è la ragione per cui le due porte esistono, ma i loro numeri restano
+piccoli.
 
 **I brand, andando alla fonte.** Gli aggregatori non coprono i concorsi che
 un'azienda pubblica solo sul proprio sito: l'unico modo è guardare le **sitemap e
@@ -1352,9 +1617,11 @@ anche i cataloghi di tazze e borse e le promozioni chiuse anni fa.
 | Ferrero · promozioni | sitemap | 2 su 20 pagine (`vinciwonka2026`, `vincimomentiinsieme2026`); le altre sono raccolte punti e gadget senza la parola del concorso nello slug |
 | Lavazza · concorsi | sitemap | 1 pagina (regolamento); con il pattern largo erano 20 kit di prodotto |
 | Conad · carte e premi | sitemap | 2 promozioni vere (`vincibici`, `giro-d-italia-vincigiro`); il catalogo di tazze, borse e peluche resta fuori |
-| Burger King · regolamenti | sitemap | 0: le due pagine che ha sono del 2024 e 2025 |
+| Burger King · regolamenti | sitemap | 0: le due pagine che ha sono del 2024 e 2025 — **spenta il 17/10/2026**, senza sostituta |
 | Eni Più Insieme · concorsi | sitemap | 6 su 6 (i concorsi hanno nomi di premio, la sezione `/concorsi-premi/` è il segnale) |
-| PAYBACK · regolamenti | sitemap | 0: 5 regolamenti dal 2018 al 2021 |
+| PAYBACK · regolamenti | sitemap | 0: 5 regolamenti dal 2018 al 2021, e le 5 pagine lette erano tutte indici — **spenta il 17/10/2026**, senza sostituta |
+| Penny · concorsi e collezioni | sitemap | 2 su 5 pagine dal PC (`concorso-prodotto-misterioso`, `concorso-paga-penny`), ma **0 item dal runner**: 20 pagine lette e 20 scartate — **spenta** |
+| Eurospin · concorsi | sitemap | 2 su 9 pagine dal PC (`la-partenza-intelligente`, `bluey`), ma **0 item dal runner**: 20 su 20 scartate come "pagina indice" — **spenta** |
 | Sammontana · gusta e vinci | sitemap | 3 pagine |
 | Coca-Cola · offerte e concorsi | pagina HTML | 3 campagne su 5 (le altre due non sono concorsi) |
 | Premi e Concorsi · sitemap | sitemap | 0: pubblica solo tassonomie ("Concorsi Fotografici"…), i concorsi arrivano dal suo feed RSS |
@@ -1397,11 +1664,24 @@ leggono i feed, come per i concorsi. Il risultato in archivio, con la pipeline
 vera: **67 coupon**, 4 concorsi ibridi e 31 offerte fermate all'ingresso perché
 troppo vecchie (18 + 8 + 5).
 
+**Secondo sondaggio, 17/10/2026.** La domanda era se esistano altri siti di coupon
+con un feed, e la risposta misurata è **no**: `PromoQui`, `DoveConviene`,
+`Tiendeo` rispondono 200 ma servono **HTML**, non un feed; `Prezzonauta` espone
+un RSS **vuoto** (1 KB, zero item); `scontOmaggio` risponde **403** anche al feed
+generale; `Coupon.it` non risponde; `Sconti.it` e `BuoniSconto.it` sono 404 sul
+percorso `/feed/`. Restano quindi le fonti che già ci sono, più
+**CouponVolantini** (`/feed/`, 10 item, 200) che è subentrata a scontOmaggio.
+La conclusione pratica: il collo di bottiglia non sono le fonti ma la
+**classificazione** — le insegne (Esselunga, Conad, Coop, Carrefour, Pam, Lidl)
+tengono i buoni nell'app o in PDF, e chi li racconta pubblica un feed — ed è per
+questo che la sezione coupon ha ora le viste e non un elenco unico.
+
 Esclusi con il motivo, perché la ricognizione serve a non riprovarli:
-**OmaggioMania** risponde 200 ma il suo feed è il blog generalista del sito
-(omaggi con acquisto, volantini, concorsi) e le offerte da spendere sono la
-minoranza — 10 item letti, e quel poco di buono lo portano già le altre tre;
-**SpesaBack** pubblica la home, la guida e il "come funziona", non le offerte.
+**OmaggioMania** è escluso come fonte di **coupon** — il feed generalista mescola
+omaggi con acquisto, volantini e concorsi, e le offerte da spendere sono la
+minoranza — ma dal 17/10/2026 il suo feed **concorsi** è acceso come fonte di
+concorsi (10 item nuovi, tutti di marca); **SpesaBack** pubblica la home, la guida
+e il "come funziona", non le offerte.
 
 Misura della prima raccolta completa con tutte le fonti (22 su 22, 16/10/2026):
 **267 item letti, 213 nuovi, 32 duplicati, 22 fuori tema, 0 errori**, in 9 secondi.
@@ -1412,8 +1692,12 @@ erano già in archivio — tassonomie di Premi e Concorsi, catalogo Conad, kit L
 la promo Conad del 2024 — sono stati tolti con `npm run prune -- --apply`.
 
 **Aggiungere una fonte**: aggiungi una voce in `SOURCES` (basta `id`, `name`,
-`kind`, `url`, `category`, `tags`, `cadenceMin`), poi `npm run db:seed` e
-`npm run deploy`. Per una fonte di **offerte** basta dichiarare
+`kind`, `url`, `category`, `tags`, `cadenceMin`), poi `npm run db:sync` e
+`npm run deploy`. `db:sync` semina anche `includePattern` e `maxItems` nelle
+colonne `include_pattern` / `max_items` di `sources`: sono loro, a runtime, a
+dire al runner come leggere la pagina, e senza quella semina una fonte nuova
+arriva al runner senza filtro (che su una sitemap vuol dire leggere il catalogo).
+Per una fonte di **offerte** basta dichiarare
 `category: "coupon"`: la classificazione la legge e i suoi item finiscono in
 💶 Coupon e rimborsi invece che fra i concorsi, senza altra configurazione. Le
 fonti marcate `enabled: false` sono da validare a mano
@@ -1429,6 +1713,16 @@ stretto meglio, una `category` cambiata, una fonte spenta. Le quattro caselle
 sono in quest'ordine, e ognuna risponde a una domanda diversa — le prime due le
 puoi fare subito, la terza e la quarta dicono se il cambiamento è arrivato dove
 serve.
+
+**Un comando solo**: `npm run checklist` le esegue tutte, nell'ordine, e stampa
+una casella per riga con i controlli sotto — `[x]` torna, `[!]` torna ma c'è da
+guardare, `[ ]` non torna, `[-]` da fare a mano — e l'esito di D1 fonte per
+fonte. Non scrive niente: la prova dal vivo usa un archivio in memoria e D1 si
+legge soltanto. Con `--fonte <id>` la prova dal vivo legge solo quella fonte e
+la casella 3 controlla anche i tipi dei suoi item; `--senza-rete` salta la prova
+dal vivo, `--senza-test` salta typecheck e suite. Esce **1** se una casella non
+torna, quindi si può mettere in una pipeline. Quello che segue è cosa guarda
+ogni casella e perché: serve quando una non torna.
 
 **1. Il codice regge**
 
@@ -1466,7 +1760,7 @@ serve.
 **3. L'archivio lo conferma (D1, in produzione)**
 
 ```bash
-npm run db:seed   # lo stato in D1 comanda a runtime: senza il seed la fonte nuova non ha una riga sua
+npm run db:sync   # lo stato in D1 comanda a runtime: senza il seed la fonte nuova non ha una riga sua
 ```
 
 - [ ] La riga della fonte è **sana**. Due esiti sono sani, e non sono lo stesso
@@ -1645,7 +1939,11 @@ npm run dry-run                                        # cosa verrebbe inviato, 
 npm run ingest                                         # raccolta vera, come su Actions
 npm run prune                                          # cosa non è più un concorso attivo (elenco)
 npm run prune -- --apply                               # e lo toglie dall'archivio
-npm test                                               # 534 test
+npm run checklist                                      # le quattro caselle di chiusura, con l'esito di D1
+npm run checklist -- --fonte <id>                      # ...e per una fonte sola, tipi compresi
+npm run tags                                           # tag di contenuto mancanti (elenco)
+npm run tags -- --apply                                # e li aggiunge (solo aggiunta)
+npm test                                               # 642 test
 npm run typecheck
 ```
 
@@ -1831,6 +2129,7 @@ src/
   lib/robots.ts            parsing e matching di robots.txt
   ingest/                  rss.ts, sitemap.ts, httplist.ts, index.ts
   enrich/                  rules.ts, score.ts, ai.ts, kind.ts (concorso, offerta o articolo), freshness.ts,
+                           proof.ts (cosa conservare e quando chiedere il premio, per la scheda),
                            regulation.ts (il bando del concorso: dal testo o dalla sua pagina),
                            lead.ts (vantaggio di tempistica: canali, viste, statistiche)
   db/                      schema.sql, store.ts, d1.ts, d1-http.ts, memory.ts

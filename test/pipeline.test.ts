@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { createMemoryStore, type MemoryStore } from "../src/db/memory.ts";
-import { dueSources, expireOldItems, priorityPool, runIngest, type IngestSummary } from "../src/pipeline.ts";
+import { dueSources, expireOldItems, priorityPool, resolveSource, runIngest, type IngestSummary } from "../src/pipeline.ts";
 // La vita di un coupon è UNA regola, scritta dove si applica all'ingresso
 // (src/enrich/freshness.ts) e riusata dalla pulizia periodica: qui si legge da lì.
 import { COUPON_TTL_DAYS } from "../src/enrich/freshness.ts";
@@ -1221,3 +1221,31 @@ function newItem(partial: Partial<import("../src/types.ts").NewItem> & Pick<impo
     ...partial,
   };
 }
+
+describe("come si legge una fonte", () => {
+  const riga = (override: Partial<SourceRow> = {}): SourceRow => ({
+    ...source("sitemap-ferrero", "Ferrero · promozioni", "https://www.ferrero.com/it/it/sitemap.xml"),
+    kind: "sitemap",
+    category: "punto_vendita",
+    ...override,
+  });
+
+  it("il pattern seminato in D1 vince sulla configurazione del commit", () => {
+    // È la ragione per cui pattern e tetto stanno anche nel database: la
+    // raccolta gira su GitHub Actions, che esegue il codice del commit. Una
+    // modifica al pattern non pubblicata non arriverebbe mai al runner, e la
+    // fonte verrebbe letta senza filtro (40 pagine lette, 40 scartate).
+    const risolto = resolveSource(riga({ includePattern: "/concorso-", maxItems: 7 }));
+    expect(risolto.includePattern).toBe("/concorso-");
+    expect(risolto.maxItems).toBe(7);
+  });
+
+  it("senza valori in D1 torna la configurazione, e una fonte sconosciuta resta com'è", () => {
+    const daConfig = resolveSource(riga());
+    expect(daConfig.includePattern).toBe("/promozioni/[a-z0-9]");
+    expect(daConfig.maxItems).toBe(20);
+
+    const sconosciuta = riga({ id: "fonte-non-in-config", includePattern: undefined, maxItems: undefined });
+    expect(resolveSource(sconosciuta)).toEqual(sconosciuta);
+  });
+});

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { SOURCES } from "../src/config/sources.ts";
 import {
   CATEGORY_LABELS,
+  PRIZE_QUICK_FILTERS,
   STAR_CHOICES,
   TAG_FILTERS,
   activeFilterCount,
@@ -103,6 +104,21 @@ describe("filtri · tipi di concorso", () => {
   });
 });
 
+describe("filtri · le porte di 🎁 Tipi di premio", () => {
+  it("sono otto, con sezioni uniche, e le due classi nuove hanno un tag proprio", () => {
+    const sezioni = PRIZE_QUICK_FILTERS.map((voce) => voce.section);
+    expect(sezioni).toHaveLength(8);
+    expect(new Set(sezioni).size).toBe(sezioni.length);
+    expect(sezioni).toContain("premi:premio_certo");
+    expect(sezioni).toContain("premi:omaggio_con_acquisto");
+    // Le due domande nuove sono tag, non colonne: le regole li assegnano.
+    const tags = PRIZE_QUICK_FILTERS.flatMap((voce) => (voce.tag === null ? [] : [voce.tag]));
+    expect(tags).toContain("premio_certo");
+    expect(tags).toContain("omaggio_con_acquisto");
+    expect(TAG_FILTERS.map((voce) => voce.tag)).toContain("omaggio_con_acquisto");
+  });
+});
+
 describe("filtri · stelle minime", () => {
   it("alza la soglia della query, senza mai abbassarla", () => {
     const query = filtersFor({ ...defaultFilters(), minScore: 70 }, { minScore: 80 });
@@ -154,12 +170,57 @@ describe("filtri · traduzione in query", () => {
     filtersFor({ ...defaultFilters(), mutedSources: ["b"] }, originale);
     expect(originale.excludeSources).toEqual(["a"]);
   });
+
+  it("le marche spente escludono la marca, non l'intero elenco", () => {
+    const filters = { ...defaultFilters(), mutedBrands: ["lidl"] };
+    const query = filtersFor(filters, { excludeBrands: ["eni"] });
+    expect(query.excludeBrands).toEqual(["eni", "lidl"]);
+    expect(query.brands).toBeUndefined();
+  });
+});
+
+describe("filtri · marche spente", () => {
+  it("si spengono e si riaccendono, contano come filtro e si vedono come esclusione", () => {
+    const spenta = withFilterChange(defaultFilters(), { kind: "muteBrand", value: "lidl" });
+    expect(spenta.mutedBrands).toEqual(["lidl"]);
+    expect(activeFilterCount(spenta)).toBe(1);
+    expect(isSeeingAll(spenta)).toBe(false);
+    expect(filterChangeLabel(spenta, { kind: "muteBrand", value: "lidl" }, (id) => id)).toBe("🔕 Mai più Lidl");
+
+    const riaccesa = withFilterChange(spenta, { kind: "unmuteBrand", value: "lidl" });
+    expect(riaccesa.mutedBrands).toEqual([]);
+    expect(isSeeingAll(riaccesa)).toBe(true);
+    expect(filterChangeLabel(riaccesa, { kind: "unmuteBrand", value: "lidl" }, (id) => id)).toBe("🔔 Lidl di nuovo");
+  });
+
+  it("seguire e spegnere non stanno accesi insieme: vince l'ultimo tocco", () => {
+    const seguita = withFilterChange(defaultFilters(), { kind: "brand", value: "ferrero" });
+    expect(seguita.mutedBrands).toEqual([]);
+
+    const spenta = withFilterChange(seguita, { kind: "muteBrand", value: "ferrero" });
+    expect(spenta.mutedBrands).toEqual(["ferrero"]);
+    expect(spenta.favoriteBrands).toEqual([]);
+
+    // E riaccendendola dai preferiti la marca esce dalle spente: una marca non
+    // può essere seguita e nascosta nello stesso tempo.
+    const diNuovo = withFilterChange(spenta, { kind: "brand", value: "ferrero" });
+    expect(diNuovo.favoriteBrands).toEqual(["ferrero"]);
+    expect(diNuovo.mutedBrands).toEqual([]);
+  });
+
+  it("riaccendere una marca già accesa non la duplica", () => {
+    const una = withFilterChange(defaultFilters(), { kind: "muteBrand", value: "lidl" });
+    const due = withFilterChange(una, { kind: "muteBrand", value: "lidl" });
+    expect(due.mutedBrands).toEqual([]);
+    expect(withFilterChange(due, { kind: "unmuteBrand", value: "lidl" }).mutedBrands).toEqual([]);
+  });
 });
 
 describe("filtri · lettura dal database", () => {
   it("rilegge quello che ha scritto", () => {
     const filters = {
       favoriteBrands: ["ferrero", "conad"],
+      mutedBrands: ["lidl"],
       brandsOnly: true,
       mutedSources: ["vincimi"],
       mutedCategories: ["giftcard" as const],
@@ -173,6 +234,10 @@ describe("filtri · lettura dal database", () => {
   it("scarta le marche che non sono più nel registro", () => {
     const filters = parseFilters(JSON.stringify({ favoriteBrands: ["ferrero", "marca-sparita", "ferrero"] }));
     expect(filters.favoriteBrands).toEqual(["ferrero"]);
+    // Vale anche per le marche spente: un id che non esiste più non deve
+    // continuare a escludere niente.
+    const spente = parseFilters(JSON.stringify({ mutedBrands: ["lidl", "marca-sparita", "lidl"] }));
+    expect(spente.mutedBrands).toEqual(["lidl"]);
   });
 
   it("un valore rovinato non rompe niente: si torna a vedere tutto", () => {

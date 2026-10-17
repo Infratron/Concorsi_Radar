@@ -4,6 +4,7 @@ import {
   endOfDateRange,
   extractDeadline,
   extractParticipation,
+  contentClassTagsFor,
   extractPrize,
   extractTags,
   enrichWithRules,
@@ -239,6 +240,58 @@ describe("enrichWithRules", () => {
       title: "Concorso Findus", summary: "Partecipa con lo scontrino: acquisto obbligatorio.",
     };
     expect(enrichWithRules(item, { tags: [] }, NOW).tags).toContain("acquisto");
+  });
+});
+
+describe("contenuto di prima classe · premio certo e omaggio con acquisto", () => {
+  function raw(title: string, summary = ""): RawItem {
+    return { sourceId: "x", url: "https://x/1", guid: null, publishedAt: null, title, summary };
+  }
+
+  it("la formula \"premio certo\" diventa un tag, anche fuori dalla fonte dedicata", () => {
+    expect(extractTags("Premio certo Bolla: richiedi i calici in regalo")).toContain("premio_certo");
+    expect(contentClassTagsFor("Premio Certo Nutella: richiedi la teglia", { requiresPurchase: true })).toEqual([
+      "premio_certo",
+      "omaggio_con_acquisto",
+    ]);
+  });
+
+  it("l'omaggio con acquisto vuole una spesa e un regalo, non un'estrazione", () => {
+    // Regalo scritto e spesa: è un omaggio con acquisto.
+    expect(
+      contentClassTagsFor("Raccolta punti Divella: richiedi la biscottiera", { requiresPurchase: true }),
+    ).toContain("omaggio_con_acquisto");
+    // Senza spesa non è "con acquisto".
+    expect(
+      contentClassTagsFor("Concorso gratuito: ricevi un peluche in regalo", { requiresPurchase: false }),
+    ).not.toContain("omaggio_con_acquisto");
+    // Il rimborso non è un regalo, anche se serve una spesa.
+    expect(
+      contentClassTagsFor("Mega cashback: rimborso garantito con L'Oréal", { requiresPurchase: true }),
+    ).not.toContain("omaggio_con_acquisto");
+    // L'estrazione con scontrino non promette niente di certo.
+    expect(
+      contentClassTagsFor("Concorso Findus: vinci una gift card con lo scontrino", { requiresPurchase: true }),
+    ).not.toContain("omaggio_con_acquisto");
+  });
+
+  it("un coupon non diventa mai un omaggio", () => {
+    expect(
+      contentClassTagsFor("Riscatta il codice: in regalo una confezione", {
+        tags: ["coupon"],
+        requiresPurchase: true,
+      }),
+    ).not.toContain("omaggio_con_acquisto");
+  });
+
+  it("la fonte dedicata porta il tag dal suo elenco, e l'omaggio ne segue", () => {
+    const insight = enrichWithRules(
+      raw("Bolla: ricevi un secchiello portaghiaccio o due calici", "Acquista Bolla e ricevi il regalo."),
+      { tags: ["premio_certo", "acquisto"] },
+      NOW,
+    );
+    expect(insight.tags).toContain("premio_certo");
+    expect(insight.tags).toContain("omaggio_con_acquisto");
   });
 });
 

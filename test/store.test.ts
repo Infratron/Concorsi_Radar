@@ -511,6 +511,9 @@ describe("memory store · fonti, run, ai e robots", () => {
     expect(await store.countItems({ excludeSources: ["vincimi"] })).toBe(2);
     expect(await store.countItems({ excludeTags: ["raccolta_punti"] })).toBe(2);
     expect(await store.countItems({ withoutPurchase: true })).toBe(2);
+    // 💸 Con acquisto: la metà opposta, lo stesso confronto in memoria.
+    expect(await store.countItems({ withPurchase: true })).toBe(1);
+    expect(await store.countItems({ withPurchase: true, withoutPurchase: true })).toBe(0);
     expect((await store.queryItems({ excludeTags: ["raccolta_punti"], limit: 10 })).map((row) => row.sourceId)).toEqual([
       "premieconcorsi",
       "vincimi",
@@ -552,6 +555,13 @@ describe("memory store · fonti, run, ai e robots", () => {
     expect((await store.queryItems({ brands: ["conad"], limit: 10 })).map((row) => row.id)).toEqual([2]);
     // Elenco vuoto = nessun filtro, come tutti gli altri campi della query.
     expect(await store.countItems({ brands: [] })).toBe(4);
+    // 🔕 Marche spente: si toglie la marca, non l'archivio — e l'item senza
+    // marca resta, perché non si può escludere quello che non si conosce.
+    expect(await store.countItems({ excludeBrands: ["ferrero"] })).toBe(2);
+    expect((await store.queryItems({ excludeBrands: ["ferrero", "conad"], limit: 10 })).map((row) => row.id)).toEqual([
+      4,
+    ]);
+    expect(await store.countItems({ excludeBrands: [] })).toBe(4);
     // Il conteggio per marca conta solo i concorsi: l'articolo non gonfia il numero
     // che la chat scrive sul bottone.
     expect(await store.brandCounts()).toEqual({ ferrero: 1, conad: 1 });

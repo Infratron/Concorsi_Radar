@@ -59,6 +59,18 @@ interface ColonnaAttesa {
  * deploy, e su un database già aggiornato il comando non fa nulla.
  */
 const COLONNE_ATTESE: ColonnaAttesa[] = [
+  {
+    tabella: "sources",
+    colonna: "include_pattern",
+    tipo: "TEXT",
+    perche: "filtro sugli URL della fonte, seminato in D1 per non dipendere dal commit del runner",
+  },
+  {
+    tabella: "sources",
+    colonna: "max_items",
+    tipo: "INTEGER",
+    perche: "tetto di item per giro, seminato in D1 accanto al pattern",
+  },
   { tabella: "sources", colonna: "last_status", tipo: "INTEGER", perche: "codice HTTP dell'ultimo tentativo" },
   { tabella: "sources", colonna: "last_error", tipo: "TEXT", perche: "motivo dell'ultimo fallimento" },
   { tabella: "sources", colonna: "last_items", tipo: "INTEGER NOT NULL DEFAULT 0", perche: "item grezzi letti nell'ultimo giro" },

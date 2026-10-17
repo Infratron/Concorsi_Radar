@@ -8,6 +8,7 @@ import { digestKeyboard, instantKeyboard } from "./keyboard.ts";
 import { staleItemReason } from "../enrich/freshness.ts";
 import { isSamePage, regulationUrlFromText } from "../enrich/regulation.ts";
 import { filtersFor } from "../filters.ts";
+import { parseQuietRange } from "./prefs-config.ts";
 
 /**
  * Digest programmati e avvisi istantanei.
@@ -108,23 +109,21 @@ function reminderText(item: ItemRow, left: number, now: Date): string {
   return `${testa} · ${quandoChiude(left)}\n\n${avviso}\n\n${formatItemCard(item, now)}`;
 }
 
-function parseQuietHours(value: string): [number, number] | null {
-  const match = /^(\d{1,2})\s*-\s*(\d{1,2})$/.exec(value.trim());
-  if (!match) return null;
-  const start = Number(match[1]);
-  const end = Number(match[2]);
-  if (start > 23 || end > 23) return null;
-  return [start, end];
-}
-
-/** true se l'ora locale italiana cade nella fascia di silenzio (es. "23-7"). */
+/**
+ * true se l'ora locale italiana cade nella fascia di silenzio (es. "23-7").
+ *
+ * La lettura della fascia è quella delle impostazioni (`parseQuietRange`,
+ * src/telegram/prefs-config.ts): due copie della stessa regex significavano
+ * che un valore accettato dai bottoni poteva essere ignorato qui, o viceversa.
+ */
 export function isQuietHour(prefs: Prefs, now: Date): boolean {
-  const range = parseQuietHours(prefs.quietHours);
+  const range = parseQuietRange(prefs.quietHours);
   if (!range) return false;
   const hour = localHour(now);
-  const [start, end] = range;
-  if (start === end) return false;
-  return start < end ? hour >= start && hour < end : hour >= start || hour < end;
+  if (range.start === range.end) return false;
+  return range.start < range.end
+    ? hour >= range.start && hour < range.end
+    : hour >= range.start || hour < range.end;
 }
 
 /** URL del regolamento dentro il testo dell'item, se ne troviamo uno diverso dalla pagina. */

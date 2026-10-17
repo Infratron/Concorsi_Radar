@@ -23,6 +23,7 @@ import type { Category, ChatFilters, ItemKind, ItemQuery } from "./types.ts";
 
 export const DEFAULT_FILTERS: ChatFilters = {
   favoriteBrands: [],
+  mutedBrands: [],
   brandsOnly: false,
   mutedSources: [],
   mutedCategories: [],
@@ -35,6 +36,7 @@ export const DEFAULT_FILTERS: ChatFilters = {
 export function defaultFilters(): ChatFilters {
   return {
     favoriteBrands: [],
+    mutedBrands: [],
     brandsOnly: false,
     mutedSources: [],
     mutedCategories: [],
@@ -77,6 +79,10 @@ export const CATEGORY_LABELS: Record<Category, string> = {
 export const TAG_FILTERS: { tag: string; label: string }[] = [
   { tag: "raccolta_punti", label: "🏪 Raccolte punti" },
   { tag: "premio_certo", label: "🎁 Premio certo" },
+  // Un omaggio con acquisto è un regalo che si riceve comprando: il tag lo
+  // deriva l'arricchimento (src/enrich/rules.ts), quindi si può spegnere come
+  // gli altri tipi — e vale solo per i concorsi, non per i coupon.
+  { tag: "omaggio_con_acquisto", label: "🛍️ Omaggi con acquisto" },
   { tag: "giftcard", label: "💳 Gift card" },
   { tag: "viaggio", label: "✈️ Viaggi" },
   { tag: "elettronica", label: "📱 Elettronica" },
@@ -148,7 +154,18 @@ export const PRIZE_QUICK_FILTERS: PrizeQuickFilter[] = [
   { tag: "auto", section: "premi:auto", emoji: "🚗", label: "Auto e moto" },
   { tag: "viaggio", section: "premi:viaggio", emoji: "✈️", label: "Viaggi" },
   { tag: "buoni_spesa", section: "premi:buoni_spesa", emoji: "🛒", label: "Buoni spesa" },
+  // Le due domande nuove, misurate prima di aprirle (17/10/2026): "il premio me
+  // lo danno di sicuro?" e "che cosa ricevo comprando?". Sono tag, non colonne:
+  // il primo lo dicono le parole della pagina, il secondo lo deriva
+  // l'arricchimento da requires_purchase + il regalo scritto nel testo.
+  { tag: "premio_certo", section: "premi:premio_certo", emoji: "🎁", label: "Premio certo" },
+  { tag: "omaggio_con_acquisto", section: "premi:omaggio_con_acquisto", emoji: "🛍️", label: "Omaggi con acquisto" },
+  // Le ultime due porte non sono tipi di premio: sono le due metà dell'archivio
+  // divise per quello che costa partecipare. Stanno una accanto all'altra di
+  // proposito — chi cerca "quali posso fare senza comprare?" trova anche
+  // "quali chiedono di comprare?" senza tornare al menù.
   { tag: null, section: "gratis", emoji: "🆓", label: "Gratis" },
+  { tag: null, section: "spesa", emoji: "💸", label: "Con acquisto" },
 ];
 
 /** Il tipo di premio di questa sezione, oppure null se non è una di quelle porte. */
@@ -201,6 +218,7 @@ export function mutedSourceIds(filters: ChatFilters): string[] {
 export function activeFilterCount(filters: ChatFilters): number {
   return (
     (onlyFavoriteBrands(filters) ? 1 : 0) +
+    filters.mutedBrands.length +
     filters.mutedSources.length +
     filters.mutedCategories.length +
     filters.mutedTags.length +
@@ -222,6 +240,7 @@ export function onlyFavoriteBrands(filters: ChatFilters): boolean {
 export function isSeeingAll(filters: ChatFilters): boolean {
   return (
     !onlyFavoriteBrands(filters) &&
+    filters.mutedBrands.length === 0 &&
     filters.mutedSources.length === 0 &&
     filters.mutedCategories.length === 0 &&
     filters.mutedTags.length === 0 &&
@@ -251,6 +270,11 @@ export function filtersFor(filters: ChatFilters, query: ItemQuery = {}): ItemQue
   if (filters.mutedTags.length > 0) {
     risultato.excludeTags = [...(query.excludeTags ?? []), ...filters.mutedTags];
   }
+  // Le marche spente sono un'esclusione come le altre: valgono qui, quindi
+  // elenchi, digest e avvisi le seguono tutti insieme.
+  if (filters.mutedBrands.length > 0) {
+    risultato.excludeBrands = [...(query.excludeBrands ?? []), ...filters.mutedBrands];
+  }
   if (filters.freeOnly) risultato.withoutPurchase = true;
   // Le stelle minime si sommano a quelle che la query già chiedeva (una soglia
   // più alta vince: nessuna sezione chiede mai meno di quello che hai scelto).
@@ -267,6 +291,9 @@ export type FilterChange =
   | { kind: "star"; value: number }
   /** Una marca del registro che si accende o si spegne nell'elenco dei preferiti. */
   | { kind: "brand"; value: string }
+  /** Una marca che si spegne (🔕 Mai più) o si riaccende da 🎛 Cosa vedi. */
+  | { kind: "muteBrand"; value: string }
+  | { kind: "unmuteBrand"; value: string }
   | { kind: "brandsOnly"; value: boolean }
   | { kind: "brandsReset" }
   | { kind: "reset" };
@@ -288,8 +315,30 @@ export function withFilterChange(filters: ChatFilters, change: FilterChange): Ch
       return { ...filters, freeOnly: change.value };
     case "star":
       return { ...filters, minScore: STAR_CHOICES.includes(change.value) ? change.value : 0 };
-    case "brand":
-      return { ...filters, favoriteBrands: toggled(filters.favoriteBrands, change.value) };
+    case "brand": {
+      // Seguire una marca che avevi spento la riaccende: due interruttori
+      // opposti sulla stessa marca non possono stare accesi insieme, e il
+      // silenzio vince sempre — così invece vince l'ultimo tocco.
+      const seguite = toggled(filters.favoriteBrands, change.value);
+      return {
+        ...filters,
+        favoriteBrands: seguite,
+        mutedBrands: seguite.includes(change.value)
+          ? filters.mutedBrands.filter((id) => id !== change.value)
+          : filters.mutedBrands,
+      };
+    }
+    case "muteBrand":
+      return {
+        ...filters,
+        mutedBrands: toggled(filters.mutedBrands, change.value),
+        // Spegnere una marca che seguivi la toglie anche dai preferiti: una
+        // lista che dice "la segui" mentre i suoi concorsi sono nascosti è una
+        // bugia, e il bonus di punteggio resta scritto su righe che non vedi.
+        favoriteBrands: filters.favoriteBrands.filter((id) => id !== change.value),
+      };
+    case "unmuteBrand":
+      return { ...filters, mutedBrands: filters.mutedBrands.filter((id) => id !== change.value) };
     case "brandsOnly":
       return { ...filters, brandsOnly: change.value };
     // Svuotare i preferiti spegne anche il filtro: lasciarlo acceso senza marche
@@ -320,6 +369,12 @@ export function filterChangeLabel(filters: ChatFilters, change: FilterChange, na
       return filters.favoriteBrands.includes(change.value)
         ? `🏷 Segui ${brandLabel(change.value)}`
         : `🏷 Non segui più ${brandLabel(change.value)}`;
+    case "muteBrand":
+      return filters.mutedBrands.includes(change.value)
+        ? `🔕 Mai più ${brandLabel(change.value)}`
+        : `🔔 ${brandLabel(change.value)} di nuovo`;
+    case "unmuteBrand":
+      return `🔔 ${brandLabel(change.value)} di nuovo`;
     case "brandsOnly":
       return change.value ? "🏷 Solo le marche che seguo" : "🏷 Anche le altre marche";
     case "brandsReset":
@@ -364,6 +419,9 @@ export function parseFilters(raw: unknown): ChatFilters {
     // elenco farebbe filtrare `brandsOnly` su un id che non esiste più, cioè su
     // niente.
     favoriteBrands: stringList(record.favoriteBrands, isBrandId),
+    // Come i preferiti: una marca uscita dal registro non si può più escludere,
+    // e tenerla in elenco sarebbe un filtro su un id che non esiste.
+    mutedBrands: stringList(record.mutedBrands, isBrandId),
     brandsOnly: record.brandsOnly === true,
     mutedSources: stringList(record.mutedSources),
     mutedCategories: categorie,

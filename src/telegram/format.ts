@@ -1,5 +1,6 @@
 import type { ItemRow } from "../types.ts";
 import { truncate } from "../lib/text.ts";
+import { dutiesFor } from "../enrich/proof.ts";
 import { SOURCES } from "../config/sources.ts";
 import { MAX_MESSAGE_CHARS } from "./api.ts";
 
@@ -21,6 +22,50 @@ export interface DigestSection {
 
 const ROME = "Europe/Rome";
 
+/**
+ * I formattatori si costruiscono UNA volta per isolate, non a ogni chiamata.
+ *
+ * `new Intl.DateTimeFormat` è la parte cara: su Workers la CPU si conta in
+ * millisecondi e queste funzioni girano per ogni riga di un elenco (e due volte
+ * per ogni avviso). Il formattatore è immutabile e indipendente dall'istante,
+ * quindi riusarlo non cambia nessun risultato: cambia solo quanto costa.
+ */
+const HOUR_FORMAT = new Intl.DateTimeFormat("it-IT", {
+  timeZone: ROME,
+  hour: "numeric",
+  hour12: false,
+});
+const TIME_SHORT_FORMAT = new Intl.DateTimeFormat("it-IT", {
+  timeZone: ROME,
+  hour: "2-digit",
+  minute: "2-digit",
+  hour12: false,
+});
+const WALL_CLOCK_FORMAT = new Intl.DateTimeFormat("en-CA", {
+  timeZone: ROME,
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+  hour12: false,
+});
+const DATE_FORMAT = new Intl.DateTimeFormat("en-CA", {
+  timeZone: ROME,
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+});
+const DAY_MONTH_TIME_FORMAT = new Intl.DateTimeFormat("it-IT", {
+  timeZone: ROME,
+  day: "2-digit",
+  month: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  hour12: false,
+});
+
 export function escapeHtml(input: string): string {
   return input
     .replace(/&/g, "&amp;")
@@ -31,11 +76,7 @@ export function escapeHtml(input: string): string {
 
 /** Ora locale italiana (0-23), robusta anche con ICU che restituisce "24". */
 export function localHour(now: Date): number {
-  const parts = new Intl.DateTimeFormat("it-IT", {
-    timeZone: ROME,
-    hour: "numeric",
-    hour12: false,
-  }).formatToParts(now);
+  const parts = HOUR_FORMAT.formatToParts(now);
   const hour = Number.parseInt(parts.find((p) => p.type === "hour")?.value ?? "0", 10);
   if (!Number.isFinite(hour)) return 0;
   return hour === 24 ? 0 : hour;
@@ -46,14 +87,21 @@ export function localHour(now: Date): number {
  * a ogni fonte ("ha risposto alle 12:03"). Niente giorno: il report è di adesso.
  */
 export function localTimeShort(now: Date): string {
-  const parts = new Intl.DateTimeFormat("it-IT", {
-    timeZone: ROME,
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  }).formatToParts(now);
+  const parts = TIME_SHORT_FORMAT.formatToParts(now);
   const get = (type: string): string => parts.find((p) => p.type === type)?.value ?? "";
   return `${get("hour")}:${get("minute")}`;
+}
+
+/**
+ * Un istante come "17/10 14:05" in ora italiana: giorno, ora e minuti.
+ *
+ * Sta qui e non in screens.ts perché creava un formattatore a ogni riga
+ * disegnata: è la stessa schermata, ma il costo si paga a ogni tocco.
+ */
+export function localDayMonthTime(at: Date): string {
+  const parts = DAY_MONTH_TIME_FORMAT.formatToParts(at);
+  const get = (type: string): string => parts.find((p) => p.type === type)?.value ?? "";
+  return `${get("day")}/${get("month")} ${get("hour")}:${get("minute")}`;
 }
 
 /**
@@ -61,16 +109,7 @@ export function localTimeShort(now: Date): string {
  * scostamento del fuso in vigore in quel momento.
  */
 function localWallClockMs(now: Date): number {
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: ROME,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hour12: false,
-  }).formatToParts(now);
+  const parts = WALL_CLOCK_FORMAT.formatToParts(now);
   const get = (type: string): string => parts.find((part) => part.type === type)?.value ?? "00";
   // Alcune implementazioni di ICU scrivono "24" per la mezzanotte: la stessa
   // difesa di localHour, altrimenti il giorno comincerebbe un giorno dopo.
@@ -98,12 +137,7 @@ export function startOfLocalDay(now: Date): string {
 
 /** Data locale italiana come YYYY-MM-DD (per confronti con le scadenze). */
 export function localDateString(now: Date): string {
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: ROME,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).formatToParts(now);
+  const parts = DATE_FORMAT.formatToParts(now);
   const get = (type: string): string => parts.find((p) => p.type === type)?.value ?? "";
   return `${get("year")}-${get("month")}-${get("day")}`;
 }
@@ -148,12 +182,18 @@ function purchaseLabel(item: ItemRow): string {
 
 function tagLabel(item: ItemRow, max = 4): string {
   // Via i tag che dicono solo da dove arriva l'item o che cosa è: "coupon" e
-  // "cashback" li dice già la sezione (e il 💶 della riga).
+  // "cashback" li dice già la sezione (e il 💶 della riga), "acquisto" è già
+  // il 🛒 della testa. Un tag che ripete qualcosa di già scritto è rumore.
   const tags = item.tags.filter(
-    (tag) => tag !== "aggregatore" && tag !== "sitemap" && tag !== "news" && tag !== "coupon" && tag !== "cashback",
+    (tag) =>
+      tag !== "aggregatore" && tag !== "sitemap" && tag !== "news" &&
+      tag !== "coupon" && tag !== "cashback" && tag !== "acquisto",
   );
   if (tags.length === 0) return "";
-  return `🏷 ${escapeHtml(tags.slice(0, max).join(", "))}`;
+  // I tag interni usano l'underscore ("buoni_spesa"): in chat si leggono come
+  // nomi di variabili, non come parole. Separatore a punto medio, non virgola:
+  // la riga si legge come un elenco di etichette, non come una frase.
+  return `🏷 ${escapeHtml(tags.slice(0, max).map((tag) => tag.replace(/_/g, " ")).join(" · "))}`;
 }
 
 /** Riga compatta per liste lunghe (digest, /oggi, /settimana). */
@@ -167,30 +207,89 @@ export function formatItemLine(item: ItemRow, now: Date): string {
   return `${testa}${urgency} · <a href="${escapeHtml(item.url)}">${escapeHtml(title)}</a>`;
 }
 
-/** Scheda completa di un concorso, usata dagli avvisi istantanei e dalle schede. */
+/**
+ * Una riga "campo" della scheda: etichetta in grassetto, valore dopo un punto
+ * medio. La forma è sempre la stessa, così l'occhio scorre le etichette in
+ * verticale invece di leggere ogni riga da capo — è la richiesta "più leggibile"
+ * nella sua parte concreta: prima erano etichette in chiaro con i due punti in
+ * mezzo al testo, indistinguibili dal valore.
+ */
+function campo(emoji: string, label: string, value: string): string {
+  return `${emoji} <b>${label}</b> · ${value}`;
+}
+
+/**
+ * Scheda completa di un concorso, usata dagli avvisi istantanei e dalle schede.
+ *
+ * Struttura a blocchi separati da una riga vuota, non un elenco unico: in cima
+ * che cosa è e il titolo, poi i fatti (premio, partecipazione), poi gli obblighi
+ * (cosa conservare, entro quando chiedere), infine descrizione, tag e fonte. Un
+ * blocco per cosa, quindi, è quello che rende leggibile una pagina con dieci
+ * informazioni: la riga vuota è il confine che mancava.
+ */
 export function formatItemCard(item: ItemRow, now: Date): string {
-  const lines: string[] = [];
   const articolo = item.kind === "news";
   const offerta = item.kind === "coupon";
-  lines.push(
-    offerta
-      ? `💶 <b>Coupon o rimborso</b>${deadlineLabel(item, now)}${purchaseLabel(item)}`
-      : `${articolo ? "📰" : "🎁"} <b>${item.score}</b>/100${deadlineLabel(item, now)}${purchaseLabel(item)}`,
-  );
-  lines.push(`<b><a href="${escapeHtml(item.url)}">${escapeHtml(truncate(item.title, 160))}</a></b>`);
+  const blocks: string[] = [];
+
+  // Testa + titolo: cosa è (punteggio per i concorsi, che è l'unica cosa che il
+  // numero misura, tipo per gli altri due), quando chiude, e il link da toccare.
+  const testa = offerta
+    ? `💶 <b>Coupon</b>${deadlineLabel(item, now)}${purchaseLabel(item)}`
+    : articolo
+      ? `📰 <b>Articolo</b>${deadlineLabel(item, now)}`
+      : `🎁 <b>${item.score}</b>/100${deadlineLabel(item, now)}${purchaseLabel(item)}`;
+  blocks.push(`${testa}\n<b><a href="${escapeHtml(item.url)}">${escapeHtml(truncate(item.title, 160))}</a></b>`);
+
+  // I fatti: che cosa si prende e come si partecipa. Su un coupon il premio non
+  // si vince, quindi l'etichetta è "Offerta": chiamarlo premio sarebbe l'errore
+  // che la scheda deve evitare.
+  const fatti: string[] = [];
+  if (item.prize) fatti.push(campo(offerta ? "💶" : "🏆", offerta ? "Offerta" : "Premio", escapeHtml(truncate(item.prize, 160))));
+  if (item.participation) fatti.push(campo("📝", "Come partecipare", escapeHtml(truncate(item.participation, 160))));
   // Chi apre la scheda deve sapere che cosa ha davanti: la pagina del concorso, un
   // pezzo che ne parla, o un'offerta da spendere. È la differenza che l'utente ha
-  // chiesto di rendere evidente.
-  if (articolo) lines.push("📰 Articolo sul concorso: il link non è la pagina ufficiale.");
-  if (offerta) lines.push("💶 Buono sconto o rimborso: qui non si vince niente, si spende meno.");
-  if (item.prize) lines.push(`🏆 Premio: ${escapeHtml(truncate(item.prize, 160))}`);
-  if (item.participation) lines.push(`📝 Come partecipare: ${escapeHtml(truncate(item.participation, 160))}`);
-  const tags = tagLabel(item);
-  if (tags) lines.push(tags);
+  // chiesto di rendere evidente; sta qui, sotto il titolo, non in fondo.
+  if (articolo) fatti.push("ℹ️ Il link porta a un articolo: non è la pagina ufficiale del concorso.");
+  if (offerta) fatti.push("ℹ️ Non è un concorso: qui non si vince niente, si spende meno.");
+  if (fatti.length > 0) blocks.push(fatti.join("\n"));
+
+  // Gli obblighi: le due cose che si perdono senza accorgersene — la prova da
+  // conservare e la finestra per chiedere il premio. Restano sulla scheda anche
+  // senza watchlist, così non dipendono da un promemoria mai acceso.
+  if (!articolo) {
+    const doveri: string[] = [];
+    const info = dutiesFor(item, now);
+    if (info.keep) doveri.push(campo("🧾", "Da conservare", escapeHtml(info.keep)));
+    // Concorso, non coupon: un rimborso si richiede con una scadenza sua, ma
+    // chiamarlo "premio" sarebbe un'altra cosa. Gli articoli sono già fuori.
+    if (item.kind !== "coupon") {
+      if (info.claim?.kind === "date") {
+        const mancanti = daysLeft(info.claim.date, now);
+        const conto = mancanti !== null && mancanti >= 0 ? ` · ${mancanti} gg` : "";
+        doveri.push(`🎫 <b>Premio da richiedere</b> entro il <b>${formatDate(info.claim.date)}</b>${conto}`);
+      } else if (info.claim?.kind === "days") {
+        const da = info.claim.from ? ` ${escapeHtml(info.claim.from)}` : "";
+        doveri.push(`🎫 <b>Premio da richiedere</b> entro <b>${info.claim.days} giorni</b>${da}`);
+      } else if (item.tags.includes("premio_da_richiedere") || item.tags.includes("raccolta_punti")) {
+        // Il testo non dice quando, e una data inventata sarebbe peggio di
+        // nessuna data: si dice l'unica cosa certa, che non arriva da solo.
+        doveri.push("🎫 <b>Premio da richiedere</b> · la data è nel bando");
+      }
+    }
+    if (doveri.length > 0) blocks.push(doveri.join("\n"));
+  }
+
+  // La descrizione in corsivo: è l'unica parte scritta dalla fonte, non una
+  // scheda compilata da noi, e distinguerla evita di leggerla come un dato.
   const summary = item.summary.trim();
-  if (summary.length > 0 && !item.prize) lines.push(escapeHtml(truncate(summary, 220)));
-  lines.push(`🔎 Fonte: ${escapeHtml(sourceLabel(item.sourceId))}`);
-  return lines.join("\n");
+  if (summary.length > 0 && !item.prize) blocks.push(`<i>${escapeHtml(truncate(summary, 220))}</i>`);
+  const tags = tagLabel(item);
+  if (tags) blocks.push(tags);
+  // La fonte chiude sempre: è la riga che risponde a "da dove è arrivato" senza
+  // rubare spazio ai fatti.
+  blocks.push(campo("📡", "Fonte", escapeHtml(sourceLabel(item.sourceId))));
+  return blocks.join("\n\n");
 }
 
 /** Il segno davanti a una voce del punteggio: +, −, o niente. */
@@ -230,18 +329,19 @@ export function formatScoreBreakdown(
   const sempre = new Set(["premio", "sforzo", "scadenza", "freschezza", "senzaAcquisto", "limite"]);
   const voci = spiegazione.parts.filter((voce) => sempre.has(voce.key) || voce.points !== 0);
 
-  const pezzi = voci.map((voce) => {
+  // Una voce per riga, col pallino: due colonne di numeri vanno a capo in modo
+  // imprevedibile su un telefono, e quando succede le due voci si mescolano. Una
+  // riga per voce si legge come una lista, che è quello che è.
+  for (const voce of voci) {
     const massimo = voce.max === null || voce.max === 0 ? "" : `/${voce.max}`;
-    return `${voce.label} <b>${segno(voce.points)}${voce.points === 0 ? "0" : Math.abs(voce.points)}</b>${massimo}`;
-  });
-  // Due voci per riga: su un telefono ognuna sta su una riga sola e l'occhio
-  // scorre la colonna dei numeri invece di andare a capo a caso.
-  for (let indice = 0; indice < pezzi.length; indice += 2) {
-    righe.push(pezzi.slice(indice, indice + 2).join(" · "));
+    righe.push(`• ${voce.label} <b>${segno(voce.points)}${voce.points === 0 ? "0" : Math.abs(voce.points)}</b>${massimo}`);
   }
 
+  // Il resto è un commento alla lista: riga vuota prima, così non si confonde con
+  // una voce del punteggio.
   if (opzioni.salvato !== spiegazione.total) {
     righe.push(
+      "",
       `💾 Alla raccolta <b>${opzioni.salvato}</b> · con i gusti di adesso <b>${spiegazione.total}</b> ` +
         "(il filtro usa il primo)",
     );
@@ -250,6 +350,7 @@ export function formatScoreBreakdown(
   if (opzioni.soglia > 0) {
     const scarto = opzioni.soglia - opzioni.salvato;
     righe.push(
+      "",
       scarto > 0
         ? `⭐ Soglia <b>${opzioni.soglia}</b>: mancano <b>${scarto}</b> ${scarto === 1 ? "punto" : "punti"} per passarla`
         : scarto < 0
@@ -257,7 +358,7 @@ export function formatScoreBreakdown(
           : `⭐ Soglia <b>${opzioni.soglia}</b>: esattamente al limite`,
     );
   } else {
-    righe.push("⭐ Nessuna soglia accesa: le stelle in fondo agli elenchi non stanno tagliando niente.");
+    righe.push("", "⭐ Nessuna soglia accesa: le stelle in fondo agli elenchi non stanno tagliando niente.");
   }
 
   return righe.join("\n");

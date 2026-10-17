@@ -46,6 +46,9 @@ export const CHANNEL_BY_SOURCE: Record<string, SourceChannel> = {
   dimmicosacerchi: "aggregatore",
   soldissimi: "aggregatore",
   vincimi: "aggregatore",
+  omaggiomania: "aggregatore",
+  "your-contest": "aggregatore",
+  "scontomaggio-concorsi": "aggregatore",
   // Le fonti di coupon sono aggregatori come gli altri (raccontano le promozioni
   // delle insegne), anche se quasi non producono viste: le viste si registrano
   // solo per i concorsi, e un buono sconto non lo è. Restano qui perché una di
@@ -57,6 +60,7 @@ export const CHANNEL_BY_SOURCE: Record<string, SourceChannel> = {
   "dimmicosacerchi-coupon": "aggregatore",
   "scontomaggio-cashback": "aggregatore",
   "scontomaggio-coupon": "aggregatore",
+  couponvolantini: "aggregatore",
 
   // --- Stampa: le query Google News. Non sono la fonte del concorso e non sono
   // nemmeno un aggregatore: sono echi, e restano fuori dal confronto (altrimenti
@@ -80,6 +84,8 @@ export const CHANNEL_BY_SOURCE: Record<string, SourceChannel> = {
   "sitemap-sammontana": "brand",
   "sitemap-aia": "brand",
   "sitemap-pampers": "brand",
+  "sitemap-penny": "brand",
+  "sitemap-eurospin": "brand",
   "cocacola-offerte": "brand",
   "brand-sitemap-template": "brand",
 };

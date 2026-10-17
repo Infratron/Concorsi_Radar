@@ -27,6 +27,13 @@ export interface FonteDaSeminare {
   tags: readonly string[];
   cadenceMin: number;
   enabled: boolean;
+  /**
+   * Come si legge la fonte, non solo dove sta: senza questi due campi la semina
+   * lascerebbe in D1 una fonte "nuda", e il runner — che esegue il codice del
+   * commit, non il working tree — non avrebbe nessun pattern da applicare.
+   */
+  includePattern?: string;
+  maxItems?: number;
 }
 
 function esc(value: string): string {
@@ -45,13 +52,17 @@ export function sourceSeedStatements(sources: readonly FonteDaSeminare[]): strin
       `'${esc(JSON.stringify(source.tags))}'`,
       String(source.cadenceMin),
       source.enabled ? "1" : "0",
+      source.includePattern === undefined ? "NULL" : `'${esc(source.includePattern)}'`,
+      source.maxItems === undefined ? "NULL" : String(source.maxItems),
     ].join(", ");
 
     return (
-      `INSERT INTO sources (id, name, kind, url, category, tags, cadence_min, enabled) VALUES (${colonne})` +
+      `INSERT INTO sources (id, name, kind, url, category, tags, cadence_min, enabled, include_pattern, max_items)` +
+      ` VALUES (${colonne})` +
       " ON CONFLICT(id) DO UPDATE SET" +
       " name = excluded.name, kind = excluded.kind, url = excluded.url, category = excluded.category," +
-      " tags = excluded.tags, cadence_min = excluded.cadence_min, enabled = excluded.enabled"
+      " tags = excluded.tags, cadence_min = excluded.cadence_min, enabled = excluded.enabled," +
+      " include_pattern = excluded.include_pattern, max_items = excluded.max_items"
     );
   });
 }

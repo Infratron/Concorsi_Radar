@@ -61,6 +61,7 @@ export const BRANDS: Brand[] = [
   { id: "esselunga", label: "Esselunga", words: ["esselunga"] },
   { id: "coop", label: "Coop", words: ["coop"] },
   { id: "eurospin", label: "Eurospin", words: ["eurospin"] },
+  { id: "penny", label: "Penny", words: ["penny"] },
   { id: "lidl", label: "Lidl", words: ["lidl"] },
   { id: "carrefour", label: "Carrefour", words: ["carrefour"] },
   { id: "bennet", label: "Bennet", words: ["bennet"] },

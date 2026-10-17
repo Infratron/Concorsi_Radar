@@ -72,6 +72,56 @@ describe("store D1 · SQL vero su SQLite", () => {
     store = freshStore().store;
   });
 
+  it("la ricerca è un substring letterale: % e _ non sono jolly", async () => {
+    // Chi cerca "50%" vuole quel testo. In SQL LIKE, senza escape, `%` significa
+    // "qualunque cosa" e `_` "un carattere": la stessa ricerca dava risultati
+    // diversi fra D1 e il memory store (che usa includes).
+    await store.insertItem(
+      item({ url: "https://esempio.it/uno", urlKey: "k-sconto-50", title: "Buono sconto del 50%", summary: "" }),
+    );
+    await store.insertItem(
+      item({ url: "https://esempio.it/due", urlKey: "k-sconto-70", title: "Buono sconto del 70 per cento", summary: "" }),
+    );
+    await store.insertItem(
+      item({ url: "https://esempio.it/tre", urlKey: "k-ab", title: "Codice ab", summary: "" }),
+    );
+    await store.insertItem(
+      item({ url: "https://esempio.it/quattro", urlKey: "k-axb", title: "Codice axb", summary: "" }),
+    );
+
+    expect((await store.queryItems({ keyword: "50%" })).map((row) => row.title)).toEqual([
+      "Buono sconto del 50%",
+    ]);
+    expect((await store.queryItems({ keyword: "a_b" })).map((row) => row.title)).toEqual([]);
+    expect(await store.countItems({ keyword: "a_b" })).toBe(0);
+    // Il caso normale non cambia: la ricerca resta case-insensitive.
+    expect((await store.queryItems({ keyword: "CODICE" })).length).toBe(2);
+  });
+
+  it("la fonte porta con sé come si legge: pattern e tetto sopravvivono alla lettura", async () => {
+    // Il pattern non è un dettaglio della configurazione: è quello che decide
+    // quali pagine di una sitemap entrano. Se non torna indietro da D1, il
+    // runner che esegue un commit vecchio legge la sitemap senza filtro.
+    const { db, store: locale } = freshStore();
+    db.exec(
+      `INSERT INTO sources (id, name, kind, url, category, tags, cadence_min, enabled, include_pattern, max_items)
+       VALUES ('sitemap-prova', 'Prova', 'sitemap', 'https://esempio.it/sitemap.xml', 'punto_vendita', '["brand"]', 60, 1, '/concorso-', 20)`,
+    );
+    const [fonte] = await locale.getSources();
+    expect(fonte?.includePattern).toBe("/concorso-");
+    expect(fonte?.maxItems).toBe(20);
+
+    // Una fonte senza pattern non deve inventarne uno: `undefined` = nessun
+    // filtro, che è diverso da stringa vuota (regex vuota = tutto).
+    db.exec(
+      `INSERT INTO sources (id, name, kind, url, category, tags, cadence_min, enabled)
+       VALUES ('feed-prova', 'Feed', 'rss', 'https://esempio.it/feed', 'online', '[]', 30, 1)`,
+    );
+    const feed = (await locale.getSources()).find((riga) => riga.id === "feed-prova");
+    expect(feed?.includePattern).toBeUndefined();
+    expect(feed?.maxItems).toBeUndefined();
+  });
+
   it("inserisce una volta sola sullo stesso urlKey e conserva i campi", async () => {
     const first = await store.insertItem(item());
     expect(first.created).toBe(true);
@@ -335,6 +385,22 @@ describe("store D1 · SQL vero su SQLite", () => {
     expect(await store.lastDeliveryAt(111, "digest")).toBe("2026-10-16T19:05:00.000Z");
   });
 
+  it("una decisione si cancella: è così che un concorso esce dalla watchlist", async () => {
+    const { item: inserito } = await store.insertItem(item({ urlKey: "k-watch" }));
+    const id = inserito.id;
+    expect(await store.deleteDelivery(111, id, "saved")).toBe(false);
+    await store.recordDelivery(111, id, "saved", "2026-10-16T08:05:00.000Z");
+    await store.recordDelivery(222, id, "saved", "2026-10-16T08:06:00.000Z");
+
+    // Solo la riga di QUELLA chat, e solo per quel tipo: le altre restano.
+    expect(await store.deleteDelivery(111, id, "saved")).toBe(true);
+    expect(await store.isDelivered(111, id, "saved")).toBe(false);
+    expect(await store.isDelivered(222, id, "saved")).toBe(true);
+    // Ricancella: niente da fare, e lo dice (chi chiama non annulla i pesi due volte).
+    expect(await store.deleteDelivery(111, id, "saved")).toBe(false);
+    expect(await store.listDeliveredItems(111, "saved")).toEqual([]);
+  });
+
   it("deduplica gli update di Telegram contando i changes", async () => {
     expect(await store.claimUpdate(5001, "2026-10-16T08:00:00.000Z")).toBe(true);
     expect(await store.claimUpdate(5001, "2026-10-16T08:00:01.000Z")).toBe(false);
@@ -456,6 +522,10 @@ describe("store D1 · SQL vero su SQLite", () => {
     expect(await store.countItems({ excludeSources: ["vincimi"] })).toBe(2);
     expect(await store.countItems({ excludeTags: ["raccolta_punti"] })).toBe(2);
     expect(await store.countItems({ withoutPurchase: true })).toBe(2);
+    // L'altra metà: 💸 Con acquisto è il gemello di 🆓 Gratis, e in SQL è
+    // requires_purchase = 1.
+    expect(await store.countItems({ withPurchase: true })).toBe(1);
+    expect(await store.countItems({ withPurchase: true, withoutPurchase: true })).toBe(0);
     expect((await store.queryItems({ excludeTags: ["raccolta_punti"], limit: 10 })).map((row) => row.sourceId)).toEqual([
       "premieconcorsi",
       "vincimi",
@@ -547,6 +617,12 @@ describe("store D1 · SQL vero su SQLite", () => {
     expect(await store.countItems({ brands: ["ferrero"] })).toBe(2);
     expect((await store.queryItems({ brands: ["conad"], limit: 10 })).map((row) => row.id)).toEqual([2]);
     expect(await store.countItems({ brands: [] })).toBe(4);
+    // 🔕 Marche spente: la marca esce, la riga senza marca resta (NULL NOT IN
+    // sarebbe NULL, cioè né dentro né fuori: qui si usa l'OR esplicito).
+    expect(await store.countItems({ excludeBrands: ["ferrero"] })).toBe(2);
+    expect((await store.queryItems({ excludeBrands: ["ferrero", "conad"], limit: 10 })).map((row) => row.id)).toEqual([
+      4,
+    ]);
     // brandCounts conta i concorsi, non gli articoli che parlano della marca.
     expect(await store.brandCounts()).toEqual({ ferrero: 1, conad: 1 });
 
@@ -581,5 +657,73 @@ describe("store D1 · SQL vero su SQLite", () => {
     await store.updateItem(2, { rulesUrl: null, score: 51 });
     expect((await store.getItem(2))?.rulesUrl).toBe("https://b.example/regolamento");
     expect((await store.queryItems({ withoutRules: true, limit: 10 })).map((row) => row.id)).toEqual([3]);
+  });
+
+  it("tiene i rimborsi per chat, con il denaro in attesa separato da quello ricevuto", async () => {
+    const { db, store: s } = freshStore();
+    await s.insertItem(
+      item({ urlKey: "k1", url: "https://a.example/1", kind: "coupon", title: "Cashback Ymea 25 euro" }),
+    );
+    await s.insertItem(
+      item({ urlKey: "k2", url: "https://b.example/2", kind: "coupon", title: "Buono sconto Novi 3 euro" }),
+    );
+
+    await s.claimRefund(111, 1, 2500, false, "2026-10-16T09:00:00.000Z");
+    await s.claimRefund(111, 2, 300, false, "2026-10-16T10:00:00.000Z");
+    // Doppio tocco: non raddoppia la richiesta e non riscrive la cifra.
+    await s.claimRefund(111, 1, 9999, true, "2026-10-17T09:00:00.000Z");
+    expect((await s.getRefund(111, 1))?.amountCents).toBe(2500);
+
+    // Ogni chat ha i suoi: la richiesta di una non compare nell'altra.
+    expect(await s.getRefund(222, 1)).toBeNull();
+    await s.claimRefund(222, 1, 1000, false, "2026-10-16T09:30:00.000Z");
+    expect((await s.listRefunds(111)).map((row) => row.itemId)).toEqual([2, 1]);
+    expect((await s.listRefunds(222)).map((row) => row.itemId)).toEqual([1]);
+
+    // La JOIN porta l'offerta intera: la schermata ha titolo e scheda.
+    expect((await s.listRefunds(111))[0]?.item.title).toContain("Novi");
+
+    expect(await s.markRefundReceived(111, 1, "2026-10-18T09:00:00.000Z")).toBe(true);
+    // Già ricevuto: la seconda volta non sposta la data.
+    expect(await s.markRefundReceived(111, 1, "2026-10-19T09:00:00.000Z")).toBe(false);
+    expect((await s.getRefund(111, 1))?.receivedAt).toBe("2026-10-18T09:00:00.000Z");
+
+    expect(await s.refundTotals(111)).toEqual({
+      pendingCents: 300,
+      receivedCents: 2500,
+      pending: 1,
+      received: 1,
+      unknownPending: 0,
+      unknownReceived: 0,
+      capPending: 0,
+      capReceived: 0,
+    });
+    expect(await s.refundTotals(222)).toMatchObject({ pendingCents: 1000, pending: 1, received: 0 });
+    // In attesa prima, poi i ricevuti.
+    expect((await s.listRefunds(111)).map((row) => row.itemId)).toEqual([2, 1]);
+
+    // Un rimborso senza cifra fissa (percentuale, 1+1) conta nella richiesta ma
+    // non nel denaro: la riga c'è, e non porta 0 € come se fosse un guadagno.
+    await s.undoRefund(111, 2);
+    await s.claimRefund(111, 2, 0, false, "2026-10-20T10:00:00.000Z");
+    expect(await s.refundTotals(111)).toMatchObject({ pendingCents: 0, unknownPending: 1, pending: 1 });
+
+    // Un tetto ("fino a 100 €") resta dentro il totale, ma si conta a parte:
+    // la schermata può dire "fino a" invece di spacciarlo per la cifra esatta.
+    await s.insertItem(
+      item({ urlKey: "k3", url: "https://c.example/3", kind: "coupon", title: "Rimborso fino a 100 euro" }),
+    );
+    await s.claimRefund(111, 3, 10000, true, "2026-10-21T10:00:00.000Z");
+    expect(await s.refundTotals(111)).toMatchObject({ pendingCents: 10000, capPending: 1, capReceived: 0 });
+
+    // Annullare riporta la chat come se non avesse mai chiesto niente.
+    expect(await s.undoRefund(111, 2)).toBe(true);
+    expect(await s.getRefund(111, 2)).toBeNull();
+
+    // Cancellare un'offerta cancella anche il suo rimborso: nessuna riga orfana.
+    expect(await s.deleteItems([1])).toBe(1);
+    expect(await s.getRefund(111, 1)).toBeNull();
+    const orfane = db.prepare("SELECT COUNT(*) AS n FROM refunds WHERE item_id = 1").get() as { n: number };
+    expect(orfane.n).toBe(0);
   });
 });

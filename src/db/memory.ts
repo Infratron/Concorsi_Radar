@@ -6,6 +6,8 @@ import type {
   ItemStatus,
   NewItem,
   Prefs,
+  RefundRow,
+  RefundTotals,
   RobotsRow,
   RunRow,
   Sighting,
@@ -14,6 +16,7 @@ import type {
 } from "../types.ts";
 import { DUP_CANDIDATE_MAX_HAMMING, hammingHex } from "../lib/text.ts";
 import { defaultFilters } from "../filters.ts";
+import { totalsOfRefunds } from "../refunds.ts";
 
 /**
  * Store in-memory: stessa semantica di D1, senza database.
@@ -30,6 +33,15 @@ interface DeliveryRow {
   itemId: number;
   kind: string;
   sentAt: string;
+}
+
+interface RefundStoreRow {
+  chatId: number;
+  itemId: number;
+  amountCents: number;
+  cap: boolean;
+  claimedAt: string;
+  receivedAt: string | null;
 }
 
 const DEFAULT_DIGEST_HOURS = [8, 19];
@@ -58,6 +70,13 @@ export function createMemoryStore(): MemoryStore {
   const sources = new Map<string, SourceRow>();
   const items: ItemRow[] = [];
   const deliveries: DeliveryRow[] = [];
+  const refunds: RefundStoreRow[] = [];
+  /** La riga completa da mostrare: senza l'offerta non c'è niente da aprire. */
+  const refundRow = (row: RefundStoreRow): RefundRow | null => {
+    const item = items.find((entry) => entry.id === row.itemId);
+    if (!item) return null;
+    return { ...clone(row), item: clone(item) };
+  };
   const prefs = new Map<number, Prefs>();
   const runs: RunRow[] = [];
   const updates = new Set<number>();
@@ -127,7 +146,11 @@ export function createMemoryStore(): MemoryStore {
       return false;
     }
     if (query.withoutPurchase === true && row.requiresPurchase) return false;
+    if (query.withPurchase === true && !row.requiresPurchase) return false;
     if (query.brands && query.brands.length > 0 && (row.brand === null || !query.brands.includes(row.brand))) {
+      return false;
+    }
+    if (query.excludeBrands && query.excludeBrands.length > 0 && row.brand !== null && query.excludeBrands.includes(row.brand)) {
       return false;
     }
     return true;
@@ -309,9 +332,13 @@ export function createMemoryStore(): MemoryStore {
     async deleteItems(ids: number[]): Promise<number> {
       if (ids.length === 0) return 0;
       const targets = new Set(ids);
-      // Prima le consegne, poi l'item: stessa promessa dell'implementazione D1.
+      // Prima le consegne e i rimborsi, poi l'item: stessa promessa
+      // dell'implementazione D1 (nessuna riga che punta a un'offerta sparita).
       for (let index = deliveries.length - 1; index >= 0; index--) {
         if (targets.has(deliveries[index].itemId)) deliveries.splice(index, 1);
+      }
+      for (let index = refunds.length - 1; index >= 0; index--) {
+        if (targets.has(refunds[index].itemId)) refunds.splice(index, 1);
       }
       let removed = 0;
       for (let index = items.length - 1; index >= 0; index--) {
@@ -353,12 +380,70 @@ export function createMemoryStore(): MemoryStore {
       else deliveries.push({ chatId, itemId, kind, sentAt: at });
     },
 
+    async deleteDelivery(chatId: number, itemId: number, kind: string): Promise<boolean> {
+      const index = deliveries.findIndex(
+        (row) => row.chatId === chatId && row.itemId === itemId && row.kind === kind,
+      );
+      if (index < 0) return false;
+      deliveries.splice(index, 1);
+      return true;
+    },
+
     async lastDeliveryAt(chatId: number, kind: string): Promise<string | null> {
       const matching = deliveries
         .filter((row) => row.chatId === chatId && row.kind === kind)
         .map((row) => row.sentAt)
         .sort();
       return matching.length > 0 ? matching[matching.length - 1] : null;
+    },
+
+    async claimRefund(chatId: number, itemId: number, amountCents: number, cap: boolean, at: string): Promise<void> {
+      // Idempotente come in D1: la prima richiesta è quella che vale.
+      if (refunds.some((row) => row.chatId === chatId && row.itemId === itemId)) return;
+      refunds.push({
+        chatId,
+        itemId,
+        amountCents: Math.max(0, Math.round(amountCents)),
+        cap,
+        claimedAt: at,
+        receivedAt: null,
+      });
+    },
+
+    async markRefundReceived(chatId: number, itemId: number, at: string): Promise<boolean> {
+      const row = refunds.find((entry) => entry.chatId === chatId && entry.itemId === itemId);
+      if (!row || row.receivedAt !== null) return false;
+      row.receivedAt = at;
+      return true;
+    },
+
+    async undoRefund(chatId: number, itemId: number): Promise<boolean> {
+      const index = refunds.findIndex((row) => row.chatId === chatId && row.itemId === itemId);
+      if (index < 0) return false;
+      refunds.splice(index, 1);
+      return true;
+    },
+
+    async getRefund(chatId: number, itemId: number): Promise<RefundRow | null> {
+      const row = refunds.find((entry) => entry.chatId === chatId && entry.itemId === itemId);
+      return row ? refundRow(row) : null;
+    },
+
+    async listRefunds(chatId: number, limit = 200): Promise<RefundRow[]> {
+      const capped = Math.min(Math.max(Math.trunc(limit), 1), 200);
+      return refunds
+        .filter((row) => row.chatId === chatId)
+        .sort((a, b) => {
+          const pending = Number(a.receivedAt === null) - Number(b.receivedAt === null);
+          return -pending || b.claimedAt.localeCompare(a.claimedAt) || a.itemId - b.itemId;
+        })
+        .slice(0, capped)
+        .map(refundRow)
+        .filter((row): row is RefundRow => row !== null);
+    },
+
+    async refundTotals(chatId: number): Promise<RefundTotals> {
+      return totalsOfRefunds(refunds.filter((row) => row.chatId === chatId));
     },
 
     async bumpWeights(chatId: number, delta: Record<string, number>): Promise<void> {

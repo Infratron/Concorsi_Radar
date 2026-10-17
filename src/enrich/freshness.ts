@@ -123,8 +123,7 @@ export function isListingSource(sourceId: string): boolean {
  * perché è la firma di un item nato da uno slug.
  */
 export function isListingItem(sourceId: string, summary: string): boolean {
-  if (isListingSource(sourceId)) return true;
-  return !LISTING_SOURCE_IDS.has(sourceId) && summary.trim().length === 0;
+  return isListingSource(sourceId) || summary.trim().length === 0;
 }
 
 function daysSince(iso: string, now: Date): number | null {
@@ -260,19 +259,32 @@ export function staleItemReason(
  * pagina madre.
  */
 export function indexPageUrls(urls: string[], minChildren = 2): Set<string> {
-  const directories = urls.map((url) => `${url.replace(/\/+$/, "")}/`);
+  // Le voci vuote non sono URL e non devono contare come figli di nessuno.
+  const voci = urls
+    .map((url) => url.trim())
+    .filter((url) => url.length > 0)
+    .map((url) => ({ url, directory: `${url.replace(/\/+$/, "")}/` }));
+
+  // Ordinare per prefisso mette i figli subito dopo il padre: si confrontano
+  // solo le righe contigue che cominciano con la sua cartella, invece di fare
+  // n² confronti su tutto l'elenco. Con l'archivio intero (250 righe) la
+  // differenza si vede in una schermata che si apre a ogni tocco.
+  voci.sort((a, b) => a.directory.localeCompare(b.directory));
+
   const index = new Set<string>();
-  for (const [position, url] of urls.entries()) {
-    const directory = directories[position];
-    let children = 0;
-    for (const [otherPosition, other] of directories.entries()) {
-      if (otherPosition === position) continue;
-      if (other.startsWith(directory)) {
-        children++;
-        if (children >= minChildren) {
-          index.add(url);
-          break;
-        }
+  for (let position = 0; position < voci.length; position++) {
+    const { url, directory } = voci[position]!;
+    const figli = new Set<string>();
+    for (let other = position + 1; other < voci.length && voci[other]!.directory.startsWith(directory); other++) {
+      const candidato = voci[other]!;
+      // Lo stesso URL ripetuto (succede quando una sitemap elenca due volte la
+      // stessa pagina con lastmod diversi) non è un figlio di sé stessa:
+      // contarlo renderebbe "indice" ogni riga duplicata.
+      if (candidato.directory === directory) continue;
+      figli.add(candidato.directory);
+      if (figli.size >= minChildren) {
+        index.add(url);
+        break;
       }
     }
   }

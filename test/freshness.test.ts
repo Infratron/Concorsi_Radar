@@ -289,4 +289,27 @@ describe("cancello · pagine indice", () => {
     ];
     expect(indexPageUrls(urls).size).toBe(0);
   });
+
+  it("lo stesso URL elencato due volte non è un figlio di sé stesso", () => {
+    // Le sitemap possono ripetere una pagina con lastmod diversi (Eurospin,
+    // 17/10/2026). Prima ogni copia contava le altre come figlie e TUTTE le 20
+    // pagine lette finivano scartate come "pagina indice".
+    const urls = [
+      "https://www.eurospin.it/concorso-bluey/",
+      "https://www.eurospin.it/concorso-bluey/",
+      "https://www.eurospin.it/concorso-bluey",
+    ];
+    expect(indexPageUrls(urls).size).toBe(0);
+  });
+
+  it("conta i figli anche quando l'elenco arriva disordinato", () => {
+    // L'ordinamento interno è un'ottimizzazione: non deve cambiare il verdetto.
+    const urls = [
+      "https://www.esempio.it/concorsi/concorso-b/",
+      "https://www.esempio.it/concorsi/",
+      "https://www.esempio.it/concorsi/concorso-a/",
+      "https://www.esempio.it/altro/",
+    ];
+    expect([...indexPageUrls(urls)]).toEqual(["https://www.esempio.it/concorsi/"]);
+  });
 });

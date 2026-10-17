@@ -10,6 +10,8 @@ CREATE TABLE IF NOT EXISTS sources (
   tags          TEXT NOT NULL DEFAULT '[]',
   cadence_min   INTEGER NOT NULL DEFAULT 15,
   enabled       INTEGER NOT NULL DEFAULT 1,
+  include_pattern TEXT,
+  max_items     INTEGER,
   etag          TEXT,
   last_modified TEXT,
   last_run_at   TEXT,
@@ -30,6 +32,17 @@ CREATE TABLE IF NOT EXISTS sources (
 --   ALTER TABLE sources ADD COLUMN last_error TEXT;
 --   ALTER TABLE sources ADD COLUMN last_items INTEGER NOT NULL DEFAULT 0;
 
+-- `include_pattern` e `max_items` dicono COME si legge una fonte (quali URL di
+-- una sitemap tenere, quanti item al massimo per giro). Stanno qui e non solo in
+-- src/config/sources.ts perché la raccolta gira su GitHub Actions, che parte dal
+-- repository: una modifica al pattern non pubblicata non arriverebbe mai al
+-- runner, mentre i valori seminati in D1 arrivano con `npm run db:sync`. Caso
+-- vero del 17/10/2026: due sitemap nuove lette senza pattern hanno scartato 40
+-- pagine su 40, e la configurazione sembrava giusta perché lo era — nel working
+-- tree, non nel commit che il runner eseguiva. Su un database creato prima:
+--   ALTER TABLE sources ADD COLUMN include_pattern TEXT;
+--   ALTER TABLE sources ADD COLUMN max_items INTEGER;
+--
 -- `kind` distingue i concorsi veri dagli articoli e dalle pagine-contenitore che
 -- ne parlano: nello stesso archivio convivono i due, e la chat li mostra in
 -- sezioni diverse. Su un database già creato la colonna va aggiunta a mano:
@@ -137,6 +150,32 @@ CREATE TABLE IF NOT EXISTS deliveries (
 );
 
 CREATE INDEX IF NOT EXISTS idx_deliveries_sent ON deliveries (chat_id, sent_at DESC);
+
+-- `refunds`: i rimborsi e i cashback che ogni chat ha chiesto indietro, e se il
+-- denaro è già tornato. Una riga per coppia chat+offerta: la stessa offerta può
+-- essere richiesta da due persone, e chiederla due volte non raddoppia niente.
+--
+-- `amount_cents` è quello che il bando dichiara (0 = nessuna cifra fissa: è una
+-- percentuale o un 1+1, e la chat chiede quanto è tornato davvero). `cap` dice
+-- che la cifra è un tetto ("fino a 100 €"), non l'importo esatto. Le due colonne
+-- insieme sono quello che rende il totale onesto: il denaro in attesa somma solo
+-- le cifre dichiarate, e i rimborsi senza cifra si contano a parte.
+--
+-- Su un database già creato la tabella va creata PRIMA di pubblicare il codice
+-- che la legge (la crea `npm run db:init`, è un CREATE TABLE IF NOT EXISTS):
+CREATE TABLE IF NOT EXISTS refunds (
+  chat_id      INTEGER NOT NULL,
+  item_id      INTEGER NOT NULL,
+  amount_cents INTEGER NOT NULL DEFAULT 0,
+  cap          INTEGER NOT NULL DEFAULT 0,
+  claimed_at   TEXT NOT NULL,
+  received_at  TEXT,
+  PRIMARY KEY (chat_id, item_id)
+);
+
+-- La schermata legge le richieste di una chat distinguendo attese e ricevute:
+-- l'indice serve proprio a quella coppia, senza scorrere tutta la tabella.
+CREATE INDEX IF NOT EXISTS idx_refunds_chat ON refunds (chat_id, received_at, claimed_at DESC);
 
 -- `filters` sono i filtri personali della chat (fonti, categorie e tipi di
 -- concorso spenti, più "solo senza acquisto"): JSON, uno per chat, così due

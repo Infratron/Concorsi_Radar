@@ -1,4 +1,5 @@
-import type { ItemRow, NavPoint, Prefs, RunRow, SourceRow, UiState } from "../types.ts";
+import type { ItemRow, NavPoint, Prefs, RefundRow, RefundTotals, RunRow, SourceRow, UiState } from "../types.ts";
+import { formatEuro, refundAmountLabel } from "../refunds.ts";
 import { brandLabel, type BrandChoice } from "../config/brands.ts";
 import { GRUPPI_DIAGNOSI, type Diagnosi, type RiepilogoDiagnosi } from "../sources-health.ts";
 import {
@@ -13,9 +14,17 @@ import {
 } from "../filters.ts";
 import type { LeadStats } from "../enrich/lead.ts";
 import { explainScore, insightFromRow } from "../enrich/score.ts";
-import { HELP_PAGES, helpIndexFor } from "./help.ts";
+import { HELP_PAGES, helpIndexFor, helpPageForSection } from "./help.ts";
 import { MAX_MESSAGE_CHARS, type InlineKeyboardMarkup } from "./api.ts";
-import { escapeHtml, formatDate, formatItemCard, formatScoreBreakdown, sourceLabel } from "./format.ts";
+import {
+  escapeHtml,
+  formatDate,
+  formatItemCard,
+  formatScoreBreakdown,
+  localDateString,
+  localDayMonthTime,
+  sourceLabel,
+} from "./format.ts";
 import { esitoUltimoTentativo } from "./report.ts";
 import { truncate } from "../lib/text.ts";
 import { runOrigin } from "../schedule.ts";
@@ -25,11 +34,16 @@ import {
   archivioKeyboard,
   backKeyboard,
   cardKeyboard,
+  couponViewsRows,
   helpKeyboard,
+  helpRow,
+  numeriKeyboard,
+  rimborsiKeyboard,
   diagnosticaKeyboard,
   emptyKeyboard,
   filtriKeyboard,
   filtriFontiKeyboard,
+  filtriMarcheKeyboard,
   fontiKeyboard,
   itemButtonLabel,
   listKeyboard,
@@ -94,7 +108,22 @@ export type Intent =
   | { kind: "page"; page: number }
   | { kind: "open"; itemId: number }
   | { kind: "back" }
-  | { kind: "decision"; action: "save" | "ign" | "won"; itemId: number }
+  | { kind: "decision"; action: "save" | "unsave" | "ign" | "won"; itemId: number }
+  /**
+   * Un rimborso: richiedilo, segnalo ricevuto, annullalo. `ask` non scrive
+   * niente — apre la domanda sull'importo, per i bandi che dichiarano una
+   * percentuale invece di una cifra.
+   */
+  | { kind: "refund"; action: "claim" | "ask" | "receive" | "undo"; itemId: number }
+  /** L'importo scritto in chat per un rimborso senza cifra fissa. */
+  | { kind: "refundAmount"; itemId: number; cents: number | null }
+  /**
+   * 🔕 Mai più questa marca (muted = true) o 🔔 torna a mostrarla. Porta l'id
+   * della marca, non quello dell'item: l'esclusione è per marca, e un concorso
+   * vecchio della stessa insegna deve sparire insieme a quello che stai
+   * guardando.
+   */
+  | { kind: "mutedBrand"; value: string; muted: boolean }
   | { kind: "config"; key: ConfigKey; value: string }
   | { kind: "none" };
 
@@ -117,11 +146,19 @@ export const SECTIONS = [
   "impostazioni",
   "filtri",
   "filtri-fonti",
+  "filtri-marche",
   "preferiti",
   "preferiti-lista",
   "coupon",
+  "numeri",
+  "coupon-oggi",
+  "coupon-settimana",
+  "coupon-scadenze",
+  "coupon-rimborsi",
   "gratis",
+  "spesa",
   "premi",
+  "rimborsi",
   "archivio",
   "diagnostica",
   "log",
@@ -175,11 +212,38 @@ export function parseCallback(data: string | undefined): Intent {
       return Number.isFinite(itemId) ? { kind: "open", itemId } : { kind: "none" };
     }
     case "save":
+    case "unsave":
     case "ign":
     case "won": {
       const itemId = Number.parseInt(first, 10);
       if (!Number.isFinite(itemId)) return { kind: "none" };
-      return { kind: "decision", action: head === "save" ? "save" : head === "ign" ? "ign" : "won", itemId };
+      // `unsave` è il ⭐ della scheda quando il concorso è già in watchlist: la
+      // stessa riga di bottoni deve poterlo rimettere fuori, altrimenti una
+      // decisione presa è per sempre.
+      const action = head === "save" ? "save" : head === "unsave" ? "unsave" : head === "ign" ? "ign" : "won";
+      return { kind: "decision", action, itemId };
+    }
+    case "rf": {
+      // `rf:claim:12`, `rf:recv:12`, `rf:undo:12`, `rf:ask:12`.
+      const action = first;
+      const itemId = Number.parseInt(rest[1] ?? "", 10);
+      if (!Number.isFinite(itemId)) return { kind: "none" };
+      if (action === "claim" || action === "ask" || action === "recv" || action === "undo") {
+        return {
+          kind: "refund",
+          action: action === "recv" ? "receive" : action === "ask" ? "ask" : action === "undo" ? "undo" : "claim",
+          itemId,
+        };
+      }
+      return { kind: "none" };
+    }
+    case "mb":
+    case "um": {
+      // `mb:<id>` = mai più questa marca, `um:<id>` = torna a mostrarla. L'id è
+      // quello del registro (src/config/brands.ts), non un testo libero: sta in
+      // un callback_data da 64 byte e non c'è niente da ripulire.
+      if (!first || first.length > 40) return { kind: "none" };
+      return { kind: "mutedBrand", value: first, muted: head === "mb" };
     }
     case "cfg": {
       const key = first as ConfigKey;
@@ -200,6 +264,7 @@ export function parseCallback(data: string | undefined): Intent {
  */
 const PARENT_SECTION: Record<string, string> = {
   "filtri-fonti": "filtri",
+  "filtri-marche": "filtri",
   preferiti: "filtri",
   "preferiti-lista": "preferiti",
   impostazioni: "menu",
@@ -208,6 +273,7 @@ const PARENT_SECTION: Record<string, string> = {
   vantaggio: "fonti",
   log: "fonti",
   storico: "menu",
+  numeri: "storico",
   vinti: "storico",
   scaduti: "storico",
   ignorati: "storico",
@@ -217,11 +283,21 @@ const PARENT_SECTION: Record<string, string> = {
   "archivio:news": "archivio",
   aiuto: "menu",
   cerca: "menu",
+  rimborsi: "coupon",
+  // Le viste dei coupon tornano alla sezione intera, non al menù: da ⏳ In
+  // scadenza "indietro" vuol dire "fammi vedere tutti i coupon".
+  "coupon-oggi": "coupon",
+  "coupon-settimana": "coupon",
+  "coupon-scadenze": "coupon",
+  "coupon-rimborsi": "coupon",
 };
 
 export function parentSection(section: string): string {
   if (section.startsWith("aiuto:")) return "aiuto";
   if (section.startsWith("cerca:")) return "cerca";
+  // La domanda sull'importo è una tappa del rimborso: indietro porta a 💰
+  // Rimborsi, non al menù, anche quando la storia non c'è più.
+  if (section.startsWith("importo:")) return "rimborsi";
   return PARENT_SECTION[section] ?? "menu";
 }
 
@@ -250,12 +326,12 @@ export function applyIntent(state: UiState, intent: Intent, now: Date): UiState 
     case "refresh":
       return state;
     case "section": {
-      // `aiuto:<id>` è una sezione sola con la pagina dentro: la sezione resta
-      // "aiuto" (una schermata, una tastiera) e il numero di pagina è l'indice
-      // della voce della wiki, così le frecce continuano a funzionare.
+      // `aiuto` senza suffisso è l'INDICE degli argomenti (`page: -1`), mentre
+      // `aiuto:<id>` è una pagina sola: la sezione resta "aiuto" (una schermata,
+      // una tastiera) e il numero di pagina è l'indice della voce della wiki.
       const destinazione = intent.section.startsWith("aiuto:")
-        ? { section: "aiuto", page: helpIndexFor(intent.section.slice("aiuto:".length)) ?? 0 }
-        : { section: intent.section, page: 0 };
+        ? { section: "aiuto", page: helpIndexFor(intent.section.slice("aiuto:".length)) ?? -1 }
+        : { section: intent.section, page: intent.section === "aiuto" ? -1 : 0 };
       return {
         ...state,
         ...destinazione,
@@ -291,6 +367,33 @@ export function applyIntent(state: UiState, intent: Intent, now: Date): UiState 
     }
     case "decision":
       return { ...state, openItemId: intent.itemId };
+    case "refund":
+      return intent.action === "ask"
+        ? {
+            ...state,
+            section: `importo:${intent.itemId}`,
+            page: 0,
+            openItemId: null,
+            history: pushHistory(state.history, { section: state.section, page: state.page }),
+          }
+        : state;
+    case "refundAmount":
+      // Senza una cifra letta bene si resta sulla domanda: registrare zero o
+      // l'ultimo numero visto sarebbe peggio che richiedere di riscriverla.
+      return intent.cents === null
+        ? state
+        : {
+            ...state,
+            section: "rimborsi",
+            page: 0,
+            openItemId: null,
+            history: pushHistory(state.history, { section: state.section, page: state.page }),
+          };
+    case "mutedBrand":
+      // 🔕 toglie di mezzo il concorso che stai guardando (e tutta la sua
+      // insegna): si torna all'elenco, che ora non lo contiene più. 🔔 invece
+      // non deve muovere niente — sei in 🎛 Cosa vedi per riaccendere.
+      return intent.muted && state.openItemId !== null ? { ...state, openItemId: null } : state;
     default:
       return state;
   }
@@ -306,6 +409,12 @@ export interface ScreenCounts {
   news: number;
   /** Coupon e rimborsi in archivio, con i filtri di questa chat. */
   coupon: number;
+  /** Rimborsi richiesti e non ancora ricevuti: il numero sul bottone 💰. */
+  rimborsi: number;
+  /** Denaro ancora in attesa, in centesimi (l'etichetta del bottone lo mostra). */
+  rimborsiCents: number;
+  /** true se fra le attese c'è un tetto: il totale è un massimo, non la cifra. */
+  rimborsiCap: boolean;
   /** Coupon e rimborsi in archivio, senza filtri: serve a dire "vedi X di Y". */
   couponTotal: number;
   /** Concorsi in archivio, di qualunque stato: la metà "buona" dell'archivio. */
@@ -320,15 +429,11 @@ export interface ScreenCounts {
    */
   concorsiMarche: number;
   /**
-   * Concorsi senza obbligo di acquisto (🆓 Gratis), con i filtri della chat.
-   * Nasce dalla stessa query della sezione, quindi il numero sul bottone e
-   * l'elenco non possono raccontare due cose diverse.
-   */
-  gratis: number;
-  /**
    * Quanti concorsi aprirebbe ciascuna porta di 🎁 Tipi di premio, per sezione
-   * ("premi:giftcard", "gratis"…). Si contano solo aprendo quella schermata:
-   * cinque query per un menù che non li mostra sarebbero lavoro per niente.
+   * ("premi:giftcard", "gratis", "spesa"…). Si contano solo aprendo quella
+   * schermata: sei query per un menù che non li mostra sarebbero lavoro per
+   * niente. Anche le due metà dell'archivio stanno qui, perché è lì che si
+   * leggono.
    */
   premi: Record<string, number>;
   /** Storico: contati solo quando si apre 🗂 Storico, per non pesare sul menù. */
@@ -356,6 +461,12 @@ export interface ScreenData {
   decision: string | null;
   /** Link al regolamento trovato nel testo dell'item, se c'è. */
   regolamentoUrl: string | null;
+  /** La richiesta di rimborso di questa chat per l'item aperto (solo coupon). */
+  refund: RefundRow | null;
+  /** La pagina di 💰 Rimborsi, già ritagliata. */
+  refunds: RefundRow[];
+  /** I totali dei rimborsi: in attesa e recuperati, cifre e conteggi. */
+  refundTotals: RefundTotals;
   sources: SourceRow[];
   runs: RunRow[];
   /**
@@ -399,20 +510,24 @@ export interface ScreenData {
   shareBase: string;
 }
 
+/**
+ * La data di un istante (ISO 8601) come si legge in Italia: un rimborso chiesto
+ * alle 23:30 UTC è già del giorno dopo a Roma, e `formatDate` leggerebbe la
+ * data UTC. Le scadenze sono date senza ora e restano su `formatDate`.
+ */
+function giornoItaliano(iso: string | null): string {
+  if (!iso) return "—";
+  const at = new Date(iso);
+  if (!Number.isFinite(at.getTime())) return "—";
+  const [anno, mese, giorno] = localDateString(at).split("-");
+  return `${giorno}/${mese}/${anno}`;
+}
+
 function oreMinuti(iso: string | null): string {
   if (!iso) return "mai";
   const at = new Date(iso);
   if (!Number.isFinite(at.getTime())) return "mai";
-  const parts = new Intl.DateTimeFormat("it-IT", {
-    timeZone: "Europe/Rome",
-    day: "2-digit",
-    month: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  }).formatToParts(at);
-  const get = (type: string): string => parts.find((part) => part.type === type)?.value ?? "";
-  return `${get("day")}/${get("month")} ${get("hour")}:${get("minute")}`;
+  return localDayMonthTime(at);
 }
 
 function headerLines(state: UiState, data: ScreenData, now: Date): string[] {
@@ -451,7 +566,17 @@ function listScreen(state: UiState, data: ScreenData, now: Date): Screen {
   // per il nome delle voci e per i messaggi da elenco vuoto contano come una
   // sezione sola.
   const sezioneArchivio = state.section === "archivio" || state.section.startsWith("archivio:");
-  const chiave = sezioneArchivio ? "archivio" : state.section;
+  // 💶 Coupon: le sue viste (`coupon-oggi`, `coupon-scadenze`…) per il sostantivo
+  // contano come la sezione intera — "12 coupon", non "12 concorsi" — mentre i
+  // messaggi da elenco vuoto hanno una frase per vista (sotto).
+  const sezioneCoupon = state.section === "coupon" || state.section.startsWith("coupon-");
+  const chiave = sezioneArchivio ? "archivio" : sezioneCoupon ? "coupon" : state.section;
+  // Le righe in più sotto l'elenco: le viste dei coupon e il bottone d'aiuto
+  // della sezione. L'aiuto sta in fondo perché si cerca, non si usa ogni volta.
+  const righeExtra = [
+    ...(sezioneCoupon ? couponViewsRows(state.section) : []),
+    ...helpRow(helpPageForSection(state.section)),
+  ];
   const pagine = Math.max(1, Math.ceil(data.total / PAGE_SIZE));
   // Un `page` fuori intervallo (messaggio vecchio, o lista che si è accorciata)
   // non deve mostrare una pagina vuota: si riporta dentro e si ri-renderizza.
@@ -487,8 +612,20 @@ function listScreen(state: UiState, data: ScreenData, now: Date): Screen {
         "Oggi non è ancora arrivato niente: questa sezione conta il giorno di calendario e riparte da zero a mezzanotte. I concorsi di ieri sono in 📅 7 giorni, quelli chiusi in 📚 Archivio.",
       coupon:
         "Nessun coupon valido adesso: qui restano solo quelli ancora spendibili — i buoni scaduti sono in 📚 Archivio — e i nuovi arrivano appena le fonti li trovano.",
+      // Un elenco vuoto in una vista dice cose diverse da un elenco vuoto in
+      // tutte: "oggi non ne sono arrivati" non è "non ce ne sono".
+      "coupon-oggi":
+        "Oggi non è ancora arrivato nessun coupon: questa vista conta il giorno di calendario e riparte da zero a mezzanotte. Gli ultimi 7 giorni sono in 📅 7 giorni.",
+      "coupon-settimana":
+        "Nessun coupon negli ultimi 7 giorni: qui conta quando è ARRIVATO, non quando scade — per la validità c'è ⏳ In scadenza.",
+      "coupon-scadenze":
+        "Nessun coupon in scadenza nei prossimi 7 giorni: i buoni senza una data dichiarata non entrano qui (non sappiamo quando scadono) e restano in 🗂 Tutti.",
+      "coupon-rimborsi":
+        "Nessun rimborso o cashback adesso: questa fetta tiene le offerte in cui si compra e tornano soldi (spendi e riprendi, cashback, rimborsi). I buoni sconto sono in 🗂 Tutti.",
       gratis:
-        "Nessun concorso senza acquisto qui: per ora tutti quelli in archivio chiedono uno scontrino, un codice o una spesa minima.",
+        "Nessun concorso senza acquisto qui: per ora tutti quelli in archivio chiedono uno scontrino, un codice o una spesa minima. La metà opposta è in 💸 Con acquisto.",
+      spesa:
+        "Nessun concorso con acquisto qui: per ora in archivio ci sono solo iniziative senza spesa. La metà opposta è in 🆓 Gratis.",
       archivio:
         "L'archivio è vuoto: qui finisce tutto quello che il bot ha visto e vedrà, quindi si riempie alla prima raccolta.",
       ...Object.fromEntries(
@@ -497,6 +634,12 @@ function listScreen(state: UiState, data: ScreenData, now: Date): Screen {
           `Nessun concorso con ${voce.label.toLowerCase()} in palio adesso: il tipo lo decide quello che la pagina dichiara, e in questo momento nessun concorso dell'archivio lo dichiara.`,
         ]),
       ),
+      // Le due classi nuove hanno una frase loro: quella generica direbbe "un
+      // omaggio con acquisto in palio", che è il contrario di quello che sono.
+      "premi:premio_certo":
+        "Nessun premio certo adesso: sono i concorsi in cui il premio è garantito a chi partecipa, non un'estrazione. Ne arrivano quasi tutti da Scontrino Felice · premio certo, e la porta si riempie al prossimo giro di quella fonte.",
+      "premi:omaggio_con_acquisto":
+        "Nessun omaggio con acquisto adesso: qui stanno i regali che si ricevono comprando (richiedi il set, ritiri il gadget), non le estrazioni. Il tipo lo decide quello che la pagina dichiara.",
     };
     // Nell'archivio i filtri non contano (si vede tutto per definizione):
     // attribuire a loro un elenco vuoto sarebbe la spiegazione sbagliata.
@@ -504,7 +647,7 @@ function listScreen(state: UiState, data: ScreenData, now: Date): Screen {
     const righeVuote = [
       `📭 <b>${escapeHtml(title)}</b>`,
       "",
-      vuoti[chiave] ?? "Nessun concorso qui. Tocca 🔄 Aggiorna più tardi.",
+      vuoti[state.section] ?? vuoti[chiave] ?? "Nessun concorso qui. Tocca 🔄 Aggiorna più tardi.",
     ];
     // Un elenco vuoto può voler dire due cose opposte: non c'è niente, oppure i
     // filtri hanno lasciato fuori tutto. Dirlo è la differenza fra "aspetto" e
@@ -514,7 +657,7 @@ function listScreen(state: UiState, data: ScreenData, now: Date): Screen {
     }
     return {
       text: righeVuote.join("\n"),
-      keyboard: emptyKeyboard(filtrata, state.section === "preferiti-lista"),
+      keyboard: emptyKeyboard(filtrata, state.section === "preferiti-lista", righeExtra),
     };
   }
 
@@ -528,8 +671,22 @@ function listScreen(state: UiState, data: ScreenData, now: Date): Screen {
       ? "Sono articoli, non concorsi: il link porta al pezzo."
       : state.section === "coupon"
         ? "Buoni sconto e rimborsi: si spende meno, non si vince."
+      : state.section === "coupon-oggi"
+        ? "I coupon arrivati da mezzanotte: qui conta la novità, non la scadenza."
+      : state.section === "coupon-settimana"
+        ? "I coupon arrivati negli ultimi 7 giorni, dal più recente."
+      : state.section === "coupon-scadenze"
+        ? "I coupon con una validità che finisce entro 7 giorni: chi chiude prima sta in cima."
+      : state.section === "coupon-rimborsi"
+        ? "Spendi e riprendi, cashback e rimborsi: qui si compra e tornano soldi, non si ritaglia un buono."
         : state.section === "gratis"
         ? "Solo concorsi senza acquisto: niente scontrino, niente codice, niente spesa minima."
+        : state.section === "spesa"
+        ? "Solo concorsi con acquisto: serve uno scontrino, un codice o una spesa minima. L'altra metà è in 🆓 Gratis."
+        : state.section === "premi:premio_certo"
+        ? "Solo concorsi con un premio garantito: non è un'estrazione. È una porta, non un filtro: i tuoi filtri restano come sono."
+        : state.section === "premi:omaggio_con_acquisto"
+        ? "Solo regali che si ricevono comprando: il premio è tuo, non si vince. È una porta, non un filtro."
         : state.section.startsWith("premi:")
         ? "Solo concorsi con questo premio. È una porta, non un filtro: i tuoi filtri restano come sono."
         : state.section === "salvati"
@@ -550,7 +707,7 @@ function listScreen(state: UiState, data: ScreenData, now: Date): Screen {
           coupon: data.counts.couponTotal,
           articoli: data.counts.newsTotal,
         })
-      : listKeyboard(data.items, now, { index: page, total: pagine }, stellePer(data, state.section)),
+      : listKeyboard(data.items, now, { index: page, total: pagine }, stellePer(data, state.section), righeExtra),
   };
 }
 
@@ -561,7 +718,7 @@ function listScreen(state: UiState, data: ScreenData, now: Date): Screen {
  * solo un tasto che non serve.
  */
 const SEZIONI_STELLE = new Set([
-  "nuovi", "oggi", "settimana", "scadenze", "scaduti", "preferiti-lista", "gratis",
+  "nuovi", "oggi", "settimana", "scadenze", "scaduti", "preferiti-lista", "gratis", "spesa",
 ]);
 
 function stellePer(data: ScreenData, section: string): number | null {
@@ -679,9 +836,22 @@ function cardScreen(state: UiState, data: ScreenData, now: Date): Screen {
           : data.decision === "sent"
             ? "📨 <b>Già inviato a te</b>"
             : null;
+  // Il denaro è la ragione per cui un coupon si salva: lo stato del rimborso va
+  // in testa alla scheda, con la data, perché "in attesa" senza "da quando" non
+  // dice se è un ritardo o una richiesta di stamattina.
+  const rimborso =
+    data.refund === null
+      ? null
+      : data.refund.receivedAt === null
+        ? `💰 <b>Rimborso richiesto</b> · ${refundAmountLabel(data.refund)} in attesa dal ${giornoItaliano(data.refund.claimedAt)}`
+        : `✅ <b>Rimborso ricevuto</b> · ${refundAmountLabel(data.refund)} il ${giornoItaliano(data.refund.receivedAt)}`;
 
   const righe: string[] = [];
-  if (stato) righe.push(stato, "");
+  // Decisione e rimborso sono lo stesso blocco: due paragrafi separati, ognuno
+  // col suo spazio, facevano sembrare la scheda cominciata due volte. Prima il
+  // denaro, perché è la cosa che si sta aspettando.
+  const statoRighe = [rimborso, stato].filter((linea): linea is string => linea !== null);
+  if (statoRighe.length > 0) righe.push(statoRighe.join("\n"), "");
   righe.push(formatItemCard(item, now));
   // Le voci del punteggio: solo per i concorsi. Un coupon non si giudica con
   // "quanto vale la pena guardare questo concorso" (lì il numero non c'è
@@ -694,10 +864,12 @@ function cardScreen(state: UiState, data: ScreenData, now: Date): Screen {
       formatScoreBreakdown(spiegazione, { soglia: data.prefs.filters.minScore, salvato: item.score }),
     );
   }
-  // Il vantaggio misurato su QUESTO concorso: è la riga che rende il numero del
-  // comando /vantaggio verificabile caso per caso.
+  // Il piede: il vantaggio misurato su QUESTO concorso (la riga che rende il
+  // numero di /vantaggio verificabile caso per caso) e l'id. La fonte non si
+  // ripete: è già la riga che chiude la scheda, due centimetri sopra.
+  const fondo: string[] = [];
   if (data.leadDelConcorso !== null) {
-    righe.push(
+    fondo.push(
       data.leadDelConcorso > 0.5
         ? `🏁 Visto <b>${durata(data.leadDelConcorso)}</b> prima degli aggregatori`
         : data.leadDelConcorso < -0.5
@@ -705,10 +877,19 @@ function cardScreen(state: UiState, data: ScreenData, now: Date): Screen {
           : "🏁 Visto dagli aggregatori nello stesso giro",
     );
   }
-  righe.push(`🆔 <code>${item.id}</code> · 📥 fonte: ${escapeHtml(sourceLabel(item.sourceId))}`);
+  fondo.push(`🆔 <code>${item.id}</code>`);
+  righe.push("", fondo.join("\n"));
   return {
     text: righe.join("\n"),
-    keyboard: cardKeyboard(item, data.decision, data.regolamentoUrl, data.shareBase),
+    keyboard: cardKeyboard(
+      item,
+      data.decision,
+      data.regolamentoUrl,
+      data.shareBase,
+      data.refund,
+      now,
+      typeof item.brand === "string" && data.prefs.filters.mutedBrands.includes(item.brand),
+    ),
   };
 }
 
@@ -897,6 +1078,11 @@ function filtriScreen(data: ScreenData): Screen {
     `🏷 Marche seguite: <b>${
       filtro.favoriteBrands.length === 0 ? "nessuna" : escapeHtml(filtro.favoriteBrands.map((id) => brandLabel(id)).join(", "))
     }</b>${onlyFavoriteBrands(filtro) ? " — e vedi solo queste" : ""}`,
+    filtro.mutedBrands.length === 0
+      ? "🔕 Marche spente: <b>nessuna</b> — si spengono dalla scheda di un concorso, con 🔕 Mai più."
+      : `🔕 Marche spente: <b>${filtro.mutedBrands.length}</b> — ${escapeHtml(
+          filtro.mutedBrands.map((id) => brandLabel(id)).join(", "),
+        )}`,
     "",
   ];
   if (isSeeingAll(filtro)) {
@@ -908,6 +1094,7 @@ function filtriScreen(data: ScreenData): Screen {
     }
     if (filtro.mutedSources.length > 0) pezzi.push(`${filtro.mutedSources.length} fonti spente`);
     if (filtro.mutedTags.length > 0) pezzi.push(`${filtro.mutedTags.length} tipi spenti`);
+    if (filtro.mutedBrands.length > 0) pezzi.push(`${filtro.mutedBrands.length} marche spente`);
     if (filtro.freeOnly) pezzi.push("solo senza acquisto");
     if (onlyFavoriteBrands(filtro)) pezzi.push("solo le marche seguite");
     righe.push(`👁 <b>${data.counts.contest}</b> di <b>${data.counts.contestTotal}</b> concorsi visibili.`);
@@ -921,6 +1108,26 @@ function filtriScreen(data: ScreenData): Screen {
       spenti: mutedSourceIds(filtro).length,
     }),
   };
+}
+
+/**
+ * 🔕 Marche spente: le insegne che questa chat non vuole più vedere. Una riga
+ * per marca, e toccandola si riaccende. È una schermata necessaria, non un
+ * doppione di 🎛 Cosa vedi: una marca spenta non compare in nessun elenco,
+ * quindi senza questa porta resterebbe spenta per sempre.
+ */
+function filtriMarcheScreen(data: ScreenData): Screen {
+  const spente = data.prefs.filters.mutedBrands;
+  const righe = [
+    "🔕 <b>Marche spente</b>",
+    "",
+    "I concorsi di queste insegne non compaiono negli elenchi né negli avvisi. Tocca una marca per riaccenderla.",
+    "",
+    spente.length === 0
+      ? "Non hai spento nessuna marca. Si spegne dalla scheda di un concorso, con 🔕 Mai più."
+      : `Spente: <b>${spente.length}</b> — ${escapeHtml(spente.map((id) => brandLabel(id)).join(", "))}.`,
+  ];
+  return { text: righe.join("\n"), keyboard: filtriMarcheKeyboard(spente) };
 }
 
 /**
@@ -979,7 +1186,10 @@ function filtriFontiScreen(data: ScreenData): Screen {
 }
 
 /**
- * 🎁 Tipi di premio: cinque porte, una per tipo di premio.
+ * 🎁 Tipi di premio: otto porte — sei per tipo di premio (compresi 🎁 Premio
+ * certo e 🛍️ Omaggi con acquisto), più 💸 Con acquisto, che con 🆓 Gratis divide
+ * l'archivio in due metà. Le due metà stanno una accanto all'altra, perché la
+ * domanda opposta nasce guardando la prima.
  *
  * Perché è una schermata e non filtri in 🎛 Cosa vedi: i filtri sono esclusioni
  * che RESTANO accese e cambiano tutte le sezioni — chi vuole solo dare
@@ -992,6 +1202,10 @@ function premiScreen(data: ScreenData): Screen {
     "🎁 <b>Tipi di premio</b>",
     "",
     "Non sono filtri: non cambiano niente per le altre sezioni e non restano accesi. Toccane una e vedi solo i concorsi con quel premio, con i filtri che hai già.",
+    "",
+    "🎁 Premio certo sono i concorsi in cui il premio è garantito (non un'estrazione); 🛍️ Omaggi con acquisto sono i regali che si ricevono comprando.",
+    "",
+    "Le ultime due dividono l'archivio per quello che costa partecipare: 🆓 Gratis quelli dove non si compra niente, 💸 Con acquisto quelli dove serve una spesa.",
     "",
     "Il numero è quanti concorsi aprirebbe adesso — se è <b>0</b>, quel tipo non c'è in archivio in questo momento.",
   ];
@@ -1018,23 +1232,174 @@ function searchPromptScreen(): Screen {
  * leggere il codice per farlo.
  */
 function helpScreen(data: ScreenData): Screen {
-  const indice = Math.min(Math.max(data.page, 0), HELP_PAGES.length - 1);
-  const pagina = HELP_PAGES[indice];
+  const indice = data.page;
+  const pagina = indice >= 0 && indice < HELP_PAGES.length ? HELP_PAGES[indice] : null;
+  // L'indice: un bottone per argomento, nessuna freccia. `page: -1` è il segno
+  // "indice" (vedi applyIntent), quindi qui non si clampa a zero: clampare
+  // riporterebbe alla prima pagina e l'indice non esisterebbe più.
+  if (pagina === null) {
+    return {
+      text: [
+        "❓ <b>Aiuto</b>",
+        "",
+        "Scegli un argomento: ogni bottone apre una pagina breve, tre o quattro righe, su una parte della chat.",
+        "",
+        `<i>${HELP_PAGES.length} argomenti · ogni pagina ha il bottone per andare alla sezione che spiega.</i>`,
+      ].join("\n"),
+      keyboard: helpKeyboard(HELP_PAGES, null),
+    };
+  }
+  return {
+    text: [
+      `❓ <b>Aiuto · ${escapeHtml(pagina.title)}</b>`,
+      "",
+      ...pagina.lines.map((riga) => escapeHtml(riga)),
+      "",
+      `<i>Argomento ${indice + 1} di ${HELP_PAGES.length}</i>`,
+    ].join("\n"),
+    keyboard: helpKeyboard(HELP_PAGES, indice),
+  };
+}
+
+/**
+ * 📊 I tuoi numeri: il riepilogo della chat in una schermata.
+ *
+ * Non è una classifica e non c'è un obiettivo: sono i numeri che si finisce per
+ * cercare a mano ("quanto ho recuperato? quante scadenze ho addosso?") messi in
+ * un posto solo. Le cifre dei rimborsi restano separate come in 💰 Rimborsi:
+ * "recuperati" è denaro tornato, "in attesa" è una promessa.
+ */
+function numeriScreen(data: ScreenData): Screen {
+  const totali = data.refundTotals;
   const righe = [
-    `❓ <b>Aiuto · ${escapeHtml(pagina.title)}</b>`,
+    "📊 <b>I tuoi numeri</b>",
     "",
-    ...pagina.lines.map((riga) => escapeHtml(riga)),
+    `🗂 In archivio: <b>${data.counts.contestTotal}</b> concorsi · <b>${data.counts.couponTotal}</b> coupon · <b>${data.counts.newsTotal}</b> news`,
+    `⭐ Watchlist: <b>${data.counts.salvati}</b> · 🏆 Vinti: <b>${data.counts.vinti}</b> · 🚫 Scartati: <b>${data.counts.ignorati}</b>`,
+    `⏳ In scadenza nei prossimi 7 giorni: <b>${data.counts.scadenze}</b>`,
     "",
-    `<i>Pagina ${indice + 1} di ${HELP_PAGES.length} · ⬅️ ➡️ per le altre</i>`,
   ];
+  if (totali.received === 0 && totali.pending === 0) {
+    righe.push("💰 Rimborsi: nessuna richiesta registrata. Si registra dalla scheda di un coupon.");
+  } else {
+    righe.push(
+      `💰 Rimborsi recuperati: <b>${formatEuro(totali.receivedCents)}</b> in ${quantiRimborsi(totali.received)}`,
+      `⏳ In attesa: <b>${formatEuro(totali.pendingCents)}</b> in ${quantiRimborsi(totali.pending)}`,
+    );
+  }
+  righe.push("", "<i>Le decisioni sono di questa chat; l'archivio è condiviso con l'altra persona.</i>");
+  return { text: righe.join("\n"), keyboard: numeriKeyboard() };
+}
+
+/** "1 rimborso" / "3 rimborsi": il conteggio si legge, non si decifra. */
+function quantiRimborsi(n: number): string {
+  return n === 1 ? "1 rimborso" : `${n} rimborsi`;
+}
+
+/**
+ * 💰 I miei rimborsi: quanto denaro è tornato, quanto deve ancora tornare.
+ *
+ * Le due cifre sono separate di proposito. "Recuperati" sono i soldi che ci sono
+ * davvero; "in attesa" è una promessa, e finché non arriva non è un guadagno.
+ * I rimborsi senza cifra fissa (una percentuale, un 1+1) non entrano in nessuna
+ * delle due somme: il bando non dice quanto, e sommarli a zero li farebbe
+ * sembrare recuperati per niente.
+ */
+function rimborsiScreen(state: UiState, data: ScreenData): Screen {
+  const totali = data.refundTotals;
+  const pagine = Math.max(1, Math.ceil(data.total / PAGE_SIZE));
+  const page = Math.min(Math.max(data.page, 0), pagine - 1);
+  const righe = [
+    `💰 <b>I miei rimborsi</b>${data.total > 0 ? ` · ${data.total}` : ""}`,
+    "",
+  ];
+
+  if (data.total === 0) {
+    righe.push(
+      "Nessun rimborso registrato.",
+      "",
+      "Si registra dalla scheda di un coupon: tocca <b>💰 Ho richiesto</b>. Da lì puoi dire quando il denaro è tornato, e qui vedi quanto manca.",
+    );
+    return { text: righe.join("\n"), keyboard: rimborsiKeyboard([], { index: 0, total: 1 }) };
+  }
+
+  // "fino a" sul totale quando qualche importo è un tetto: sommare un massimo
+  // come se fosse la cifra esatta è il modo più facile di mentire sui soldi.
+  righe.push(
+    `✅ ${totali.capReceived > 0 ? "Recuperati fino a" : "Recuperati"}: <b>${formatEuro(totali.receivedCents)}</b> in ${quantiRimborsi(totali.received)}`,
+    totali.pending === 0
+      ? "⏳ Niente in attesa: hai segnato tutto come ricevuto."
+      : `⏳ ${totali.capPending > 0 ? "In attesa fino a" : "In attesa"}: <b>${formatEuro(totali.pendingCents)}</b> in ${quantiRimborsi(totali.pending)}`,
+  );
+  const senzaCifra = totali.unknownPending + totali.unknownReceived;
+  if (senzaCifra > 0) {
+    righe.push(
+      `ℹ️ ${quantiRimborsi(senzaCifra)} senza cifra fissa (una percentuale o un regalo): il bando non dice quanto, quindi restano fuori dai totali.`,
+    );
+  }
+  if (totali.capPending + totali.capReceived > 0) {
+    righe.push(
+      `ℹ️ ${quantiRimborsi(totali.capPending + totali.capReceived)} con un tetto ("fino a"): la cifra è il massimo che può tornare, quindi il totale è una stima per eccesso.`,
+    );
+  }
+  righe.push("", "In cima quello che deve ancora tornare. Tocca una riga per segnarlo ricevuto o annullarlo.");
+  if (pagine > 1) righe.push(`<i>Pagina ${page + 1}/${pagine}</i>`);
+
   return {
     text: righe.join("\n"),
-    keyboard: helpKeyboard({ index: indice, total: HELP_PAGES.length }),
+    keyboard: rimborsiKeyboard(data.refunds, { index: page, total: pagine }),
+  };
+}
+
+/**
+ * La domanda sull'importo: i bandi che dicono "rimborso del 50%" o "1+1" non
+ * dichiarano una cifra, e solo chi ha comprato sa quanto è tornato indietro.
+ * Si scrive una volta, in euro, e la richiesta entra nel conteggio.
+ */
+function importoPromptScreen(data: ScreenData): Screen {
+  const item = data.openItem;
+  return {
+    text: [
+      "💰 <b>Quanto ti torna indietro?</b>",
+      "",
+      item ? `<b>${escapeHtml(truncate(item.title, 90))}</b>` : "",
+      "",
+      "Il bando non dichiara una cifra fissa: è una percentuale, un 1+1 o un regalo. Scrivi l'importo che ti aspetti di ricevere, per esempio <code>7,50</code>.",
+      "Il messaggio con l'importo viene cancellato, come la ricerca.",
+    ].join("\n"),
+    keyboard: backKeyboard(),
   };
 }
 
 /** Compone la schermata corrispondente allo stato della chat. */
 export function renderScreen(state: UiState, data: ScreenData, now: Date): Screen {
+  const schermata = renderBaseScreen(state, data, now);
+  // Ogni sezione che ha una pagina di wiki porta il bottone per aprirla. Prima
+  // c'era solo negli elenchi: da ⚙️ Impostazioni o da 🎛 Cosa vedi bisognava
+  // tornare al menù e cercare l'argomento, che è esattamente il giro che il
+  // bottone doveva risparmiare.
+  const pagina = helpPageForSection(state.section);
+  if (pagina === null) return schermata;
+  const righe = schermata.keyboard.inline_keyboard;
+  // Un elenco ce l'ha già (helpRow nel corpo della lista): non si duplica.
+  if (righe.some((riga) => riga.some((bottone) => bottone.callback_data === `s:aiuto:${pagina.id}`))) {
+    return schermata;
+  }
+  // Prima dell'ultima riga, che è sempre la coda di navigazione: indietro,
+  // aggiorna e menù restano in fondo, dove il pollice li cerca.
+  const taglio = Math.max(0, righe.length - 1);
+  return {
+    ...schermata,
+    keyboard: {
+      inline_keyboard: [...righe.slice(0, taglio), ...helpRow(pagina), ...righe.slice(taglio)],
+    },
+  };
+}
+
+function renderBaseScreen(state: UiState, data: ScreenData, now: Date): Screen {
+  // La domanda sull'importo viene PRIMA della scheda: la sezione è
+  // `importo:<id>` e l'offerta è caricata per il titolo, non per essere aperta.
+  if (state.section.startsWith("importo:")) return importoPromptScreen(data);
   if (state.openItemId !== null) return cardScreen(state, data, now);
 
   switch (state.section) {
@@ -1069,14 +1434,20 @@ export function renderScreen(state: UiState, data: ScreenData, now: Date): Scree
       return filtriScreen(data);
     case "filtri-fonti":
       return filtriFontiScreen(data);
+    case "filtri-marche":
+      return filtriMarcheScreen(data);
     case "premi":
       return premiScreen(data);
+    case "rimborsi":
+      return rimborsiScreen(state, data);
     case "preferiti":
       return marcheScreen(data);
     case "diagnostica":
       return diagnosticaScreen(data);
     case "aiuto":
       return helpScreen(data);
+    case "numeri":
+      return numeriScreen(data);
     case "log":
       return logScreen(data);
     case "cerca":

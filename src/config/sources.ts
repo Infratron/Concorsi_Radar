@@ -16,6 +16,13 @@ function googleNews(query: string): string {
 
 export const SOURCES: SourceConfig[] = [
   // ---------- aggregatori editoriali con feed RSS (tutti VERIFICATI) ----------
+  // Premi e Concorsi è SPENTO dal 17/10/2026, non perché il sito sia morto: dal
+  // PC risponde 200 con la nostra User-Agent, mentre dal runner GitHub (dove gira
+  // la raccolta, vedi .github/workflows/ingest.yml) risponde 403 sia al feed sia
+  // alla sitemap. Sembra la protezione bot del sito che tratta gli IP da
+  // datacenter come traffico automatizzato; il risultato pratico è una fonte che
+  // in produzione non porta un item da un giorno. Al suo posto c'è scontOmaggio ·
+  // concorsi con acquisto, stesso tipo di fonte (blog che annuncia i concorsi).
   {
     id: "premieconcorsi",
     name: "Premi e Concorsi",
@@ -24,7 +31,7 @@ export const SOURCES: SourceConfig[] = [
     category: "online",
     tags: ["aggregatore"],
     cadenceMin: 30,
-    enabled: true,
+    enabled: false,
     maxItems: 15,
   },
   // Scontrino Felice: il sito divide i concorsi in sezioni, e ogni sezione ha
@@ -93,6 +100,11 @@ export const SOURCES: SourceConfig[] = [
     enabled: true,
     maxItems: 15,
   },
+  // Soldissimi è SPENTO dal 17/10/2026: otto giri consecutivi di HTTP 403 dal
+  // runner GitHub, ultimo OK il 16/10 alle 20:09 — mentre la stessa URL dal PC
+  // risponde 200. Come per Premi e Concorsi è il sito a rifiutare gli IP da
+  // datacenter, non il nostro parser: tenere accesa la fonte significava solo un
+  // fallimento per giro nei log. I suoi 9 concorsi restano in archivio.
   {
     id: "soldissimi",
     name: "Soldissimi · concorsi a premio",
@@ -101,7 +113,7 @@ export const SOURCES: SourceConfig[] = [
     category: "giftcard",
     tags: ["giftcard", "buoni_spesa"],
     cadenceMin: 45,
-    enabled: true,
+    enabled: false,
     maxItems: 15,
   },
   {
@@ -114,6 +126,58 @@ export const SOURCES: SourceConfig[] = [
     cadenceMin: 45,
     enabled: true,
     maxItems: 15,
+  },
+  // Le tre fonti qui sotto sostituiscono Soldissimi, Premi e Concorsi e la
+  // query raccolta punti, tutte spente il 17/10/2026. Provate con i parser veri
+  // (`runIngest` completo, non solo un curl): 10 concorsi nuovi a testa in un
+  // giro, tutti con marca e premio nel titolo.
+  // SPENTA lo stesso giorno, dopo la prova in produzione: dal PC il feed dà 10
+  // concorsi, dal runner GitHub risponde **202 con 0 item** — è la pagina di
+  // verifica del sito, non il feed. Il 202 passa il controllo HTTP (non è un
+  // errore) e la fonte resta verde nei log mentre non porta niente: il caso
+  // peggiore, e per questo la spegniamo invece di lasciarla "verde".
+  {
+    id: "omaggiomania",
+    name: "OmaggioMania · concorsi a premi",
+    kind: "rss",
+    url: "https://www.omaggiomania.com/concorsi-a-premi/feed/",
+    category: "online",
+    tags: ["aggregatore"],
+    cadenceMin: 45,
+    enabled: false,
+    maxItems: 20,
+  },
+  {
+    id: "your-contest",
+    name: "Your Contest · concorsi a premi",
+    kind: "rss",
+    url: "https://www.your-contest.com/feed/",
+    category: "online",
+    tags: ["aggregatore"],
+    // Feed meno frequente degli altri: un giro ogni due ore basta e avanza.
+    cadenceMin: 120,
+    enabled: true,
+    maxItems: 20,
+  },
+  // La sezione "concorsi con acquisto" di scontOmaggio: è la stessa testata di
+  // cui già leggiamo i feed coupon, ma qui pubblica i concorsi delle marche di
+  // supermercato — Kinder, Mulino Bianco, Rio Mare, Haribo — cioè la fascia che
+  // conta per lo scontrino. Risponde 200 con la nostra User-Agent (verificato il
+  // 17/10/2026 dal PC; la conferma dal runner arriva col primo giro).
+  // SPENTA dopo la prova in produzione, come OmaggioMania: 202 con 0 item dal
+  // runner GitHub (verifica del sito), 10 concorsi dal PC. Lo stesso 202 colpisce
+  // anche i feed coupon della testata (vedi scontomaggio-coupon): è il dominio,
+  // non il percorso.
+  {
+    id: "scontomaggio-concorsi",
+    name: "scontOmaggio · concorsi con acquisto",
+    kind: "rss",
+    url: "https://www.scontomaggio.com/concorsi-con-acquisto/feed/",
+    category: "scontrino",
+    tags: ["acquisto", "punto_vendita"],
+    cadenceMin: 45,
+    enabled: false,
+    maxItems: 20,
   },
 
   // ---------- freschezza: news ----------
@@ -150,11 +214,18 @@ export const SOURCES: SourceConfig[] = [
     enabled: true,
     maxItems: 25,
   },
+  // La vecchia query (`"raccolta punti" vincita`) non ha mai prodotto un item:
+  // Google News non trova "vincita" accanto a "raccolta punti" nei titoli
+  // italiani. Dal 17/10/2026 la query cerca le tre parole con cui le insegne
+  // annunciano davvero una raccolta (bollini, collezione punti) accanto a
+  // "concorso": 3 item in un giro, tutti del Gioco de L'Eco — pochi ma veri,
+  // contro zero di prima. Il trasporto (news.google.com) è uno dei pochi che
+  // risponde sempre anche dal runner GitHub.
   {
     id: "news-raccolta-punti",
     name: "Google News · raccolta punti e vincite",
     kind: "news",
-    url: googleNews('"raccolta punti" vincita when:2d'),
+    url: googleNews('("raccolta punti" OR bollini OR "collezione punti") concorso when:7d'),
     category: "punto_vendita",
     tags: ["news", "raccolta_punti"],
     cadenceMin: 60,
@@ -229,6 +300,9 @@ export const SOURCES: SourceConfig[] = [
     enabled: true,
     maxItems: 15,
   },
+  // SPENTA dal 17/10/2026: in archivio ha portato UN solo coupon, e il feed non
+  // si muove. Il lato rimborsi lo coprono già Scontrino Felice e DimmiCosaCerchi
+  // (21 e 14 coupon), più il nuovo CouponVolantini qui sotto.
   {
     id: "scontomaggio-cashback",
     name: "scontOmaggio · operazioni a cashback",
@@ -237,9 +311,13 @@ export const SOURCES: SourceConfig[] = [
     category: "coupon",
     tags: ["coupon", "cashback"],
     cadenceMin: 30,
-    enabled: true,
+    enabled: false,
     maxItems: 20,
   },
+  // SPENTA dal 17/10/2026: dal runner GitHub risponde 202 con 0 item (pagina di
+  // verifica), dopo aver portato un solo coupon in tutta la sua storia. Il lato
+  // coupon lo tengono Scontrino Felice (21), DimmiCosaCerchi (14) e il nuovo
+  // CouponVolantini (9 in un giro), che dal runner risponde 200.
   {
     id: "scontomaggio-coupon",
     name: "scontOmaggio · buoni sconto",
@@ -248,11 +326,29 @@ export const SOURCES: SourceConfig[] = [
     category: "coupon",
     tags: ["coupon"],
     cadenceMin: 30,
-    enabled: true,
+    enabled: false,
     maxItems: 20,
+  },
+  // Il rinforzo vero del lato 💶 Coupon: 10 rimborsi e cashback nuovi in un
+  // giro (Fini, Ambipur, Dove+Mentadent, AIA-Despar, Mastro Lindo, Parodontax),
+  // tutti con l'importo nel titolo. Sostituisce scontOmaggio · cashback.
+  {
+    id: "couponvolantini",
+    name: "CouponVolantini · cashback e rimborsi",
+    kind: "rss",
+    url: "https://www.couponvolantini.it/feed/",
+    category: "coupon",
+    tags: ["coupon", "cashback"],
+    cadenceMin: 45,
+    enabled: true,
+    maxItems: 25,
   },
 
   // ---------- sitemap: intercetta le pagine nuove prima dei feed ----------
+  // SPENTA dal 17/10/2026: HTTP 403 dal runner GitHub (stesso host del feed,
+  // stessa protezione bot) e, nei pochi giri riusciti, ha prodotto UNA sola news. Il
+  // pattern qui sotto non trova concorsi perché la sitemap pubblica solo pagine
+  // di tassonomia: era già scritto nel commento, ora c'è anche la misura.
   {
     id: "sitemap-premieconcorsi",
     name: "Sitemap · Premi e Concorsi",
@@ -261,7 +357,7 @@ export const SOURCES: SourceConfig[] = [
     category: "online",
     tags: ["sitemap"],
     cadenceMin: 60,
-    enabled: true,
+    enabled: false,
     // Misurato il 16/10/2026: questa sitemap pubblica SOLO pagine di tassonomia
     // ("Concorsi A Codice", "Concorsi Fotografici", …) e non le singole pagine
     // di concorso, che arrivano dal feed RSS della stessa fonte. Le tassonomie
@@ -331,6 +427,9 @@ export const SOURCES: SourceConfig[] = [
     includePattern: "concorsi-premi/[a-z0-9]",
     maxItems: 20,
   },
+  // SPENTA dal 17/10/2026: 5 pagine lette e 5 scartate, zero item in archivio.
+  // Il pattern trova solo pagine indice ("/concorsi/" senza figli), che il
+  // cancello di freschezza butta. Sostituita dalla sitemap di Eurospin.
   {
     id: "sitemap-payback",
     name: "PAYBACK · regolamenti di concorso",
@@ -339,7 +438,7 @@ export const SOURCES: SourceConfig[] = [
     category: "giftcard",
     tags: ["brand", "payback", "sitemap", "giftcard"],
     cadenceMin: 60,
-    enabled: true,
+    enabled: false,
     includePattern: "concors",
     maxItems: 20,
   },
@@ -359,6 +458,9 @@ export const SOURCES: SourceConfig[] = [
     includePattern: "/collezioni-e-concorsi/[a-z0-9-]+/?$",
     maxItems: 20,
   },
+  // SPENTA dal 17/10/2026: zero item in tutta la storia della fonte. La sitemap
+  // non espone i regolamenti che il pattern cerca (risponde sempre 304, quindi
+  // il file non cambia nemmeno). Sostituita dalla sitemap di Penny.
   {
     id: "sitemap-burgerking",
     name: "Burger King · regolamenti",
@@ -367,7 +469,7 @@ export const SOURCES: SourceConfig[] = [
     category: "punto_vendita",
     tags: ["brand", "burgerking", "sitemap"],
     cadenceMin: 120,
-    enabled: true,
+    enabled: false,
     // "/promo" è il listino offerte dei menu, non concorsi: fuori dal pattern.
     includePattern: "regolament",
     maxItems: 20,
@@ -382,6 +484,49 @@ export const SOURCES: SourceConfig[] = [
     cadenceMin: 120,
     enabled: true,
     includePattern: "concors|vinci|gioca",
+    maxItems: 20,
+  },
+  // Penny ed Eurospin sono SPENTE dal 17/10/2026, e il motivo non è la sitemap:
+  // lette senza `includePattern` (perché il runner eseguiva un commit che non
+  // conosceva ancora queste due fonti) prendevano le prime 20 pagine del sito —
+  // catalogo e indici — e ne scartavano 20. Dal PC, con il pattern giusto, sono
+  // 6 pagine e 2 concorsi attivi a testa. Il pattern ora viaggia in D1 (colonne
+  // include_pattern / max_items, vedi src/db/schema.sql): si possono riaccendere
+  // quando questa configurazione è arrivata al runner, senza aspettare che il
+  // pattern sia nel commit che il runner esegue.
+  // Le sitemap di brand che funzionano restano AIA, Pampers, Conad, Ferrero,
+  // Lavazza, Eni e Sammontana.
+  {
+    id: "sitemap-penny",
+    name: "Penny · concorsi e collezioni",
+    kind: "sitemap",
+    url: "https://www.penny.it/sitemap.xml",
+    category: "punto_vendita",
+    tags: ["brand", "penny", "sitemap", "raccolta_punti"],
+    cadenceMin: 120,
+    enabled: false,
+    // Solo `/concorso-…`: con il pattern largo (che includeva "collezione") le
+    // pagine più recenti erano tutte catalogo. Le pagine di concorso vere sono
+    // `concorso-paga-penny` e `concorso-prodotto-misterioso-…`; le informative
+    // privacy contengono "privacy-concorso", senza `/concorso-`, quindi restano
+    // fuori da sole.
+    includePattern: "/concorso-",
+    maxItems: 20,
+  },
+  {
+    id: "sitemap-eurospin",
+    name: "Eurospin · concorsi",
+    kind: "sitemap",
+    url: "https://www.eurospin.it/page-sitemap.xml",
+    category: "punto_vendita",
+    tags: ["brand", "eurospin", "sitemap"],
+    cadenceMin: 120,
+    enabled: false,
+    // Stessa lezione di Penny: `vinci-` e `gioca-e-parti` pescavano anche
+    // "vinci-leccellenza" e i listini, e con il tetto a 20 le pagine vere non
+    // entravano. Le pagine di concorso di Eurospin sono tutte `/concorso-…`
+    // (bluey, la-partenza-intelligente, radames, dexal…).
+    includePattern: "/concorso-",
     maxItems: 20,
   },
   // Poche marche espongono i concorsi in una sitemap leggibile: il 16/10/2026 ne
@@ -497,6 +642,10 @@ export const SOURCES: SourceConfig[] = [
  * raccogliere con i parser che abbiamo.
  */
 export const REJECTED_SOURCES: { url: string; reason: string }[] = [
+  {
+    url: "https://www.carrefour.it/sitemap_2-content.xml",
+    reason: "provata il 17/10/2026: 10 pagine lette e 10 scartate (7 ferme, 3 senza segnale di concorso), zero item",
+  },
   { url: "https://www.omaggiomania.com/concorsi-a-premi/", reason: "403 al fetch diretto delle pagine (il feed risponde)" },
   { url: "https://www.scontomaggio.com/concorsi-con-acquisto/", reason: "403 al fetch diretto delle pagine (i feed rispondono)" },
   { url: "https://www.topnegozi.it/sitemap_shops.xml", reason: "403 sull'XML, e le pagine negozio elencano negozi, non coupon" },

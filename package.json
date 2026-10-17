@@ -28,10 +28,12 @@
     "test:sqlite": "vitest run test/d1-sqlite.test.ts test/d1-http.test.ts",
     "test:watch": "vitest",
     "dry-run": "node --experimental-strip-types scripts/dry-run.ts",
+    "checklist": "node --experimental-strip-types scripts/checklist.ts",
     "ingest": "node --experimental-strip-types scripts/ingest.ts",
     "prune": "node --experimental-strip-types scripts/prune-stale.ts",
     "brands": "node --experimental-strip-types scripts/backfill-brands.ts",
     "rules": "node --experimental-strip-types scripts/backfill-rules.ts",
+    "tags": "node --experimental-strip-types scripts/backfill-tags.ts",
     "bench:cpu": "node --experimental-strip-types scripts/bench-cpu.ts"
   },
   "devDependencies": {

@@ -8,6 +8,8 @@ import type {
   NavPoint,
   NewItem,
   Prefs,
+  RefundRow,
+  RefundTotals,
   RobotsRow,
   RunRow,
   Sighting,
@@ -80,6 +82,9 @@ interface SourceDbRow {
   tags: string;
   cadence_min: number;
   enabled: number;
+  /** Assenti su un database antecedente alla migrazione: vedi src/db/schema.sql. */
+  include_pattern?: string | null;
+  max_items?: number | null;
   etag: string | null;
   last_modified: string | null;
   last_run_at: string | null;
@@ -110,6 +115,13 @@ interface SightingDbRow {
   channel: string;
   seen_at: string;
   kept: number;
+}
+
+interface RefundDbRow extends ItemDbRow {
+  refund_amount_cents: number;
+  refund_cap: number;
+  refund_claimed_at: string;
+  refund_received_at: string | null;
 }
 
 interface UiDbRow {
@@ -251,6 +263,23 @@ function rowToItem(row: ItemDbRow): ItemRow {
   };
 }
 
+/**
+ * Un rimborso: la riga dell'offerta più le quattro colonne della richiesta.
+ * La JOIN porta l'item intero (come listDeliveredItems): la schermata mostra il
+ * titolo e la scheda ha già tutto, senza una query per riga.
+ */
+function rowToRefund(row: RefundDbRow, chatId: number): RefundRow {
+  return {
+    chatId,
+    itemId: row.id,
+    item: rowToItem(row),
+    amountCents: row.refund_amount_cents ?? 0,
+    cap: row.refund_cap === 1,
+    claimedAt: row.refund_claimed_at,
+    receivedAt: row.refund_received_at ?? null,
+  };
+}
+
 function rowToSighting(row: SightingDbRow): Sighting {
   return {
     urlKey: row.url_key,
@@ -277,6 +306,10 @@ function rowToSource(row: SourceDbRow): SourceRow {
     tags: parseStringArray(row.tags),
     cadenceMin: row.cadence_min,
     enabled: row.enabled === 1,
+    // Come si legge la fonte viaggia con la riga: è il motivo per cui il pattern
+    // sta in D1 e non solo nella configurazione (vedi src/db/schema.sql).
+    ...(row.include_pattern ? { includePattern: row.include_pattern } : {}),
+    ...(typeof row.max_items === "number" && row.max_items > 0 ? { maxItems: row.max_items } : {}),
     etag: row.etag,
     lastModified: row.last_modified,
     lastRunAt: row.last_run_at,
@@ -391,8 +424,14 @@ function buildWhere(query: ItemQuery): { sql: string; params: unknown[] } {
   }
   const keyword = query.keyword?.trim().toLowerCase();
   if (keyword) {
-    where.push("(LOWER(title) LIKE ? OR LOWER(summary) LIKE ?)");
-    params.push(`%${keyword}%`, `%${keyword}%`);
+    // In LIKE, `%` e `_` sono jolly. Chi cerca "50%" vuole quel testo, non
+    // qualunque cosa: si escapano, così la ricerca resta un substring letterale
+    // — la stessa semantica dell'implementazione in memoria (memory.ts), che
+    // usa includes. Senza, due store rispondevano due cose diverse alla stessa
+    // domanda, e solo i test sul memory store lo nascondevano.
+    const literal = keyword.replace(/[\\%_]/g, (char) => `\\${char}`);
+    where.push("(LOWER(title) LIKE ? ESCAPE '\\' OR LOWER(summary) LIKE ? ESCAPE '\\')");
+    params.push(`%${literal}%`, `%${literal}%`);
   }
   if (query.withoutDeadline === true) {
     where.push("deadline IS NULL");
@@ -446,9 +485,18 @@ function buildWhere(query: ItemQuery): { sql: string; params: unknown[] } {
   if (query.withoutPurchase === true) {
     where.push("requires_purchase = 0");
   }
+  if (query.withPurchase === true) {
+    where.push("requires_purchase = 1");
+  }
   if (query.brands && query.brands.length > 0) {
     where.push(`brand IN (${query.brands.map(() => "?").join(", ")})`);
     params.push(...query.brands);
+  }
+  if (query.excludeBrands && query.excludeBrands.length > 0) {
+    // L'OR con NULL è voluto: un item senza marca non si può escludere, e
+    // `brand NOT IN (...)` da solo lo farebbe sparire (NULL NOT IN → NULL).
+    where.push(`(brand IS NULL OR brand NOT IN (${query.excludeBrands.map(() => "?").join(", ")}))`);
+    params.push(...query.excludeBrands);
   }
 
   return { sql: where.length > 0 ? `WHERE ${where.join(" AND ")}` : "", params };
@@ -700,9 +748,11 @@ export function createD1Store(db: D1Like): Store {
       // Ids bound, mai interpolati: la lista di placeholder è l'unica cosa che
       // si costruisce da `ids.length`.
       const placeholders = ids.map(() => "?").join(", ");
-      // Prima le consegne, poi l'item: nessuna riga orfana in `deliveries` che
-      // farebbe saltare una futura rispedizione dello stesso concorso.
+      // Prima le consegne e i rimborsi, poi l'item: nessuna riga orfana in
+      // `deliveries` (che farebbe saltare una futura rispedizione dello stesso
+      // concorso) né in `refunds` (che mostrerebbe un rimborso senza offerta).
       await db.prepare(`DELETE FROM deliveries WHERE item_id IN (${placeholders})`).bind(...ids).run();
+      await db.prepare(`DELETE FROM refunds WHERE item_id IN (${placeholders})`).bind(...ids).run();
       const deleted = await db.prepare(`DELETE FROM items WHERE id IN (${placeholders})`).bind(...ids).run();
       return deleted.meta?.changes ?? ids.length;
     },
@@ -762,12 +812,122 @@ export function createD1Store(db: D1Like): Store {
         .run();
     },
 
+    async deleteDelivery(chatId: number, itemId: number, kind: string): Promise<boolean> {
+      const deleted = await db
+        .prepare("DELETE FROM deliveries WHERE chat_id = ? AND item_id = ? AND kind = ?")
+        .bind(chatId, itemId, kind)
+        .run();
+      return (deleted.meta?.changes ?? 0) > 0;
+    },
+
     async lastDeliveryAt(chatId: number, kind: string): Promise<string | null> {
       const row = await db
         .prepare("SELECT sent_at FROM deliveries WHERE chat_id = ? AND kind = ? ORDER BY sent_at DESC LIMIT 1")
         .bind(chatId, kind)
         .first<{ sent_at: string }>();
       return row?.sent_at ?? null;
+    },
+
+    async claimRefund(chatId: number, itemId: number, amountCents: number, cap: boolean, at: string): Promise<void> {
+      // DO NOTHING, non DO UPDATE: un doppio tocco su un rimborso già ricevuto
+      // non deve riportarlo in attesa né riscrivere la cifra dichiarata allora.
+      await db
+        .prepare(
+          `INSERT INTO refunds (chat_id, item_id, amount_cents, cap, claimed_at, received_at)
+           VALUES (?, ?, ?, ?, ?, NULL)
+           ON CONFLICT(chat_id, item_id) DO NOTHING`,
+        )
+        .bind(chatId, itemId, Math.max(0, Math.round(amountCents)), cap ? 1 : 0, at)
+        .run();
+    },
+
+    async markRefundReceived(chatId: number, itemId: number, at: string): Promise<boolean> {
+      const result = await db
+        .prepare(
+          `UPDATE refunds SET received_at = ?
+            WHERE chat_id = ? AND item_id = ? AND received_at IS NULL`,
+        )
+        .bind(at, chatId, itemId)
+        .run();
+      return (result.meta?.changes ?? 0) > 0;
+    },
+
+    async undoRefund(chatId: number, itemId: number): Promise<boolean> {
+      const result = await db
+        .prepare("DELETE FROM refunds WHERE chat_id = ? AND item_id = ?")
+        .bind(chatId, itemId)
+        .run();
+      return (result.meta?.changes ?? 0) > 0;
+    },
+
+    async getRefund(chatId: number, itemId: number): Promise<RefundRow | null> {
+      const row = await db
+        .prepare(
+          `SELECT i.*, r.amount_cents AS refund_amount_cents, r.cap AS refund_cap,
+                  r.claimed_at AS refund_claimed_at, r.received_at AS refund_received_at
+             FROM refunds r JOIN items i ON i.id = r.item_id
+            WHERE r.chat_id = ? AND r.item_id = ?`,
+        )
+        .bind(chatId, itemId)
+        .first<RefundDbRow>();
+      return row ? rowToRefund(row, chatId) : null;
+    },
+
+    async listRefunds(chatId: number, limit = 200): Promise<RefundRow[]> {
+      // In attesa prima ("cosa deve ancora tornare?"), poi i più recenti: è
+      // l'ordine in cui si legge la schermata, e non serve riordinare in memoria.
+      const capped = Math.min(Math.max(Math.trunc(limit), 1), 200);
+      const result = await db
+        .prepare(
+          `SELECT i.*, r.amount_cents AS refund_amount_cents, r.cap AS refund_cap,
+                  r.claimed_at AS refund_claimed_at, r.received_at AS refund_received_at
+             FROM refunds r JOIN items i ON i.id = r.item_id
+            WHERE r.chat_id = ?
+            ORDER BY (r.received_at IS NULL) DESC, r.claimed_at DESC, r.item_id ASC
+            LIMIT ?`,
+        )
+        .bind(chatId, capped)
+        .all<RefundDbRow>();
+      return (result.results ?? []).map((row) => rowToRefund(row, chatId));
+    },
+
+    async refundTotals(chatId: number): Promise<RefundTotals> {
+      // Un'aggregata sola: il menù la legge a ogni schermata, e caricare le righe
+      // per sommarle in JS costerebbe tanto quanto leggerle tutte.
+      const row = await db
+        .prepare(
+          `SELECT
+             COALESCE(SUM(CASE WHEN received_at IS NULL THEN amount_cents ELSE 0 END), 0) AS pending_cents,
+             COALESCE(SUM(CASE WHEN received_at IS NOT NULL THEN amount_cents ELSE 0 END), 0) AS received_cents,
+             COALESCE(SUM(CASE WHEN received_at IS NULL THEN 1 ELSE 0 END), 0) AS pending,
+             COALESCE(SUM(CASE WHEN received_at IS NOT NULL THEN 1 ELSE 0 END), 0) AS received,
+             COALESCE(SUM(CASE WHEN received_at IS NULL AND amount_cents = 0 THEN 1 ELSE 0 END), 0) AS unknown_pending,
+             COALESCE(SUM(CASE WHEN received_at IS NOT NULL AND amount_cents = 0 THEN 1 ELSE 0 END), 0) AS unknown_received,
+             COALESCE(SUM(CASE WHEN received_at IS NULL AND cap = 1 THEN 1 ELSE 0 END), 0) AS cap_pending,
+             COALESCE(SUM(CASE WHEN received_at IS NOT NULL AND cap = 1 THEN 1 ELSE 0 END), 0) AS cap_received
+           FROM refunds WHERE chat_id = ?`,
+        )
+        .bind(chatId)
+        .first<{
+          pending_cents: number;
+          received_cents: number;
+          pending: number;
+          received: number;
+          unknown_pending: number;
+          unknown_received: number;
+          cap_pending: number;
+          cap_received: number;
+        }>();
+      return {
+        pendingCents: row?.pending_cents ?? 0,
+        receivedCents: row?.received_cents ?? 0,
+        pending: row?.pending ?? 0,
+        received: row?.received ?? 0,
+        unknownPending: row?.unknown_pending ?? 0,
+        unknownReceived: row?.unknown_received ?? 0,
+        capPending: row?.cap_pending ?? 0,
+        capReceived: row?.cap_received ?? 0,
+      };
     },
 
     async bumpWeights(chatId: number, delta: Record<string, number>): Promise<void> {

@@ -28,6 +28,7 @@ import {
 import { SCORE_WEIGHTS } from "../src/enrich/score.ts";
 import { activeFilterCount, defaultFilters, filterableSources, parseFilters, withFilterChange } from "../src/filters.ts";
 import { applyIntent, parseCallback } from "../src/telegram/screens.ts";
+import { HELP_PAGES } from "../src/telegram/help.ts";
 import { channelOf } from "../src/enrich/lead.ts";
 import { STALE_CHAT_MS, handleUpdate, isStaleChat } from "../src/telegram/bot.ts";
 import {
@@ -222,6 +223,15 @@ function buttonData(calls: Call[], label: string, nth = 0): string {
   return trovato.callback_data;
 }
 
+/** Il callback_data del bottone di un elenco che contiene quel pezzo di titolo. */
+function itemData(calls: Call[], titolo: string): string {
+  const trovato = lastKeyboard(calls)?.inline_keyboard.flat().find(
+    (voce) => (voce.text ?? "").includes(titolo) && voce.callback_data?.startsWith("open:"),
+  );
+  if (!trovato?.callback_data) throw new Error(`item "${titolo}" non trovato`);
+  return trovato.callback_data;
+}
+
 /** La riga che contiene un certo callback: le impostazioni crescono, gli indici no. */
 function rigaCon(keyboard: InlineKeyboardMarkup, data: string) {
   return keyboard.inline_keyboard.find((riga) => riga.some((bottono) => bottono.callback_data === data));
@@ -277,12 +287,12 @@ describe("bottoni · costruzione delle tastiere", () => {
   it("il menù porta a tutte le sezioni, con i conteggi", () => {
     const keyboard = menuKeyboard({
       nuovi: 3, oggi: 12, settimana: 40, scadenze: 2, salvati: 1, news: 7, coupon: 5,
-      seguite: 4, filtri: 0,
+      rimborsi: 2, rimborsiCents: 1250, rimborsiCap: false, seguite: 4, filtri: 0,
     });
     const bottoni = keyboard.inline_keyboard.flat();
     expect(bottoni.map((b) => b.callback_data)).toEqual([
       "s:nuovi", "s:oggi", "s:settimana", "s:scadenze", "s:premi", "s:salvati", "s:news",
-      "s:cerca", "s:storico", "s:coupon", "s:preferiti", "s:filtri", "s:fonti", "s:impostazioni",
+      "s:cerca", "s:storico", "s:coupon", "s:rimborsi", "s:preferiti", "s:filtri", "s:fonti", "s:impostazioni",
       "refresh", "s:aiuto",
     ]);
     expect(bottoni[0]?.text).toBe("🆕 Nuovi (3)");
@@ -293,10 +303,13 @@ describe("bottoni · costruzione delle tastiere", () => {
     expect(bottoni[5]?.text).toBe("⭐ Watchlist (1)");
     expect(bottoni[6]?.text).toBe("📰 News (7)");
     expect(bottoni[9]?.text).toBe("💶 Coupon e rimborsi (5)");
+    // 💰 Rimborsi: il numero sono le richieste in attesa, e l'importo dice
+    // subito quanto denaro deve ancora tornare (qui 12,50 €).
+    expect(bottoni[10]?.text).toBe("💰 Rimborsi (2) · 12,50 €");
     // Il numero qui sono le MARCHE seguite, non i loro concorsi: è quello che il
     // nome della voce promette.
-    expect(bottoni[10]?.text).toBe("🏷 Marche seguite (4)");
-    expect(bottoni[15]?.text).toBe("❓ Aiuto");
+    expect(bottoni[11]?.text).toBe("🏷 Marche seguite (4)");
+    expect(bottoni[16]?.text).toBe("❓ Aiuto");
   });
 
   it("un coupon si riconosce dal bottone: 💶 e senza punteggio", () => {
@@ -331,8 +344,95 @@ describe("bottoni · costruzione delle tastiere", () => {
   it("la scheda di un articolo avverte che il link non è la pagina del concorso", () => {
     const card = formatItemCard(row({ kind: "news", sourceId: "news-brand" }), NOW);
     expect(card).toContain("📰");
-    expect(card).toContain("il link non è la pagina ufficiale");
+    expect(card).toContain("non è la pagina ufficiale del concorso");
     expect(formatItemCard(row({ kind: "contest" }), NOW)).not.toContain("pagina ufficiale");
+  });
+
+  it("la scheda dice cosa conservare e quando chiedere il premio", () => {
+    const card = formatItemCard(
+      row({
+        summary:
+          "Conserva lo scontrino originale e il codice sulla confezione. Il premio va richiesto entro il 31/12/2026.",
+        requiresPurchase: true,
+      }),
+      NOW,
+    );
+    expect(card).toContain("🧾 <b>Da conservare</b> · lo scontrino originale e il codice sulla confezione");
+    expect(card).toContain("🎫 <b>Premio da richiedere</b> entro il <b>31/12/2026</b> · 41 gg");
+
+    // Quando la data non c'è ma il conto sì, si porta il conto e da quando parte.
+    const giorni = formatItemCard(
+      row({ summary: "Il premio va ritirato entro 30 giorni dalla comunicazione della vincita" }),
+      NOW,
+    );
+    expect(giorni).toContain("🎫 <b>Premio da richiedere</b> entro <b>30 giorni</b> dalla comunicazione della vincita");
+  });
+
+  it("un premio da richiedere senza data dice dove guardarla, senza inventarla", () => {
+    const card = formatItemCard(row({ summary: "Richiedi i premi Imetec con i bollini", tags: ["premio_da_richiedere"] }), NOW);
+    expect(card).toContain("🧾 <b>Da conservare</b> · i bollini");
+    expect(card).toContain("🎫 <b>Premio da richiedere</b> · la data è nel bando");
+    // Un concorso normale senza queste informazioni non aggiunge righe.
+    expect(formatItemCard(row({ tags: [] }), NOW)).not.toContain("🎫");
+    // Una raccolta punti senza prova nominata nel testo: scontrini e bollini
+    // valgono comunque, e il premio va chiesto prima che la raccolta chiuda.
+    const raccolta = formatItemCard(
+      row({ summary: "Raccogli i punti e ritira il premio", tags: ["raccolta_punti"], requiresPurchase: true }),
+      NOW,
+    );
+    expect(raccolta).toContain("🧾 <b>Da conservare</b> · gli scontrini e i bollini");
+    expect(raccolta).toContain("🎫 <b>Premio da richiedere</b> · la data è nel bando");
+    // Un articolo non è la pagina del concorso: lì le due righe sarebbero un consiglio sbagliato.
+    expect(formatItemCard(row({ kind: "news", summary: "Conserva lo scontrino" }), NOW)).not.toContain("🧾");
+  });
+
+  it("la scheda è a blocchi leggibili: etichette in grassetto e riga vuota fra i gruppi", () => {
+    const card = formatItemCard(row({}), NOW);
+    const blocchi = card.split("\n\n");
+    // testa col titolo · fatti · tag · fonte (gli obblighi e la descrizione
+    // compaiono solo quando la pagina li dichiara)
+    expect(blocchi).toHaveLength(4);
+    expect(blocchi[0]).toContain("🎁 <b>85</b>/100");
+    expect(blocchi[0]).toContain("<a href=\"https://esempio.it/concorso/1\">");
+    expect(blocchi[1]).toBe("🏆 <b>Premio</b> · Buoni spesa da 100 €\n📝 <b>Come partecipare</b> · Senza obbligo di acquisto");
+    expect(blocchi[2]).toBe("🏷 giftcard");
+    expect(blocchi[3]).toBe("📡 <b>Fonte</b> · Premi e Concorsi");
+    // La fonte si dice una volta sola: ripeterla in fondo alla schermata era una
+    // riga consumata per un'informazione già letta.
+    expect(card.match(/Fonte/g)).toHaveLength(1);
+  });
+
+  it("un coupon è un'offerta, non un concorso: niente punteggio e niente premio", () => {
+    const card = formatItemCard(
+      row({
+        kind: "coupon",
+        title: "Buono sconto Novi 1,50 €",
+        score: 31,
+        prize: null,
+        participation: null,
+        summary: "Sconto del 30% sulla seconda confezione",
+        tags: ["coupon", "food"],
+      }),
+      NOW,
+    );
+    expect(card).toContain("💶 <b>Coupon</b>");
+    // Il numero non c'è e non c'è nemmeno la parola "premio": su un buono sconto
+    // non si vince niente, e chiamarlo premio sarebbe l'errore da evitare.
+    expect(card).not.toContain("/100");
+    expect(card).not.toContain("🏆");
+    expect(card).toContain("ℹ️ Non è un concorso: qui non si vince niente, si spende meno.");
+    // La descrizione della fonte è in corsivo: si distingue dalle righe compilate da noi.
+    expect(card).toContain("<i>Sconto del 30% sulla seconda confezione</i>");
+    expect(card).toContain("🏷 food");
+  });
+
+  it("i tag si leggono come parole, e non ripetono quello che dice la testa", () => {
+    const card = formatItemCard(row({ tags: ["buoni_spesa", "acquisto", "food"] }), NOW);
+    expect(card).toContain("🏷 buoni spesa · food");
+    // "acquisto" è già il 🛒 della prima riga: ripeterlo sarebbe rumore.
+    expect(card).not.toContain("🏷 buoni spesa · acquisto");
+    // L'underscore interno non arriva mai in chat.
+    expect(card).not.toContain("buoni_spesa");
   });
 
   it("la scheda mostra il Regolamento trovato sulla pagina del concorso", () => {
@@ -378,11 +478,45 @@ describe("bottoni · costruzione delle tastiere", () => {
     expect(new URL(shareUrlFor(row({ kind: "news" }))).searchParams.get("t")).toContain("articolo");
   });
 
-  it("nella scheda il bottone della decisione già presa è inerte", () => {
+  it("la scheda mette nel calendario la data che conta, non quella più comoda", () => {
+    const item = row({ id: 7, deadline: "2026-11-30", title: "Concorso Findus" });
+    const keyboard = cardKeyboard(item, null, null, undefined, null, NOW);
+    const bottone = keyboard.inline_keyboard.flat().find((b) => b.text === "📅 Scadenza");
+    const url = new URL(bottone?.url ?? "");
+    expect(url.origin + url.pathname).toBe("https://calendar.google.com/calendar/render");
+    expect(url.searchParams.get("action")).toBe("TEMPLATE");
+    // Evento di un giorno: la fine è il giorno dopo, altrimenti Google Calendar
+    // lo legge come un istante e lo mostra a mezzanotte.
+    expect(url.searchParams.get("dates")).toBe("20261130/20261201");
+    expect(url.searchParams.get("text")).toContain("Concorso Findus");
+    expect(url.searchParams.get("details")).toContain("https://esempio.it/concorso");
+
+    // Quando il bando dichiara la data per chiedere il premio, quella vince
+    // sulla scadenza: è la cosa che si dimentica davvero.
+    const conPremio = row({
+      summary: "Conserva lo scontrino. Il premio va richiesto entro il 31/12/2026.",
+      deadline: "2026-11-30",
+    });
+    const sopra = cardKeyboard(conPremio, null, null, undefined, null, NOW)
+      .inline_keyboard.flat()
+      .find((b) => b.text === "📅 Richiedi il premio");
+    expect(new URL(sopra?.url ?? "").searchParams.get("dates")).toBe("20261231/20270101");
+
+    // Senza una data non si inventa un evento: articolo e coupon senza validità
+    // non hanno il bottone.
+    const senzaData = (riga: ItemRow) =>
+      cardKeyboard(riga, null, null, undefined, null, NOW).inline_keyboard.flat().some((b) => b.text.startsWith("📅"));
+    expect(senzaData(row({ kind: "news", deadline: null }))).toBe(false);
+    expect(senzaData(row({ kind: "coupon", deadline: null }))).toBe(false);
+  });
+
+  it("nella scheda ⭐ è un interruttore: da salvato il bottone toglie", () => {
     const item = row({ id: 7 });
     const keyboard = cardKeyboard(item, "saved", "https://esempio.it/regolamento");
     const prima = keyboard.inline_keyboard[0] ?? [];
-    expect(prima[0]).toEqual({ text: "⭐ In watchlist", callback_data: "noop" });
+    // Non un "già fatto" inerte: un concorso salvato deve poter uscire dalla
+    // watchlist, e l'unico posto in cui si tocca è questa riga.
+    expect(prima[0]).toEqual({ text: "☆ Togli dalla watchlist", callback_data: "unsave:7" });
     expect(prima[1]?.callback_data).toBe("ign:7");
     expect(keyboard.inline_keyboard[1]?.map((b) => b.text)).toEqual(["🔗 Apri", "📤 Condividi"]);
     expect(keyboard.inline_keyboard[2]?.map((b) => b.text)).toEqual(["📄 Regolamento"]);
@@ -549,6 +683,25 @@ describe("interfaccia · un solo messaggio per chat", () => {
     await handleUpdate(tap(3, "back", 100), deps(store, tg));
     stato = await store.getUiState(CHAT);
     expect(stato?.openItemId).toBeNull();
+  });
+
+  it("la scheda aperta dalla chat dice cosa conservare e quando chiedere il premio", async () => {
+    const [id] = await seed(store, [
+      {
+        title: "Concorso Findus: 1000 euro di buoni spesa",
+        summary:
+          "Conserva lo scontrino originale e il codice sulla confezione. Il premio va richiesto entro il 31/12/2026.",
+        requiresPurchase: true,
+      },
+    ]);
+    const { tg, calls } = makeTg();
+    await handleUpdate(command(1, "/start"), deps(store, tg));
+    await handleUpdate(tap(2, `open:${id}`, 100), deps(store, tg));
+
+    // La riga che l'utente legge davvero, non solo il testo prodotto dalla funzione.
+    const scheda = lastWith(calls, "editMessageText")?.payload.text ?? "";
+    expect(scheda).toContain("🧾 <b>Da conservare</b> · lo scontrino originale e il codice sulla confezione");
+    expect(scheda).toContain("🎫 <b>Premio da richiedere</b> entro il <b>31/12/2026</b>");
   });
 
   it("la decisione nella scheda resta visibile e addestra i pesi di quella chat", async () => {
@@ -962,6 +1115,49 @@ describe("interfaccia · un solo messaggio per chat", () => {
     await handleUpdate(command(1, "/start"), deps(store, tg));
     await handleUpdate(tap(2, "save:1", 100), deps(store, tg));
     await handleUpdate(tap(3, "save:1", 100), deps(store, tg));
+    expect((await store.getPrefs(CHAT))?.weights.giftcard).toBe(1);
+  });
+
+  it("☆ toglie davvero dalla watchlist, e i pesi tornano com'erano", async () => {
+    const { tg, calls } = makeTg();
+    await handleUpdate(command(1, "/start"), deps(store, tg));
+    await handleUpdate(tap(2, "open:1", 100), deps(store, tg));
+    await handleUpdate(tap(3, "save:1", 100), deps(store, tg));
+    expect((await store.getPrefs(CHAT))?.weights.giftcard).toBe(1);
+
+    // Il bottone che l'utente vede DOPO aver salvato è quello che toglie: si
+    // prende dalla tastiera vera, non da un callback scritto a mano nel test.
+    await handleUpdate(tap(4, buttonData(calls, "☆ Togli dalla watchlist"), 100), deps(store, tg));
+
+    expect(await store.isDelivered(CHAT, 1, "saved")).toBe(false);
+    expect((await store.getPrefs(CHAT))?.weights.giftcard).toBe(0);
+    expect(lastWith(calls, "answerCallbackQuery")?.payload.text).toBe("☆ Fuori dalla watchlist");
+    const testo = lastWith(calls, "editMessageText")?.payload.text ?? "";
+    expect(testo).not.toContain("Nella tua watchlist");
+    // La scheda resta aperta e torna a offrire ⭐: da lì si può rimettere.
+    expect(buttonData(calls, "⭐ Watchlist")).toBe("save:1");
+  });
+
+  it("il concorso tolto esce dall'elenco della watchlist, e toglierlo due volte non va sotto zero", async () => {
+    const { tg, calls } = makeTg();
+    await handleUpdate(command(1, "/start"), deps(store, tg));
+    await handleUpdate(tap(2, "save:1", 100), deps(store, tg));
+    await handleUpdate(tap(3, "save:2", 100), deps(store, tg));
+    await handleUpdate(tap(4, "s:salvati", 100), deps(store, tg));
+    expect(lastWith(calls, "editMessageText")?.payload.text).toContain("2 concorsi in watchlist");
+
+    // Dall'elenco si apre il concorso e lo si toglie, come farebbe l'utente.
+    await handleUpdate(tap(5, itemData(calls, "Barilla"), 100), deps(store, tg));
+    await handleUpdate(tap(6, "unsave:1", 100), deps(store, tg));
+    await handleUpdate(tap(7, "back", 100), deps(store, tg));
+    const elenco = lastWith(calls, "editMessageText")?.payload.text ?? "";
+    expect(elenco).toContain("1 concorso in watchlist");
+    expect(etichette(calls)).not.toContain("Barilla");
+
+    // Due salvataggi hanno lasciato il peso a 2; toglierne uno lo riporta a 1, e
+    // un secondo tocco su un bottone vecchio non lo riabbassa un'altra volta.
+    expect((await store.getPrefs(CHAT))?.weights.giftcard).toBe(1);
+    await handleUpdate(tap(8, "unsave:1", 100), deps(store, tg));
     expect((await store.getPrefs(CHAT))?.weights.giftcard).toBe(1);
   });
 
@@ -1383,6 +1579,51 @@ describe("filtri personali · due chat, due feed", () => {
 
     // L'altra chat non ha toccato niente.
     expect((await store.getPrefs(AMICA))?.filters).toEqual(defaultFilters());
+  });
+
+  it("🔕 Mai più una marca: sparisce dalla scheda e si riaccende da 🎛 Cosa vedi", async () => {
+    const store = createMemoryStore();
+    await dueChat(store);
+    await seed(store, [
+      { title: "Concorso Nutella", brand: "ferrero" },
+      { title: "Concorso Conad bollini", brand: "conad" },
+    ]);
+    const { tg, calls } = makeTg();
+    const voci = (): { text: string; callback_data?: string }[] => bottoni(calls, CHAT).flat();
+
+    await handleUpdate(cmd(CHAT, 1, "/start"), entrambe(store, tg));
+    await handleUpdate(tapIn(CHAT, 2, "s:oggi", 100), entrambe(store, tg));
+    const nutella = voci().find((b) => b.callback_data?.startsWith("open:") && b.text.includes("Nutella"));
+    expect(nutella).toBeDefined();
+    await handleUpdate(tapIn(CHAT, 3, nutella!.callback_data!, 100), entrambe(store, tg));
+
+    // La scheda offre la granularità che mancava: la marca, non la fonte intera.
+    expect(voci().find((b) => b.callback_data === "mb:ferrero")?.text).toBe("🔕 Mai più Ferrero");
+    await handleUpdate(tapIn(CHAT, 4, "mb:ferrero", 100), entrambe(store, tg));
+
+    expect((await store.getPrefs(CHAT))?.filters.mutedBrands).toEqual(["ferrero"]);
+    expect(String(calls.filter((c) => c.method === "answerCallbackQuery").pop()?.payload.text)).toBe("🔕 Mai più Ferrero");
+    // La scheda si chiude e l'elenco non contiene più l'insegna, né il suo concorso.
+    expect(schermata(calls, CHAT)).toContain("Oggi (dalle 00:00) · 1 concorso");
+    expect(schermata(calls, CHAT)).not.toContain("Nutella");
+    const restanti = bottoni(calls, CHAT).flat().filter((b) => b.callback_data?.startsWith("open:")).map((b) => b.text);
+    expect(restanti.join("\n")).toContain("Conad");
+    expect(restanti.join("\n")).not.toContain("Nutella");
+    // L'altra chat la vede ancora: la marca è spenta solo qui.
+    expect((await store.getPrefs(AMICA))?.filters.mutedBrands).toEqual([]);
+
+    // Da 🎛 Cosa vedi si legge quante sono, e da lì si riaccendono.
+    await handleUpdate(tapIn(CHAT, 5, "s:filtri", 100), entrambe(store, tg));
+    expect(schermata(calls, CHAT)).toContain("🔕 Marche spente: 1");
+    expect(voci().find((b) => b.callback_data === "s:filtri-marche")?.text).toBe("🔕 Marche spente (1)");
+    await handleUpdate(tapIn(CHAT, 6, "s:filtri-marche", 100), entrambe(store, tg));
+    expect(schermata(calls, CHAT)).toContain("🔕 Marche spente");
+    await handleUpdate(tapIn(CHAT, 7, "um:ferrero", 100), entrambe(store, tg));
+    expect((await store.getPrefs(CHAT))?.filters.mutedBrands).toEqual([]);
+    expect(voci().some((b) => b.callback_data === "um:ferrero")).toBe(false);
+    // E in 🎛 Cosa vedi la riga torna a dire che non ce ne sono.
+    await handleUpdate(tapIn(CHAT, 8, "s:filtri", 100), entrambe(store, tg));
+    expect(schermata(calls, CHAT)).toContain("🔕 Marche spente: nessuna");
   });
 
   it("i preferiti vuoti mandano dove si accende una marca", async () => {
@@ -2087,6 +2328,101 @@ describe("coupon e rimborsi · la sezione", () => {
     expect(testo).toContain("1 coupon");
   });
 
+  it("💶 Coupon ha le stesse viste dei concorsi: oggi, 7 giorni, scadenze, tutti", async () => {
+    const store = createMemoryStore();
+    await store.upsertPrefs(prefs());
+    await seed(store, [
+      {
+        title: "Buono sconto Novi arrivato oggi",
+        kind: "coupon",
+        sourceId: "scontrinofelice-coupon",
+        firstSeenAt: "2026-11-20T07:00:00.000Z",
+        deadline: "2026-11-25",
+      },
+      {
+        title: "Buono sconto Aia di ieri",
+        kind: "coupon",
+        sourceId: "scontrinofelice-coupon",
+        firstSeenAt: "2026-11-19T07:00:00.000Z",
+        deadline: null,
+      },
+      // Validità già passata: in nessuna vista dei coupon, in nessun modo.
+      { title: "Buono scaduto ieri", kind: "coupon", deadline: "2026-11-19" },
+    ]);
+    const { tg, calls } = makeTg();
+
+    await handleUpdate(command(1, "/coupon"), deps(store, tg));
+
+    // La riga delle viste, con quella attiva marcata.
+    const viste = lastKeyboard(calls)?.inline_keyboard.flat().filter(
+      (bottone) => bottone.callback_data?.startsWith("s:coupon"),
+    );
+    expect(viste?.map((bottone) => bottone.callback_data)).toEqual([
+      "s:coupon", "s:coupon-oggi", "s:coupon-settimana", "s:coupon-scadenze", "s:coupon-rimborsi",
+    ]);
+    expect(viste?.[0]?.text).toBe("• 🗂 Tutti");
+    expect(etichette(calls)).toContain("Novi");
+    expect(etichette(calls)).toContain("Aia");
+    expect(etichette(calls)).not.toContain("scaduto ieri");
+
+    // 📋 Oggi: solo quello arrivato da mezzanotte (Aia è di ieri).
+    await handleUpdate(tap(2, "s:coupon-oggi", 100), deps(store, tg));
+    expect(String(lastWith(calls, "editMessageText")?.payload.text)).toContain("Coupon di oggi");
+    expect(etichette(calls)).toContain("Novi");
+    expect(etichette(calls)).not.toContain("Aia");
+    // Nella vista di oggi si può passare alle altre senza tornare al menù.
+    expect(etichette(calls)).toContain("• 📋 Oggi");
+
+    // ⏳ In scadenza: solo chi ha una data dichiarata entro 7 giorni; Aia non ne
+    // ha una e resta in 🗂 Tutti ("non lo so" non è una prova).
+    await handleUpdate(tap(3, "s:coupon-scadenze", 100), deps(store, tg));
+    expect(String(lastWith(calls, "editMessageText")?.payload.text)).toContain("Coupon in scadenza");
+    expect(String(lastWith(calls, "editMessageText")?.payload.text)).toContain("1 coupon");
+    expect(etichette(calls)).toContain("Novi");
+    expect(etichette(calls)).not.toContain("Aia");
+  });
+
+  it("↩️ Rimborsi e cashback isola le offerte in cui tornano soldi", async () => {
+    const store = createMemoryStore();
+    await store.upsertPrefs(prefs());
+    await seed(store, [
+      { title: "Buono sconto Novi", kind: "coupon", sourceId: "scontrinofelice-coupon" },
+      { title: "Cashback Ymea: 25 euro indietro", kind: "coupon", sourceId: "scontrinofelice-cashback", tags: ["coupon", "cashback"] },
+      { title: "Spendi e riprendi Findus", kind: "coupon", sourceId: "couponvolantini", tags: ["coupon", "cashback"] },
+    ]);
+    const { tg, calls } = makeTg();
+
+    await handleUpdate(command(1, "/coupon"), deps(store, tg));
+    await handleUpdate(tap(2, "s:coupon-rimborsi", 100), deps(store, tg));
+
+    const testo = String(lastWith(calls, "editMessageText")?.payload.text);
+    expect(testo).toContain("Rimborsi e cashback");
+    expect(testo).toContain("2 coupon");
+    expect(etichette(calls)).toContain("Ymea");
+    expect(etichette(calls)).toContain("Findus");
+    // Il buono da ritagliare non è un rimborso e resta in 🗂 Tutti.
+    expect(etichette(calls)).not.toContain("Buono sconto Novi");
+  });
+
+  it("una vista vuota non è un vicolo cieco: le altre viste restano a portata", async () => {
+    const store = createMemoryStore();
+    await store.upsertPrefs(prefs());
+    await seed(store, [
+      // Arrivato ieri: non è di oggi.
+      { title: "Buono sconto Aia", kind: "coupon", firstSeenAt: "2026-11-19T07:00:00.000Z" },
+    ]);
+    const { tg, calls } = makeTg();
+
+    await handleUpdate(command(1, "/coupon"), deps(store, tg));
+    await handleUpdate(tap(2, "s:coupon-oggi", 100), deps(store, tg));
+
+    const testo = String(lastWith(calls, "editMessageText")?.payload.text);
+    expect(testo).toContain("Oggi non è ancora arrivato nessun coupon");
+    const bottoni = lastKeyboard(calls)?.inline_keyboard.flat().map((bottone) => bottone.callback_data) ?? [];
+    expect(bottoni).toContain("s:coupon-settimana");
+    expect(bottoni).toContain("s:coupon");
+  });
+
   it("il coupon si conta nel menù e nell'archivio, ma non fra i concorsi", async () => {
     const store = createMemoryStore();
     await store.upsertPrefs(prefs());
@@ -2160,6 +2496,142 @@ describe("coupon e rimborsi · la sezione", () => {
     const testi = calls.filter((call) => call.method === "sendMessage").map((call) => String(call.payload.text));
     expect(testi.join("\n")).toContain("Concorso gratis con premio certo");
     expect(testi.join("\n")).not.toContain("Buono sconto Novi");
+  });
+});
+
+describe("rimborsi · quanto è tornato e quanto manca", () => {
+  it("un coupon dichiara la cifra, si richiede e poi si segna ricevuto", async () => {
+    const store = createMemoryStore();
+    await store.upsertPrefs(prefs());
+    const [id] = await seed(store, [
+      { title: "Cashback Ymea: richiedi 25 euro di rimborso", kind: "coupon", sourceId: "scontrinofelice-cashback" },
+    ]);
+    const { tg, calls } = makeTg();
+
+    await handleUpdate(command(1, "/start"), deps(store, tg));
+    await handleUpdate(tap(2, `open:${id}`, 100), deps(store, tg));
+
+    // La scheda propone la cifra che il bando dichiara, e su un coupon non c'è
+    // nessun 🏆 Vinto (non si vince niente, si spende meno).
+    let bottoni = lastKeyboard(calls)?.inline_keyboard.flat() ?? [];
+    expect(bottoni.find((b) => b.callback_data === `rf:claim:${id}`)?.text).toBe(
+      "💰 Ho richiesto · 25 €",
+    );
+    expect(bottoni.some((b) => b.text === "🏆 Vinto")).toBe(false);
+
+    await handleUpdate(tap(3, `rf:claim:${id}`, 100), deps(store, tg));
+
+    expect(await store.getRefund(CHAT, id)).toMatchObject({ amountCents: 2500, receivedAt: null });
+    let testo = String(lastWith(calls, "editMessageText")?.payload.text ?? "");
+    expect(testo).toContain("💰 <b>Rimborso richiesto</b>");
+    expect(testo).toContain("25 € in attesa dal 20/11/2026");
+
+    bottoni = lastKeyboard(calls)?.inline_keyboard.flat() ?? [];
+    expect(bottoni.some((b) => b.callback_data === `rf:recv:${id}`)).toBe(true);
+
+    await handleUpdate(tap(4, `rf:recv:${id}`, 100), deps(store, tg));
+
+    testo = String(lastWith(calls, "editMessageText")?.payload.text ?? "");
+    expect(testo).toContain("✅ <b>Rimborso ricevuto</b>");
+    expect(testo).toContain("25 € il 20/11/2026");
+    // Il denaro cambia parte: non è più una promessa, è recuperato.
+    expect(await store.refundTotals(CHAT)).toEqual({
+      pendingCents: 0,
+      receivedCents: 2500,
+      pending: 0,
+      received: 1,
+      unknownPending: 0,
+      unknownReceived: 0,
+      capPending: 0,
+      capReceived: 0,
+    });
+
+    // 💰 Rimborsi: le due cifre, e la riga da toccare per aprire l'offerta.
+    calls.length = 0;
+    await handleUpdate(command(5, "/rimborsi"), deps(store, tg));
+    const schermata = String(lastWith(calls, "sendMessage")?.payload.text ?? "");
+    expect(schermata).toContain("I miei rimborsi");
+    expect(schermata).toContain("Recuperati: <b>25 €</b> in 1 rimborso");
+    expect(schermata).toContain("Niente in attesa");
+    const righe = lastKeyboard(calls)?.inline_keyboard.flat() ?? [];
+    expect(righe.some((b) => (b.text ?? "").startsWith("✅ 25 € · Cashback Ymea"))).toBe(true);
+  });
+
+  it("se il bando dichiara una percentuale, la cifra la scrive la chat", async () => {
+    const store = createMemoryStore();
+    await store.upsertPrefs(prefs());
+    const [id] = await seed(store, [
+      {
+        title: "Cashback 50% su tutti i prodotti",
+        summary: "Rimborso del 50% in punti sulla spesa",
+        prize: null,
+        kind: "coupon",
+        sourceId: "scontrinofelice-cashback",
+      },
+    ]);
+    const { tg, calls } = makeTg();
+
+    await handleUpdate(command(1, "/start"), deps(store, tg));
+    await handleUpdate(tap(2, `open:${id}`, 100), deps(store, tg));
+
+    // Senza cifra fissa il bottone non registra zero: apre la domanda.
+    const bottoni = lastKeyboard(calls)?.inline_keyboard.flat() ?? [];
+    expect(bottoni.find((b) => b.callback_data === `rf:ask:${id}`)?.text).toBe("💰 Ho richiesto · quanto?");
+    expect(bottoni.some((b) => b.callback_data === `rf:claim:${id}`)).toBe(false);
+
+    await handleUpdate(tap(3, `rf:ask:${id}`, 100), deps(store, tg));
+
+    let testo = String(lastWith(calls, "editMessageText")?.payload.text ?? "");
+    expect(testo).toContain("Quanto ti torna indietro?");
+    expect(testo).toContain("Cashback 50%");
+    let stato = await store.getUiState(CHAT);
+    expect(stato?.section).toBe(`importo:${id}`);
+    expect(stato?.openItemId).toBeNull();
+
+    // La cifra scritta in chat è la risposta: 7,50 €.
+    await handleUpdate(command(4, "7,50"), deps(store, tg));
+
+    expect(await store.getRefund(CHAT, id)).toMatchObject({ amountCents: 750, receivedAt: null });
+    stato = await store.getUiState(CHAT);
+    expect(stato?.section).toBe("rimborsi");
+    testo = String(lastWith(calls, "sendMessage")?.payload.text ?? "");
+    expect(testo).toContain("In attesa: <b>7,50 €</b> in 1 rimborso");
+  });
+
+  it("un testo che non è una cifra non registra niente e lascia la domanda aperta", async () => {
+    const store = createMemoryStore();
+    await store.upsertPrefs(prefs());
+    const [id] = await seed(store, [
+      { title: "Rimborso 1+1 sul prodotto meno caro", kind: "coupon" },
+    ]);
+    const { tg } = makeTg();
+
+    await handleUpdate(command(1, "/start"), deps(store, tg));
+    await handleUpdate(tap(2, `open:${id}`, 100), deps(store, tg));
+    await handleUpdate(tap(3, `rf:ask:${id}`, 100), deps(store, tg));
+    await handleUpdate(command(4, "sette euro"), deps(store, tg));
+
+    expect(await store.getRefund(CHAT, id)).toBeNull();
+    expect((await store.getUiState(CHAT))?.section).toBe(`importo:${id}`);
+  });
+
+  it("il menù dice quante richieste sono in attesa e quanto denaro", async () => {
+    const store = createMemoryStore();
+    await store.upsertPrefs(prefs());
+    const [a, b] = await seed(store, [
+      { title: "Cashback A: 10 euro di rimborso", kind: "coupon" },
+      { title: "Buono sconto B", kind: "coupon" },
+    ]);
+    await store.claimRefund(CHAT, a!, 1000, false, "2026-11-19T10:00:00.000Z");
+    await store.claimRefund(CHAT, b!, 0, false, "2026-11-19T11:00:00.000Z");
+    const { tg, calls } = makeTg();
+
+    await handleUpdate(command(1, "/start"), deps(store, tg));
+
+    const bottoni = lastKeyboard(calls)?.inline_keyboard.flat() ?? [];
+    // Due richieste aperte, ma solo una ha una cifra: il bottone dice 10 € e
+    // non finge che l'altra valga zero.
+    expect(bottoni.find((b) => b.callback_data === "s:rimborsi")?.text).toBe("💰 Rimborsi (2) · 10 €");
   });
 });
 
@@ -2268,6 +2740,106 @@ describe("solo gratis · la sezione", () => {
   });
 });
 
+describe("solo con acquisto · la sezione gemella di 🆓 Gratis", () => {
+  /** Archivio con dentro tutto: a pagamento, gratis, coupon e articoli. */
+  async function archivio(): Promise<MemoryStore> {
+    const store = createMemoryStore();
+    await store.upsertPrefs(prefs());
+    await seed(store, [
+      { title: "Concorso Findus con scontrino", requiresPurchase: true },
+      { title: "Concorso Barilla senza obbligo di acquisto", requiresPurchase: false },
+      { title: "Buono sconto Aia gratis", kind: "coupon", requiresPurchase: false },
+      { title: "Articolo: i concorsi gratis del mese", kind: "news", requiresPurchase: false },
+    ]);
+    return store;
+  }
+
+  it("/spesa tiene i concorsi con acquisto e lascia fuori gratuiti, coupon e news", async () => {
+    const store = await archivio();
+    const { tg, calls } = makeTg();
+
+    await handleUpdate(command(1, "/spesa"), deps(store, tg));
+
+    const testo = String(lastWith(calls, "sendMessage")?.payload.text ?? "");
+    expect(testo).toContain("Solo con acquisto (spesa richiesta)");
+    expect(testo).toContain("1 concorso");
+    // La riga in testa dice cosa unisce questi concorsi, e dove sta l'altra metà.
+    expect(testo).toContain("serve uno scontrino, un codice o una spesa minima");
+    expect(testo).toContain("L'altra metà è in 🆓 Gratis");
+    const bottoni = lastKeyboard(calls)?.inline_keyboard.flat() ?? [];
+    expect(bottoni.some((b) => b.text.includes("con scontrino"))).toBe(true);
+    expect(bottoni.some((b) => b.text.includes("senza obbligo di acquisto"))).toBe(false);
+    expect(bottoni.some((b) => b.text.includes("Buono sconto"))).toBe(false);
+    expect(bottoni.some((b) => b.text.includes("Articolo"))).toBe(false);
+    expect((await store.getUiState(CHAT))?.section).toBe("spesa");
+    // Le due metà sono due domande distinte: aprire questa non tocca le preferenze.
+    expect((await store.getPrefs(CHAT))?.filters.freeOnly).toBe(false);
+  });
+
+  it("💸 Con acquisto è la porta gemella di 🆓 Gratis, con il suo conteggio", async () => {
+    const store = await archivio();
+    const { tg, calls } = makeTg();
+
+    await handleUpdate(command(1, "/start"), deps(store, tg));
+    // Nel menù non c'è nessuna delle due: le metà dell'archivio si leggono solo
+    // qui, così non ci sono due strade e due conteggi da allineare.
+    const menu = lastKeyboard(calls)?.inline_keyboard.flat() ?? [];
+    expect(menu.some((b) => b.callback_data === "s:spesa")).toBe(false);
+
+    await handleUpdate(tap(2, "s:premi", 100), deps(store, tg));
+    const bottoni = lastKeyboard(calls)?.inline_keyboard.flat() ?? [];
+    expect(bottoni.find((b) => b.callback_data === "s:spesa")?.text).toBe("💸 Con acquisto (1)");
+    expect(bottoni.find((b) => b.callback_data === "s:gratis")?.text).toBe("🆓 Gratis (1)");
+
+    await handleUpdate(tap(3, "s:spesa", 100), deps(store, tg));
+    const elenco = String(lastWith(calls, "editMessageText")?.payload.text ?? "");
+    expect(elenco).toContain("1 concorso");
+    expect((await store.getUiState(CHAT))?.section).toBe("spesa");
+  });
+
+  it("scavalca il filtro \"solo senza acquisto\" e rispetta tutti gli altri", async () => {
+    // Il filtro personale dice l'esatto contrario della porta: lasciarlo agire
+    // darebbe un elenco vuoto per costruzione. Le stelle invece devono valere.
+    const store = createMemoryStore();
+    await store.upsertPrefs(prefs({ filters: { ...defaultFilters(), freeOnly: true, minScore: 50 } }));
+    await seed(store, [
+      { title: "Concorso con acquisto che vale", requiresPurchase: true, score: 90 },
+      { title: "Concorso con acquisto mediocre", requiresPurchase: true, score: 20 },
+      { title: "Concorso senza acquisto", requiresPurchase: false, score: 95 },
+    ]);
+    const { tg, calls } = makeTg();
+
+    await handleUpdate(command(1, "/spesa"), deps(store, tg));
+
+    const testo = String(lastWith(calls, "sendMessage")?.payload.text ?? "");
+    expect(testo).toContain("1 concorso");
+    const bottoni = lastKeyboard(calls)?.inline_keyboard.flat() ?? [];
+    expect(bottoni.some((b) => b.text.includes("che vale"))).toBe(true);
+    expect(bottoni.some((b) => b.text.includes("mediocre"))).toBe(false);
+    expect(bottoni.some((b) => b.text.includes("senza acquisto"))).toBe(false);
+
+    // Il numero sulla porta nasce dalla stessa query, quindi anche lui scavalca
+    // il filtro: se dicesse 0 mentre l'elenco ne mostra 1, mentirebbe.
+    await handleUpdate(tap(2, "s:premi", 100), deps(store, tg));
+    const porte = lastKeyboard(calls)?.inline_keyboard.flat() ?? [];
+    expect(porte.find((b) => b.callback_data === "s:spesa")?.text).toBe("💸 Con acquisto (1)");
+    expect(porte.find((b) => b.callback_data === "s:gratis")?.text).toBe("🆓 Gratis (1)");
+  });
+
+  it("senza concorsi con acquisto lo dice, e manda all'altra metà", async () => {
+    const store = createMemoryStore();
+    await store.upsertPrefs(prefs());
+    await seed(store, [{ title: "Concorso Barilla senza obbligo di acquisto", requiresPurchase: false }]);
+    const { tg, calls } = makeTg();
+
+    await handleUpdate(command(1, "/acquisto"), deps(store, tg));
+
+    const testo = String(lastWith(calls, "sendMessage")?.payload.text ?? "");
+    expect(testo).toContain("Nessun concorso con acquisto");
+    expect(testo).toContain("La metà opposta è in 🆓 Gratis");
+  });
+});
+
 describe("tipi di premio · le porte dal menù", () => {
   /** Archivio con un esemplare per tipo di premio, più uno che non c'entra. */
   async function archivio(): Promise<MemoryStore> {
@@ -2281,11 +2853,20 @@ describe("tipi di premio · le porte dal menù", () => {
       { title: "Weekend per due in Sardegna", tags: ["viaggio"], score: 60, requiresPurchase: true },
       { title: "Buoni spesa da 100 euro al supermercato", tags: ["buoni_spesa"], score: 50, requiresPurchase: true },
       { title: "Vinci una cucina moderna", tags: ["casa"], score: 40, requiresPurchase: true },
+      // Le due classi nuove: lo stesso item risponde a entrambe le domande
+      // ("è certo?" e "che cosa ricevo comprando?"), ed è per questo che le due
+      // porte si sovrappongono senza essere la stessa cosa.
+      {
+        title: "Premio certo Bolla: richiedi i calici in regalo",
+        tags: ["premio_certo", "omaggio_con_acquisto", "acquisto"],
+        score: 65,
+        requiresPurchase: true,
+      },
     ]);
     return store;
   }
 
-  it("il menù apre 🎁 Tipi di premio, con le cinque porte e i loro conteggi", async () => {
+  it("il menù apre 🎁 Tipi di premio, con le otto porte e i loro conteggi", async () => {
     const store = await archivio();
     const { tg, calls } = makeTg();
 
@@ -2301,14 +2882,19 @@ describe("tipi di premio · le porte dal menù", () => {
     // Un numero per porta, contato ADESSO: 1 per tipo, e 0 dove non c'è niente.
     const bottoni = lastKeyboard(calls)?.inline_keyboard.flat() ?? [];
     expect(bottoni.map((b) => b.text)).toEqual([
-      "💳 Gift card (1)", "🚗 Auto e moto (1)", "✈️ Viaggi (1)", "🛒 Buoni spesa (1)", "🆓 Gratis (0)",
-      "⬅️ Indietro", "🔄 Aggiorna", "🏠 Menù",
+      "💳 Gift card (1)", "🚗 Auto e moto (1)", "✈️ Viaggi (1)", "🛒 Buoni spesa (1)",
+      "🎁 Premio certo (1)", "🛍️ Omaggi con acquisto (1)",
+      "🆓 Gratis (0)", "💸 Con acquisto (6)",
+      // La porta alla pagina di wiki della sezione, che ora c'è su ogni schermata.
+      "❓ Aiuto", "⬅️ Indietro", "🔄 Aggiorna", "🏠 Menù",
     ]);
-    // Quattro porte su cinque hanno un tag; 🆓 Gratis riapre la sezione che il
-    // menù ha già, invece di duplicarla.
+    // Sei porte leggono un tag; le ultime due sono le metà dell'archivio e
+    // aprono sezioni loro (non duplicano niente: nel menù non ci sono).
     expect(bottoni.map((b) => b.callback_data)).toEqual([
-      "s:premi:giftcard", "s:premi:auto", "s:premi:viaggio", "s:premi:buoni_spesa", "s:gratis",
-      "back", "refresh", "home",
+      "s:premi:giftcard", "s:premi:auto", "s:premi:viaggio", "s:premi:buoni_spesa",
+      "s:premi:premio_certo", "s:premi:omaggio_con_acquisto",
+      "s:gratis", "s:spesa",
+      "s:aiuto:premi", "back", "refresh", "home",
     ]);
 
     // Ogni porta legge la sua sezione: si apre l'elenco, non si resta sulla
@@ -2387,6 +2973,107 @@ describe("tipi di premio · le porte dal menù", () => {
     const elenco = String(lastWith(calls, "editMessageText")?.payload.text ?? "");
     expect(elenco).toContain("Solo gratis (senza acquisto)");
     expect((await store.getUiState(CHAT))?.section).toBe("gratis");
+  });
+});
+
+describe("premi certi e omaggi con acquisto · due porte, due domande", () => {
+  /**
+   * Un premio certo con acquisto (entrambe le risposte), un omaggio senza la
+   * formula "premio certo", un premio certo gratuito e un concorso con acquisto
+   * che non è un omaggio: la matrice che distingue le due porte.
+   */
+  async function archivio(): Promise<MemoryStore> {
+    const store = createMemoryStore();
+    await store.upsertPrefs(prefs());
+    await seed(store, [
+      {
+        title: "Premio certo Bolla: richiedi i calici in regalo",
+        tags: ["premio_certo", "omaggio_con_acquisto", "acquisto"],
+        requiresPurchase: true,
+        score: 70,
+      },
+      {
+        title: "Raccolta punti Divella: richiedi la biscottiera",
+        tags: ["omaggio_con_acquisto", "acquisto", "raccolta_punti"],
+        requiresPurchase: true,
+        score: 60,
+      },
+      {
+        title: "Concorso gratuito con premio certo",
+        tags: ["premio_certo"],
+        requiresPurchase: false,
+        score: 50,
+      },
+      {
+        title: "Concorso Findus: vinci una gift card con lo scontrino",
+        tags: ["giftcard", "acquisto"],
+        requiresPurchase: true,
+        score: 80,
+      },
+    ]);
+    return store;
+  }
+
+  it("🎁 Premio certo tiene i garantiti e lascia fuori le estrazioni", async () => {
+    const store = await archivio();
+    const { tg, calls } = makeTg();
+
+    await handleUpdate(command(1, "/premio-certo"), deps(store, tg));
+    const testo = String(lastWith(calls, "sendMessage")?.payload.text ?? "");
+    expect(testo).toContain("🎁 Premio certo");
+    expect(testo).toContain("premio garantito");
+    const righe = lastKeyboard(calls)?.inline_keyboard.flat() ?? [];
+    expect(righe.some((b) => b.text.includes("Bolla"))).toBe(true);
+    expect(righe.some((b) => b.text.includes("Concorso gratuito con premio certo"))).toBe(true);
+    expect(righe.some((b) => b.text.includes("Findus"))).toBe(false);
+    expect(righe.some((b) => b.text.includes("Divella"))).toBe(false);
+  });
+
+  it("🛍️ Omaggi con acquisto tiene i regali e lascia fuori l'estrazione con scontrino", async () => {
+    const store = await archivio();
+    const { tg, calls } = makeTg();
+
+    await handleUpdate(command(1, "/omaggi"), deps(store, tg));
+    const testo = String(lastWith(calls, "sendMessage")?.payload.text ?? "");
+    expect(testo).toContain("🛍️ Omaggi con acquisto");
+    expect(testo).toContain("il premio è tuo, non si vince");
+    const righe = lastKeyboard(calls)?.inline_keyboard.flat() ?? [];
+    expect(righe.some((b) => b.text.includes("Bolla"))).toBe(true);
+    expect(righe.some((b) => b.text.includes("Divella"))).toBe(true);
+    expect(righe.some((b) => b.text.includes("Findus"))).toBe(false);
+    // Il premio certo gratuito non richiede acquisto: non è un omaggio con
+    // acquisto, ed è la differenza fra le due porte.
+    expect(righe.some((b) => b.text.includes("Concorso gratuito"))).toBe(false);
+  });
+
+  it("i comandi aprono le stesse porte dei bottoni", async () => {
+    const store = await archivio();
+    const { tg, calls } = makeTg();
+
+    await handleUpdate(command(1, "/premicerti"), deps(store, tg));
+    expect((await store.getUiState(CHAT))?.section).toBe("premi:premio_certo");
+    await handleUpdate(command(2, "/omaggio"), deps(store, tg));
+    expect((await store.getUiState(CHAT))?.section).toBe("premi:omaggio_con_acquisto");
+  });
+
+  it("senza premio certo l'elenco vuoto spiega cosa sono, non genericamente che non c'è niente", async () => {
+    const store = createMemoryStore();
+    await store.upsertPrefs(prefs());
+    await seed(store, [{ title: "Concorso Findus con lo scontrino", tags: ["acquisto"], requiresPurchase: true }]);
+    const { tg, calls } = makeTg();
+
+    await handleUpdate(command(1, "/premio-certo"), deps(store, tg));
+    const testo = String(
+      lastWith(calls, "editMessageText")?.payload.text ?? lastWith(calls, "sendMessage")?.payload.text ?? "",
+    );
+    expect(testo).toContain("Nessun premio certo adesso");
+    expect(testo).toContain("garantito a chi partecipa");
+
+    await handleUpdate(command(2, "/omaggi"), deps(store, tg));
+    const omaggi = String(
+      lastWith(calls, "editMessageText")?.payload.text ?? lastWith(calls, "sendMessage")?.payload.text ?? "",
+    );
+    expect(omaggi).toContain("Nessun omaggio con acquisto adesso");
   });
 });
 
@@ -3000,8 +3687,50 @@ describe("⬅️ Indietro · il posto dove si era", () => {
   });
 });
 
+describe("📊 I tuoi numeri", () => {
+  it("riassume archivio, decisioni e soldi in una schermata", async () => {
+    const store = createMemoryStore();
+    await store.upsertPrefs(prefs());
+    const ids = await seed(store, [
+      { title: "Concorso Barilla" },
+      { title: "Buono sconto Novi", kind: "coupon", deadline: "2026-11-25" },
+    ]);
+    await store.recordDelivery(CHAT, ids[0] as number, "won", NOW.toISOString());
+    // Un rimborso già tornato: 7,50 € recuperati, niente in attesa.
+    await store.claimRefund(CHAT, ids[1] as number, 750, false, NOW.toISOString());
+    await store.markRefundReceived(CHAT, ids[1] as number, NOW.toISOString());
+    const { tg, calls } = makeTg();
+
+    await handleUpdate(command(1, "/start"), deps(store, tg));
+    await handleUpdate(tap(2, "s:storico", 100), deps(store, tg));
+    // Il bottone sta nello storico, dove si guardano le proprie decisioni.
+    expect(etichette(calls)).toContain("📊 I tuoi numeri");
+    await handleUpdate(tap(3, "s:numeri", 100), deps(store, tg));
+
+    const testo = String(lastWith(calls, "editMessageText")?.payload.text ?? "");
+    expect(testo).toContain("📊 <b>I tuoi numeri</b>");
+    expect(testo).toContain("<b>1</b> concorsi");
+    expect(testo).toContain("<b>1</b> coupon");
+    expect(testo).toContain("🏆 Vinti: <b>1</b>");
+    expect(testo).toContain("recuperati: <b>7,50 €</b>");
+    expect(testo).toContain("In attesa: <b>0 €</b>");
+  });
+
+  it("senza rimborsi lo dice, invece di mostrare due zeri", async () => {
+    const store = createMemoryStore();
+    await store.upsertPrefs(prefs());
+    const { tg, calls } = makeTg();
+
+    await handleUpdate(command(1, "/numeri"), deps(store, tg));
+
+    const testo = String(lastWith(calls, "sendMessage")?.payload.text ?? "");
+    expect(testo).toContain("nessuna richiesta registrata");
+    expect(testo).not.toContain("recuperati:");
+  });
+});
+
 describe("❓ Aiuto · la wiki", () => {
-  it("si apre dal menù, una pagina alla volta, con le frecce che si fermano ai bordi", async () => {
+  it("è un indice di bottoni: un argomento per bottone, senza frecce", async () => {
     const store = createMemoryStore();
     await store.upsertPrefs(prefs());
     const { tg, calls } = makeTg();
@@ -3011,19 +3740,72 @@ describe("❓ Aiuto · la wiki", () => {
     await handleUpdate(command(1, "/start"), deps(store, tg));
     await handleUpdate(tap(2, "s:aiuto", 100), deps(store, tg));
 
-    expect(lastWith(calls, "editMessageText")?.payload.text).toContain("❓ <b>Aiuto · Come funziona</b>");
-    const prima = lastKeyboard(calls)?.inline_keyboard.flat() ?? [];
-    // All'inizio non c'è una pagina precedente, e la pagina è la prima.
-    expect(prima.some((b) => b.callback_data === "page:0")).toBe(false);
-    expect(prima.map((b) => b.callback_data)).toContain("page:1");
+    const indice = String(lastWith(calls, "editMessageText")?.payload.text ?? "");
+    expect(indice).toContain("❓ <b>Aiuto</b>");
+    // L'indice non si sfoglia: niente "pagina X di Y" e niente frecce.
+    expect(indice).not.toContain("Pagina 1 di");
+    const bottoni = lastKeyboard(calls)?.inline_keyboard.flat() ?? [];
+    expect(bottoni.some((b) => b.callback_data?.startsWith("page:"))).toBe(false);
+    // Un bottone per OGNI argomento, con il suo titolo: è la mappa della chat.
+    const argomenti = bottoni.filter((b) => b.callback_data?.startsWith("s:aiuto:"));
+    expect(argomenti).toHaveLength(HELP_PAGES.length);
+    expect(argomenti.find((b) => b.callback_data === "s:aiuto:coupon")?.text).toBe("💶 Coupon e rimborsi");
+    expect(argomenti.find((b) => b.callback_data === "s:aiuto:numeri")?.text).toBe("📊 I tuoi numeri");
 
-    await handleUpdate(tap(3, "page:1", 100), deps(store, tg));
+    // La pagina si apre dal suo bottone e porta il rimando alla sezione.
+    await handleUpdate(tap(3, "s:aiuto:coupon", 100), deps(store, tg));
+    const pagina = String(lastWith(calls, "editMessageText")?.payload.text ?? "");
+    expect(pagina).toContain("❓ <b>Aiuto · 💶 Coupon e rimborsi</b>");
+    expect(pagina).toContain("Rimborsi e cashback");
+    // Poche righe, come da regola della wiki.
+    expect(pagina.split("\n").length).toBeLessThanOrEqual(9);
+    const dentro = lastKeyboard(calls)?.inline_keyboard.flat() ?? [];
+    expect(dentro.find((b) => b.callback_data === "s:coupon")?.text).toBe("➡️ 💶 Coupon e rimborsi");
+    expect(dentro.some((b) => b.callback_data === "s:aiuto")).toBe(true);
+  });
 
-    const seconda = String(lastWith(calls, "editMessageText")?.payload.text ?? "");
-    expect(seconda).toContain("❓ <b>Aiuto · 🆕 Nuovi</b>");
-    // Ogni pagina si spiega in poche righe: una wiki che si scorre non si legge.
-    expect(seconda.split("\n").length).toBeLessThanOrEqual(8);
-    expect(seconda).toContain("Pagina 2 di");
+  it("ogni sezione ha il suo ❓ Aiuto, e apre la pagina di quella sezione", async () => {
+    const store = createMemoryStore();
+    await store.upsertPrefs(prefs());
+    await seed(store, [{ title: "Concorso Barilla" }]);
+    const { tg, calls } = makeTg();
+
+    await handleUpdate(command(1, "/start"), deps(store, tg));
+    await handleUpdate(tap(2, "s:oggi", 100), deps(store, tg));
+
+    const bottone = (lastKeyboard(calls)?.inline_keyboard.flat() ?? []).find(
+      (b) => b.callback_data === "s:aiuto:oggi",
+    );
+    expect(bottone?.text).toBe("❓ Aiuto");
+
+    await handleUpdate(tap(3, "s:aiuto:oggi", 100), deps(store, tg));
+    expect(String(lastWith(calls, "editMessageText")?.payload.text)).toContain(
+      "❓ <b>Aiuto · 📋 Oggi</b>",
+    );
+  });
+
+  it("ogni sezione con una pagina di wiki si porta dietro il bottone ❓ Aiuto", async () => {
+    const store = createMemoryStore();
+    await store.upsertPrefs(prefs());
+    const { tg, calls } = makeTg();
+    await handleUpdate(command(1, "/start"), deps(store, tg));
+
+    // Non solo gli elenchi: anche le schermate di scelta e i riepiloghi, che
+    // prima costringevano a tornare al menù per cercare l'argomento.
+    const attese: [string, string, string][] = [
+      ["s:impostazioni", "s:aiuto:impostazioni", "⚙️ Impostazioni"],
+      ["s:filtri", "s:aiuto:filtri", "🎛 Cosa vedi"],
+      ["s:fonti", "s:aiuto:fonti", "📡 Fonti"],
+      ["s:vantaggio", "s:aiuto:vantaggio", "🏁 Vantaggio di tempistica"],
+      ["s:storico", "s:aiuto:storico", "🗂 Storico"],
+    ];
+    let id = 2;
+    for (const [sezione, aiuto, titolo] of attese) {
+      await handleUpdate(tap(id++, sezione, 100), deps(store, tg));
+      expect(lastKeyboard(calls)?.inline_keyboard.flat().some((b) => b.callback_data === aiuto)).toBe(true);
+      await handleUpdate(tap(id++, aiuto, 100), deps(store, tg));
+      expect(String(lastWith(calls, "editMessageText")?.payload.text ?? "")).toContain(`❓ <b>Aiuto · ${titolo}</b>`);
+    }
   });
 
   it("una pagina inventata non apre il vuoto", async () => {

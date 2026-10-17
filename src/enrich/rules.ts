@@ -261,6 +261,15 @@ function participationFrom(haystack: NormalizedText): {
  * alternativa mappa su un tag esplicito.
  */
 const TAG_MATCHERS: { tag: string; pattern: RegExp }[] = [
+  // Premio certo: il premio è garantito a chi partecipa (non un'estrazione).
+  // Misurato il 17/10/2026 sull'archivio: 25 item, 24 dei quali dalla fonte
+  // dedicata di Scontrino Felice e uno da una sua scheda nei gratuiti. La
+  // formula è la loro, e le altre fonti non la usano: il tag resta stretto di
+  // proposito, perché "premio" da solo non vuol dire "garantito".
+  {
+    tag: "premio_certo",
+    pattern: /\bpremi[oi]\s+cert[oi]\b|\bpremio\s+garantit[oa]\b|\bvincita\s+garantita\b|\bpremio\s+assicurato\b|\bsicuro\s+premio\b/,
+  },
   { tag: "giftcard", pattern: /gift ?card|buono regalo|carta regalo|voucher/ },
   { tag: "buoni_spesa", pattern: /buoni spesa|buono spesa|spesa gratis/ },
   { tag: "contanti", pattern: /\b(contanti|cash|denaro|bonifico)\b/ },
@@ -314,6 +323,77 @@ const TAG_SCAN = new RegExp(
   TAG_MATCHERS.map((entry) => `(${nonCapturing(entry.pattern)})`).join("|"),
   "g",
 );
+
+/**
+ * Il regalo che si riceve comprando. Sono le formule delle pagine vere:
+ * "in regalo", "in omaggio", "richiedi il set tagliere", "ricevi il peluche",
+ * "ritira l'astuccio". Il vocabolario degli oggetti è quello misurato sulle
+ * pagine (17/10/2026): senza, "richiedi un buono" da solo confonderebbe il
+ * rimborso con l'omaggio, e il rimborso non è un regalo.
+ */
+const GIFT_WORDS = /\b(in regalo|in omaggio|omaggi[oaie]|premio\s+omaggio)\b/;
+const GIFT_VERB_OBJECT =
+  /\b(richied[ie]|richiedere|ricevi|ricevere|ritira|ritirare)\b[^.]{0,60}\b(set|kit|astuccio|teglia|calici|secchiello|borsa|bowl|ciotola|peluche|gadget|speaker|zaino|tagliere|piatti|insalatiera|tazza|borraccia|maglietta|cappellino|voucher|buono|gift ?card)\b/;
+/** Le parole che dicono "paghi meno", non "ricevi un regalo". */
+const NOT_A_GIFT = /\b(rimborso|cashback|buono sconto|coupon)\b/;
+/**
+ * Un'estrazione, non un premio garantito. Serve solo alle raccolte punti: una
+ * raccolta punti è la forma più comune di omaggio con acquisto (bollini → set di
+ * piatti), ma la stessa pagina può annunciare anche un'estrazione fra chi
+ * colleziona. In quel caso non è più "il premio è tuo".
+ */
+const DRAW_SIGNAL = /\b(vinci|vincere|in palio|estrazione|instant ?win|gratta e vinci)\b/;
+
+export interface ContentClassInput {
+  /** Testo già normalizzato (normalizeForExtraction). */
+  haystack: NormalizedText;
+  /**
+   * Tag già noti: quelli della fonte e quelli letti dal testo. "premio_certo"
+   * può arrivare da entrambi, e l'omaggio lo guarda per decidere.
+   */
+  tags: readonly string[];
+  requiresPurchase: boolean;
+}
+
+/**
+ * I tag di "contenuto di prima classe": premio certo e omaggio con acquisto.
+ *
+ * Sono due domande diverse sullo stesso item — "il premio me lo danno di
+ * sicuro?" e "che cosa ricevo comprando?" — e per questo si sovrappongono: nei
+ * dati di oggi 20 dei 21 omaggi sono anche premi certi (misura del 17/10/2026).
+ * Il tag dell'omaggio è DERIVATO: serve una spesa, e il testo deve dire che
+ * cosa si riceve (un oggetto, un voucher) oppure che il premio è certo. Un
+ * concorso con acquisto che estrae a sorte non è un omaggio, e un rimborso non
+ * è un regalo: entrambi restano fuori.
+ */
+export function contentClassTags(input: ContentClassInput): string[] {
+  const found: string[] = [];
+  const tags = new Set(input.tags);
+  if (tags.has("premio_certo")) found.push("premio_certo");
+  const text = input.haystack.lower;
+  if (!input.requiresPurchase) return found;
+  if (tags.has("coupon") || NOT_A_GIFT.test(text)) return found;
+  const regalo = GIFT_WORDS.test(text) || GIFT_VERB_OBJECT.test(text) || tags.has("premio_certo");
+  // Una raccolta punti con acquisto È un omaggio con acquisto: si compra per
+  // collezionare, e il premio si ritira. Resta fuori quando la pagina promette
+  // anche un'estrazione ("colleziona e vinci"): lì il premio non è più certo.
+  const raccolta = tags.has("raccolta_punti") && !DRAW_SIGNAL.test(text);
+  if (regalo || raccolta) found.push("omaggio_con_acquisto");
+  return found;
+}
+
+/**
+ * La stessa cosa partendo dal testo grezzo: è l'ingresso del riempimento
+ * dell'archivio, che non ha un testo già normalizzato da riusare.
+ */
+export function contentClassTagsFor(
+  text: string,
+  options: { tags?: readonly string[]; requiresPurchase: boolean },
+): string[] {
+  const haystack = normalizeForExtraction(text);
+  const tags = [...(options.tags ?? []), ...tagsFrom(haystack)];
+  return contentClassTags({ haystack, tags, requiresPurchase: options.requiresPurchase });
+}
 
 function tagsFrom(haystack: NormalizedText): string[] {
   const found = new Set<string>();
@@ -441,6 +521,11 @@ export function enrichWithRules(item: RawItem, source: { tags: string[] }, now: 
   const { participation, requiresPurchase, effort } = participationFrom(haystack);
   const tags = [...new Set([...source.tags, ...tagsFrom(haystack)])];
   if (requiresPurchase && !tags.includes("acquisto")) tags.push("acquisto");
+  // I due tag di contenuto nascono qui, con la stessa funzione che usa il
+  // riempimento dell'archivio (scripts/backfill-tags.ts): una definizione sola.
+  for (const tag of contentClassTags({ haystack, tags, requiresPurchase })) {
+    if (!tags.includes(tag)) tags.push(tag);
+  }
 
   return { deadline, prize, participation, prizeValue, effort, requiresPurchase, tags, aiUsed: false };
 }

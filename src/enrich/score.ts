@@ -31,7 +31,11 @@ export const SCORE_WEIGHTS = {
   favoriteBrand: 10,
 } as const;
 
-const BONUS_PATTERN = /\b(gift ?card|buono spesa|contanti|in palio|montepremi|premio immediato|vincita sicura)\b/;
+// Il premio certo è un segnale di qualità, non un tipo: vale quanto una gift card
+// o un premio immediato, ed è il "5" che il commento di favoriteBrand prende
+// come misura. Senza, un premio garantito peserebbe come un'estrazione.
+const BONUS_PATTERN =
+  /\b(gift ?card|buono spesa|contanti|in palio|montepremi|premio immediato|vincita sicura|premi[oi] cert[oi])\b/;
 
 function daysUntil(deadline: string, now: Date): number {
   const [y, m, d] = deadline.split("-").map(Number);

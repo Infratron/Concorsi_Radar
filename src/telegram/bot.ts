@@ -14,7 +14,7 @@ import {
   withFilterChange,
   type FilterChange,
 } from "../filters.ts";
-import { brandChoices, isBrandId } from "../config/brands.ts";
+import { brandChoices, brandLabel, isBrandId } from "../config/brands.ts";
 import { diagnosiFonti, riepilogoDiagnosi } from "../sources-health.ts";
 import { rescoreRow } from "../enrich/score.ts";
 import { mergedBrands, mergedWeights } from "../pipeline.ts";
@@ -24,6 +24,7 @@ import type { TelegramUpdate } from "./api.ts";
 import type { NotifyDeps } from "./digest.ts";
 import { regolamentoUrl } from "./digest.ts";
 import { localDateString, sourceLabel, startOfLocalDay } from "./format.ts";
+import { parseEuroInput, refundAmountFor } from "../refunds.ts";
 import { leadHours, summarizeLead } from "../enrich/lead.ts";
 import { BRANDS_PAGE_SIZE, PAGE_SIZE, SHARE_BASE_DEFAULT } from "./keyboard.ts";
 import { SCORE_MAX, SCORE_MIN, hourLabel, parseQuietRange, toggleDigestHour } from "./prefs-config.ts";
@@ -180,12 +181,34 @@ function intentForCommand(command: string, args: string): Intent | null {
       return { kind: "section", section: "salvati" };
     case "/storico":
       return { kind: "section", section: "storico" };
+    case "/numeri":
+      return { kind: "section", section: "numeri" };
     case "/coupon":
-    case "/rimborsi":
+    case "/offerte":
       return { kind: "section", section: "coupon" };
+    // /rimborsi è il SEGUITO del coupon, non la sua vetrina: qui ci sono le
+    // richieste fatte da questa chat e quanto denaro deve ancora tornare.
+    case "/rimborsi":
+    case "/cashback":
+      return { kind: "section", section: "rimborsi" };
     case "/gratis":
     case "/gratuiti":
       return { kind: "section", section: "gratis" };
+    // La gemella di /gratis: i concorsi dove una spesa serve. Le due sezioni sono
+    // le due metà dell'archivio, e si apre allo stesso modo, con un comando.
+    case "/spesa":
+    case "/acquisto":
+    case "/acquisti":
+      return { kind: "section", section: "spesa" };
+    // Le due classi di contenuto nuove: un premio certo e un omaggio che si
+    // riceve comprando. Sono porte di 🎁 Tipi di premio, quindi la scorciatoia
+    // apre la stessa sezione del bottone (una query sola, un conteggio solo).
+    case "/premio-certo":
+    case "/premicerti":
+      return { kind: "section", section: "premi:premio_certo" };
+    case "/omaggi":
+    case "/omaggio":
+      return { kind: "section", section: "premi:omaggio_con_acquisto" };
     // L'archivio completo: tutto quello che è passato dal bot, chiusi compresi.
     case "/archivio":
     case "/passati":
@@ -327,11 +350,26 @@ function toastFor(intent: Intent, prefs: Prefs): string | null {
     case "decision":
       return intent.action === "save"
         ? "⭐ In watchlist"
-        : intent.action === "ign"
-          ? "🚫 Ignorato: i filtri si adattano"
-          : "🏆 Complimenti!";
+        : intent.action === "unsave"
+          ? "☆ Fuori dalla watchlist"
+          : intent.action === "ign"
+            ? "🚫 Ignorato: i filtri si adattano"
+            : "🏆 Complimenti!";
     case "refresh":
       return "🔄 Aggiornato";
+    case "refund":
+      return intent.action === "receive"
+        ? "✅ Rimborso ricevuto"
+        : intent.action === "undo"
+          ? "↩️ Rimborso annullato"
+          : intent.action === "ask"
+            ? null
+            : "💰 Rimborso registrato";
+    case "refundAmount":
+      return intent.cents === null ? "Scrivi un importo, es. 7,50" : "💰 Rimborso registrato";
+    case "mutedBrand":
+      if (!isBrandId(intent.value)) return null;
+      return filterChangeLabel(prefs.filters, { kind: intent.muted ? "muteBrand" : "unmuteBrand", value: intent.value }, brandLabel);
     case "config":
       if (intent.key === "score") return `🔔 Avvisi sopra ${prefs.minScoreInstant}/100`;
       if (intent.key === "quiet") {
@@ -390,6 +428,14 @@ function baseSectionQuery(section: string, now: Date, lastCheckAt: string | null
   if (section === "gratis") {
     return { kinds: CONCORSI, statuses: ATTIVI, withoutPurchase: true, orderBy: "score" };
   }
+  // 💸 Con acquisto: la gemella di 🆓 Gratis, e l'unica altra sezione che divide
+  // l'archivio per quello che costa partecipare. Stesso vincolo sull'ARCHIVIO
+  // (`withPurchase`), non sul tag "acquisto": quel tag lo assegna l'arricchimento
+  // e può mancare. Insieme, le due sezioni coprono tutto: ogni concorso o chiede
+  // una spesa o non la chiede, e adesso c'è un posto per ciascuna metà.
+  if (section === "spesa") {
+    return { kinds: CONCORSI, statuses: ATTIVI, withPurchase: true, orderBy: "score" };
+  }
   // 🎁 Tipi di premio: `premi:<tag>` è "solo i concorsi con questo premio", in
   // INCLUSIONE (`tags`) — il contrario dei filtri personali, che sono esclusioni.
   // La visita d'ingresso alla schermata delle porte ha tag null e non passa da
@@ -399,17 +445,38 @@ function baseSectionQuery(section: string, now: Date, lastCheckAt: string | null
   if (premio?.tag) {
     return { kinds: CONCORSI, statuses: ATTIVI, tags: [premio.tag], orderBy: "score" };
   }
-  // 💶 Coupon: l'ordine è quello di arrivo (il default dello store), non il
-  // punteggio: fra buoni sconto "quale vale la pena" non vuol dire niente, mentre
-  // "quale è arrivato adesso" sì — un coupon vecchio è un coupon scaduto.
+  // 💶 Coupon: la sezione ha gli stessi tagli dei concorsi — tutti, oggi, ultimi
+  // 7 giorni, in scadenza — più la fetta dei rimborsi. La regola di fondo è una
+  // sola e vale per tutte: fuori i buoni la cui validità dichiarata è passata
+  // (`deadlineNotBefore`), perché al negozio il codice non passa più. Chi non
+  // dichiara una validità resta in tutte le viste: "non lo so" non è una prova,
+  // e la vita corta dei coupon la misura comunque la pulizia periodica
+  // (COUPON_TTL_DAYS in src/enrich/freshness.ts).
   //
-  // La validità è un filtro, non una decorazione: passata la data dichiarata il
-  // buono non si può più spendere, quindi esce dall'elenco (e dal numero sul
-  // bottone, che conta la stessa query). Chi non dichiara una validità resta:
-  // "non lo so" non è una prova, e la vita corta dei coupon la misura comunque
-  // la pulizia periodica (COUPON_TTL_DAYS in src/enrich/freshness.ts).
-  if (section === "coupon") {
-    return { kinds: COUPON, statuses: ATTIVI, deadlineNotBefore: localDateString(now) };
+  // L'ordine è quello di arrivo (il default dello store), non il punteggio: fra
+  // buoni sconto "quale vale la pena" non vuol dire niente, mentre "quale è
+  // arrivato adesso" sì — un coupon vecchio è un coupon scaduto. Solo ⏳ In
+  // scadenza cambia criterio, e allora è la data a comandare.
+  if (section === "coupon" || section.startsWith("coupon-")) {
+    const base = { kinds: COUPON, statuses: ATTIVI, deadlineNotBefore: localDateString(now) };
+    // 📋 Oggi e 📅 7 giorni guardano quando il coupon È ARRIVATO (first_seen_at),
+    // come le omonime sezioni dei concorsi: sono le novità, non le scadenze.
+    if (section === "coupon-oggi") return { ...base, since: startOfLocalDay(now) };
+    if (section === "coupon-settimana") {
+      return { ...base, since: new Date(now.getTime() - WEEK_MS).toISOString() };
+    }
+    // ⏳ In scadenza è l'altra domanda: quali buoni finiscono entro 7 giorni.
+    // Qui serve una data dichiarata, quindi `deadlineBefore` (che esclude i null)
+    // e non `deadlineNotBefore`; l'ordine è per data, chi chiude prima in cima.
+    if (section === "coupon-scadenze") {
+      return { ...base, deadlineBefore: shiftDate(localDateString(now), 7), orderBy: "deadline" };
+    }
+    // ↩️ Rimborsi e cashback: le offerte in cui si compra e tornano soldi
+    // ("spendi e riprendi", rimborsi, cashback). Il tag lo mettono le fonti che
+    // le pubblicano, quindi è una fetta dichiarata e non una deduzione dal
+    // titolo; i buoni da ritagliare restano in 🗂 Tutti.
+    if (section === "coupon-rimborsi") return { ...base, tags: ["cashback"] };
+    return base;
   }
   // I concorsi delle marche seguite: stessa forma delle altre sezioni di
   // suggerimento (attivi, solo concorsi, dal punteggio più alto), il filtro sulle
@@ -507,11 +574,19 @@ const SEZIONI_FILTRATE = new Set([
  * un filtro vale, perché anche lì il bot sta suggerendo cosa guardare.
  */
 function isFilteredSection(section: string): boolean {
-  return SEZIONI_FILTRATE.has(section) || section.startsWith("premi:");
+  // Anche le viste dei coupon (`coupon-oggi`, `coupon-scadenze`…) sono sezioni
+  // che suggeriscono cosa guardare, quindi i filtri della chat valgono lì come
+  // nella sezione intera.
+  return SEZIONI_FILTRATE.has(section) || section.startsWith("premi:") || section.startsWith("coupon-");
 }
 
 function sectionQuery(section: string, now: Date, lastCheckAt: string | null, filters: ChatFilters): ItemQuery {
   const base = baseSectionQuery(section, now, lastCheckAt);
+  // 💸 Con acquisto scavalca UNO solo dei filtri: "solo senza acquisto". Quello
+  // acceso dice l'esatto contrario della porta, e lasciarlo agire darebbe un
+  // elenco vuoto per costruzione (requires_purchase = 0 e = 1 insieme). Le altre
+  // preferenze — fonti, tag, stelle, marche — valgono come in ogni sezione.
+  if (section === "spesa") return filtersFor({ ...filters, freeOnly: false }, base);
   // La sezione dei preferiti è filtrata sulle marche seguite per definizione,
   // acceso o no il filtro "solo le marche seguite": quella è la sua ragione
   // d'essere, non una preferenza da accendere ogni volta.
@@ -537,7 +612,9 @@ function isListSection(section: string): boolean {
     section === "ignorati" ||
     section === "preferiti-lista" ||
     section === "coupon" ||
+    section.startsWith("coupon-") ||
     section === "gratis" ||
+    section === "spesa" ||
     section.startsWith("premi:") ||
     section.startsWith("cerca:") ||
     section.startsWith("archivio")
@@ -585,9 +662,23 @@ async function loadScreenData(
   const salvati = sortByDeadline(await store.listDeliveredItems(chatId, "saved", 200));
   // Gli elenchi dello storico si leggono solo quando servono: nel menù di tutti i
   // giorni sarebbero due query in più per niente.
-  const storico = state.section === "storico" || SEZIONI_CONSEGNA.has(state.section);
+  // 📊 I tuoi numeri conta le stesse decisioni dello storico, quindi le legge
+  // nello stesso posto: senza questa riga direbbe zero vinti a chi ne ha vinti.
+  const storico =
+    state.section === "storico" || state.section === "numeri" || SEZIONI_CONSEGNA.has(state.section);
   const vinti = storico ? await store.listDeliveredItems(chatId, "won", 200) : [];
   const ignorati = storico ? await store.listDeliveredItems(chatId, "ignored", 200) : [];
+  // 💰 Rimborsi: i totali servono al menù (il numero sul bottone) e alla sua
+  // schermata; la lista si carica solo aprendola. Una scheda di coupon porta la
+  // SUA richiesta, per mostrare se il denaro è tornato.
+  const rimborsiNecessari =
+    state.section === "menu" || state.section === "rimborsi" ||
+    state.section === "numeri" || state.openItemId !== null;
+  const refundTotals = rimborsiNecessari
+    ? await store.refundTotals(chatId)
+    : { pendingCents: 0, receivedCents: 0, pending: 0, received: 0, unknownPending: 0, unknownReceived: 0, capPending: 0, capReceived: 0 };
+  const allRefunds =
+    state.section === "rimborsi" && state.openItemId === null ? await store.listRefunds(chatId, 200) : [];
 
   // I conteggi sono query SQL di conteggio: non caricano righe, quindi il menù
   // resta leggero anche con un archivio grande.
@@ -596,7 +687,7 @@ async function loadScreenData(
   // senza filtri si contano solo per poter dire "vedi 12 di 40".
   const [
     archiveTotal, contest, news, coupon, contestTotal, newsTotal, couponTotal,
-    nuovi, oggi, settimana, scadenze, quantiScaduti, gratis,
+    nuovi, oggi, settimana, scadenze, quantiScaduti,
   ] = await Promise.all([
       store.countItems({}),
       store.countItems(filtersFor(filters, { kinds: CONCORSI })),
@@ -611,20 +702,17 @@ async function loadScreenData(
       store.countItems(scadenza),
       // Il conteggio dei chiusi serve solo allo storico: fuori da lì resta a zero.
       state.section === "storico" ? store.countItems(scaduti) : Promise.resolve(0),
-      // 🆓 Gratis: il numero è quello che il bottone mostra, e nasce dalla STESSA
-      // query della sezione — così il conto non può dire una cosa e l'elenco
-      // un'altra (è la regola delle caselle finali del README).
-      store.countItems(sectionQuery("gratis", now, null, filters)),
     ]);
-  // I tipi di premio si contano solo quando si apre 🎁 Tipi di premio: cinque
-  // query per un menù che non mostra quei numeri sarebbero lavoro per niente, a
-  // ogni schermata. 🆓 Gratis è già contata qui sopra: la stessa query non si
-  // paga due volte.
+  // Le porte di 🎁 Tipi di premio si contano solo quando si apre quella
+  // schermata: sei query per un menù che non mostra quei numeri sarebbero lavoro
+  // per niente, a ogni schermata. Anche le due metà dell'archivio (🆓 Gratis e
+  // 💸 Con acquisto) stanno qui: il numero sul bottone nasce dalla STESSA query
+  // della sezione, così il conto non può dire una cosa e l'elenco un'altra (è la
+  // regola delle caselle finali del README).
   const premi: Record<string, number> = {};
   if (state.section === "premi") {
     for (const voce of PRIZE_QUICK_FILTERS) {
-      premi[voce.section] =
-        voce.section === "gratis" ? gratis : await store.countItems(sectionQuery(voce.section, now, null, filters));
+      premi[voce.section] = await store.countItems(sectionQuery(voce.section, now, null, filters));
     }
   }
 
@@ -638,12 +726,14 @@ async function loadScreenData(
       : 0;
 
   const counts: ScreenCounts = {
-    nuovi, oggi, settimana, scadenze, news, contest, coupon, contestTotal, newsTotal, couponTotal, gratis,
+    nuovi, oggi, settimana, scadenze, news, contest, coupon, contestTotal, newsTotal, couponTotal,
     seguite: filters.favoriteBrands.length,
     concorsiMarche,
     premi,
     filtri: activeFilterCount(filters),
     salvati: salvati.length, vinti: vinti.length, ignorati: ignorati.length, scaduti: quantiScaduti,
+    rimborsi: refundTotals.pending, rimborsiCents: refundTotals.pendingCents,
+    rimborsiCap: refundTotals.capPending > 0,
   };
 
   const wantsList = state.openItemId === null && isListSection(state.section);
@@ -673,7 +763,23 @@ async function loadScreenData(
       : await store.queryItems({ ...query, limit: PAGE_SIZE, offset: pagina * PAGE_SIZE });
   }
 
-  const openItem = state.openItemId !== null ? await store.getItem(state.openItemId) : null;
+  // 💰 Rimborsi non è un elenco di item: il totale da paginare è quello delle
+  // richieste, e la pagina si ritaglia in fondo (dopo che è stata riportata
+  // dentro l'intervallo valido).
+  if (state.section === "rimborsi" && state.openItemId === null) total = allRefunds.length;
+
+  // La domanda sull'importo (`importo:<id>`) non apre la scheda, ma ha bisogno
+  // del titolo dell'offerta: l'item si legge lo stesso, una volta sola.
+  const idAperto =
+    state.openItemId ??
+    (state.section.startsWith("importo:") ? Number.parseInt(state.section.slice("importo:".length), 10) : null);
+  const openItem = idAperto !== null && Number.isFinite(idAperto) ? await store.getItem(idAperto) : null;
+  // La richiesta di rimborso si legge solo sulla scheda di un coupon: sugli altri
+  // item non esiste, e una query per niente a ogni scheda sarebbe lavoro sprecato.
+  const refund =
+    state.openItemId !== null && openItem?.kind === "coupon"
+      ? await store.getRefund(chatId, state.openItemId)
+      : null;
   const decision = state.openItemId !== null ? await decisionFor(deps, chatId, state.openItemId) : null;
   // Il vantaggio di tempistica si legge solo dove serve: una query sulle viste a
   // ogni menù sarebbe sprecata. La scheda invece porta l'anticipo del SUO
@@ -735,7 +841,15 @@ async function loadScreenData(
   // delle pagine sarebbe 1 e la pagina tornerebbe a zero: è il motivo per cui,
   // uscendo dall'ennesimo concorso aperto da pagina 5 di 6, ci si ritrovava a
   // pagina 1. La pagina dell'elenco resta quella che era.
-  const page = state.openItemId !== null ? state.page : Math.min(Math.max(state.page, 0), pagine - 1);
+  // `aiuto` tiene `page: -1` per l'INDICE degli argomenti: è un valore legittimo,
+  // non una pagina fuori intervallo, e il clamp a zero lo riporterebbe alla prima
+  // pagina — cioè l'indice non esisterebbe mai.
+  const page =
+    state.openItemId !== null
+      ? state.page
+      : state.section === "aiuto"
+        ? Math.min(state.page, pagine - 1)
+        : Math.min(Math.max(state.page, 0), pagine - 1);
 
   return {
     counts,
@@ -746,6 +860,9 @@ async function loadScreenData(
     isAdmin,
     openItem,
     decision,
+    refund,
+    refunds: allRefunds.slice(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE),
+    refundTotals,
     regolamentoUrl: openItem ? regolamentoUrl(openItem) : null,
     sources: fonti,
     runs: state.section === "fonti" ? await store.recentRuns(4) : [],
@@ -892,7 +1009,14 @@ export async function handleUpdate(update: TelegramUpdate, deps: BotDeps): Promi
     if (fromCommand) intent = fromCommand;
     // Senza comando: se la chat è in modalità ricerca, il testo è la ricerca.
     else if (state.section === "cerca" && text.length > 0) intent = { kind: "section", section: `cerca:${truncate(text, 40)}` };
-    else intent = { kind: "home" };
+    // In 💰 la risposta è l'importo: "7,50" è il rimborso di quell'offerta. Un
+    // testo che non è una cifra non registra niente e la domanda resta lì.
+    else if (state.section.startsWith("importo:") && text.length > 0) {
+      const itemId = Number.parseInt(state.section.slice("importo:".length), 10);
+      intent = Number.isFinite(itemId)
+        ? { kind: "refundAmount", itemId, cents: parseEuroInput(text) }
+        : { kind: "home" };
+    } else intent = { kind: "home" };
   }
 
   // 🧾 Log delle raccolte è la schermata dell'admin: il bottone non compare
@@ -909,12 +1033,64 @@ export async function handleUpdate(update: TelegramUpdate, deps: BotDeps): Promi
       return { handled: true };
     }
     const kind = intent.action === "save" ? "saved" : intent.action === "ign" ? "ignored" : "won";
-    const ripetuta = await store.isDelivered(chatId, intent.itemId, kind);
-    await store.recordDelivery(chatId, intent.itemId, kind, nowIso);
-    // Decidere due volte la stessa cosa (doppio tocco sullo stesso bottone, o
-    // scheda e digest dello stesso concorso) non sposta i pesi due volte.
-    if (intent.action !== "won" && !ripetuta) {
-      await store.bumpWeights(chatId, weightsFor(item.tags, intent.action === "save" ? 1 : -1));
+    if (intent.action === "unsave") {
+      // Uscire dalla watchlist è la stessa decisione al contrario: la riga
+      // sparisce e il peso dei gusti torna com'era. Se non c'era niente da
+      // togliere (doppio tocco, o un bottone vecchio) non si annulla due volte.
+      if (await store.deleteDelivery(chatId, intent.itemId, "saved")) {
+        await store.bumpWeights(chatId, weightsFor(item.tags, -1));
+      }
+    } else {
+      const ripetuta = await store.isDelivered(chatId, intent.itemId, kind);
+      await store.recordDelivery(chatId, intent.itemId, kind, nowIso);
+      // Decidere due volte la stessa cosa (doppio tocco sullo stesso bottone, o
+      // scheda e digest dello stesso concorso) non sposta i pesi due volte.
+      if (intent.action !== "won" && !ripetuta) {
+        await store.bumpWeights(chatId, weightsFor(item.tags, intent.action === "save" ? 1 : -1));
+      }
+    }
+  }
+
+  if (intent.kind === "refund") {
+    const item = await store.getItem(intent.itemId);
+    // Solo i coupon hanno un rimborso: un callback vecchio su un concorso non
+    // deve poter creare una riga che la schermata non sa mostrare.
+    if (!item || item.kind !== "coupon") {
+      intent = { kind: "home" };
+    } else if (intent.action === "claim") {
+      const amount = refundAmountFor(item);
+      await store.claimRefund(chatId, item.id, amount.cents ?? 0, amount.cap, nowIso);
+    } else if (intent.action === "receive") {
+      await store.markRefundReceived(chatId, item.id, nowIso);
+    } else if (intent.action === "undo") {
+      await store.undoRefund(chatId, item.id);
+    }
+  }
+
+  if (intent.kind === "refundAmount" && intent.cents !== null) {
+    const item = await store.getItem(intent.itemId);
+    if (item?.kind === "coupon") {
+      await store.claimRefund(chatId, item.id, intent.cents, false, nowIso);
+    }
+  }
+
+  if (intent.kind === "mutedBrand") {
+    // Un id fuori registro non spegne niente: un bottone vecchio non deve poter
+    // nascondere mezzo archivio con una marca che non esiste.
+    if (isBrandId(intent.value)) {
+      const eraSeguita = prefs.filters.favoriteBrands.includes(intent.value);
+      prefs = {
+        ...prefs,
+        filters: withFilterChange(prefs.filters, {
+          kind: intent.muted ? "muteBrand" : "unmuteBrand",
+          value: intent.value,
+        }),
+      };
+      await store.upsertPrefs(prefs);
+      // Spegnere una marca che seguivi toglie anche il +10 dai suoi concorsi:
+      // senza ricalcolo resterebbe scritto in archivio e ricomparirebbe al
+      // momento di riaccenderla, senza che nessuno l'abbia più scelta.
+      if (intent.muted && eraSeguita) await rescoreBrand(deps, intent.value, now);
     }
   }
 

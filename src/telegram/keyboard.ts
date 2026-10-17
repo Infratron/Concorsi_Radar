@@ -1,5 +1,6 @@
-import type { ItemRow, Prefs } from "../types.ts";
-import type { BrandChoice } from "../config/brands.ts";
+import type { ItemRow, Prefs, RefundRow } from "../types.ts";
+import { refundAmountFor, refundAmountLabel, refundDeclaredLabel, refundMenuLabel } from "../refunds.ts";
+import { brandLabel, type BrandChoice } from "../config/brands.ts";
 import { truncate } from "../lib/text.ts";
 import {
   ARCHIVIO_KINDS,
@@ -13,7 +14,9 @@ import {
   type FilterSource,
 } from "../filters.ts";
 import type { InlineKeyboardButton, InlineKeyboardMarkup } from "./api.ts";
-import { daysLeft } from "./format.ts";
+import { daysLeft, formatDate, sourceLabel } from "./format.ts";
+import { dutiesFor } from "../enrich/proof.ts";
+import type { HelpPage } from "./help.ts";
 import { DIGEST_HOURS, hourLabel, hourShort, quietRange, shiftQuietRange, stepScore } from "./prefs-config.ts";
 
 /**
@@ -79,6 +82,12 @@ export function menuKeyboard(counts: {
   news: number;
   /** Coupon e rimborsi in archivio: è il numero sul bottone 💶. */
   coupon: number;
+  /** Rimborsi richiesti e non ancora ricevuti: è il numero sul bottone 💰. */
+  rimborsi: number;
+  /** Denaro in attesa, in centesimi: l'etichetta del bottone lo dice a colpo d'occhio. */
+  rimborsiCents: number;
+  /** true se qualche attesa è un tetto: l'etichetta dice "fino a". */
+  rimborsiCap: boolean;
   /**
    * Quante marche segui. È il numero sul bottone, e conta le MARCHE, non i loro
    * concorsi: la voce si chiama "Marche seguite" e un conteggio di concorsi lì
@@ -103,6 +112,11 @@ export function menuKeyboard(counts: {
       // Le offerte su una riga tutta loro: non sono concorsi e non stanno in
       // mezzo ai concorsi, ma devono restare a un tocco dal menù.
       [button(`💶 Coupon e rimborsi (${counts.coupon})`, "s:coupon")],
+      // 💰 Rimborsi sta sotto i coupon perché è il seguito naturale: prima trovi
+      // l'offerta, poi la richiedi e la segui qui. Il numero sono le richieste
+      // ancora in attesa, e quando c'è denaro da riavere l'importo è sul bottone:
+      // "quanto mi deve ancora tornare?" è la domanda per cui esiste la sezione.
+      [button(refundMenuLabel(counts.rimborsi, counts.rimborsiCents, counts.rimborsiCap), "s:rimborsi")],
       [button(`🏷 Marche seguite (${counts.seguite})`, "s:preferiti"), button(filtriButtonLabel(counts.filtri), "s:filtri")],
       [button("📡 Fonti", "s:fonti"), button("⚙️ Impostazioni", "s:impostazioni")],
       // ❓ Aiuto sta accanto ad Aggiorna perché è l'altra cosa che si fa quando
@@ -128,13 +142,32 @@ export function filtriButtonLabel(quanti: number): string {
  * pagina di aiuto. Un callback in più sarebbe una strada in più da tenere
  * allineata per fare la stessa cosa.
  */
-export function helpKeyboard(pagina: { index: number; total: number }): InlineKeyboardMarkup {
-  return {
-    inline_keyboard: [
-      pagesRow(pagina.index, pagina.total, { prec: "⬅️ Prec", succ: "Succ ➡️" }),
-      [button("⬅️ Indietro", "back"), button("🏠 Menù", "home")],
-    ],
-  };
+export function helpKeyboard(pages: HelpPage[], active: number | null): InlineKeyboardMarkup {
+  const righe: InlineKeyboardButton[][] = [];
+  if (active === null) {
+    // L'indice: un bottone per argomento, due per riga. È una mappa, non un
+    // percorso — con le frecce si poteva solo scorrere, e chi cercava
+    // "Impostazioni" doveva toccare quindici volte e ricordarsi dov'era.
+    const bottoni = pages.map((pagina) => button(pagina.title, `s:aiuto:${pagina.id}`));
+    for (let index = 0; index < bottoni.length; index += 2) righe.push(bottoni.slice(index, index + 2));
+    righe.push([button("🏠 Menù", "home")]);
+    return { inline_keyboard: righe };
+  }
+  const pagina = pages[active];
+  // Dalla pagina si va DIRETTAMENTE alla sezione che spiega: è la cosa che si
+  // vuole fare dopo aver letto "come funziona".
+  if (pagina?.section) righe.push([button(`➡️ ${pagina.title}`, `s:${pagina.section}`)]);
+  righe.push([button("❓ Tutti gli argomenti", "s:aiuto"), button("🏠 Menù", "home")]);
+  return { inline_keyboard: righe };
+}
+
+/**
+ * Il bottone contestuale "❓ Aiuto" di una sezione, quando la wiki la spiega.
+ * Sta in fondo all'elenco (non nella riga di navigazione) perché è una cosa che
+ * si cerca, non una cosa che si fa a ogni schermata.
+ */
+export function helpRow(page: HelpPage | null): InlineKeyboardButton[][] {
+  return page === null ? [] : [[button("❓ Aiuto", `s:aiuto:${page.id}`)]];
 }
 
 /** Nome leggibile e corto di una fonte: in un bottone ci sta una riga sola. */
@@ -175,6 +208,13 @@ export function filtriKeyboard(prefs: Prefs, info: { sources: number; spenti: nu
   ]);
   righe.push(starKeyboard(filtro.minScore));
   righe.push([button(`🏷 Marche seguite (${filtro.favoriteBrands.length})`, "s:preferiti")]);
+  // Le marche spente si riaccendono da qui: una marca spenta non compare in
+  // nessun elenco, quindi senza questa porta non ci sarebbe modo di tornarci.
+  righe.push([
+    filtro.mutedBrands.length === 0
+      ? done("🔕 Marche spente (0)")
+      : button(`🔕 Marche spente (${filtro.mutedBrands.length})`, "s:filtri-marche"),
+  ]);
   righe.push([button(`📡 Scegli le fonti (${info.sources - info.spenti}/${info.sources})`, "s:filtri-fonti")]);
   return { inline_keyboard: [...righe, ...navRows()] };
 }
@@ -241,6 +281,19 @@ export function filtriFontiKeyboard(
 }
 
 /**
+ * 🔕 Marche spente: l'unico posto da cui si riaccendono. Un bottone per marca
+ * (sono poche, si spengono una alla volta guardando una scheda), più il ritorno
+ * a 🎛 Cosa vedi.
+ */
+export function filtriMarcheKeyboard(muted: string[]): InlineKeyboardMarkup {
+  const rows: InlineKeyboardButton[][] = muted.map((id) => [
+    button(`🔔 ${brandLabel(id)}`, `um:${id}`),
+  ]);
+  rows.push([button("🎛 Cosa vedi", "s:filtri"), button("🏠 Menù", "home")]);
+  return { inline_keyboard: rows };
+}
+
+/**
  * La coda standard di ogni schermata: indietro, aggiorna, menù.
  *
  * `back` non è un salto al menù: torna alla schermata da cui si è arrivati, con
@@ -296,6 +349,22 @@ export function storicoKeyboard(counts: {
     inline_keyboard: [
       [button(`🏆 Vinti (${counts.vinti})`, "s:vinti"), button(`⌛ Scaduti (${counts.scaduti})`, "s:scaduti")],
       [button(`🚫 Ignorati (${counts.ignorati})`, "s:ignorati"), button(`📚 Archivio (${counts.archivio})`, "s:archivio")],
+      // Il riepilogo sta qui e non nel menù: è la sintesi di queste tre cose,
+      // quindi si legge dal posto dove si guardano le proprie decisioni.
+      [button("📊 I tuoi numeri", "s:numeri")],
+      navRow(),
+    ],
+  };
+}
+
+/**
+ * 📊 I tuoi numeri: leggere e basta. Le due scorciatoie sono le sezioni da cui
+ * si possono ancora cambiare le cose (storico e rimborsi).
+ */
+export function numeriKeyboard(): InlineKeyboardMarkup {
+  return {
+    inline_keyboard: [
+      [button("🗂 Storico", "s:storico"), button("💰 Rimborsi", "s:rimborsi")],
       navRow(),
     ],
   };
@@ -363,13 +432,41 @@ export function listKeyboard(
   pagina: { index: number; total: number },
   /** Soglia attiva, oppure null dove le stelle non hanno senso (news, storico). */
   stelleMinime: number | null = null,
+  /**
+   * Righe in più prima della navigazione: le viste di una sezione (per ora solo
+   * 💶 Coupon, che ha gli stessi tagli dei concorsi). Restano DENTRO l'elenco, non
+   * in una schermata a parte: cambiare vista è un tocco, e i concorsi che stai
+   * guardando non spariscono per andare a scegliere il filtro.
+   */
+  extraRows: InlineKeyboardButton[][] = [],
 ): InlineKeyboardMarkup {
   const rows: InlineKeyboardButton[][] = items.map((item) => [
     button(itemButtonLabel(item, now), `open:${item.id}`),
   ]);
 
   if (pagina.total > 1) rows.push(pagesRow(pagina.index, pagina.total, { prec: "⬅️ Prec", succ: "Succ ➡️" }));
+  for (const riga of extraRows) rows.push(riga);
   if (stelleMinime !== null) rows.push(starKeyboard(stelleMinime));
+  rows.push(navRow());
+  return { inline_keyboard: rows };
+}
+
+/**
+ * 💰 I miei rimborsi: una riga per richiesta, con lo stato in testa e la cifra
+ * accanto al titolo. Il tocco apre la scheda dell'offerta, dove stanno ✅
+ * L'ho ricevuto e ↩️ Annulla: qui si legge quanto manca, lì si cambia.
+ */
+export function rimborsiKeyboard(
+  refunds: RefundRow[],
+  pagina: { index: number; total: number },
+): InlineKeyboardMarkup {
+  const rows: InlineKeyboardButton[][] = refunds.map((refund) => [
+    button(
+      `${refund.receivedAt === null ? "⏳" : "✅"} ${refundAmountLabel(refund)} · ${truncate(refund.item.title, 38)}`,
+      `open:${refund.itemId}`,
+    ),
+  ]);
+  if (pagina.total > 1) rows.push(pagesRow(pagina.index, pagina.total, { prec: "⬅️ Prec", succ: "Succ ➡️" }));
   rows.push(navRow());
   return { inline_keyboard: rows };
 }
@@ -415,9 +512,57 @@ export function shareUrlFor(item: Pick<ItemRow, "url" | "kind">, base = SHARE_BA
   return `${origine}/share?u=${encodeURIComponent(item.url)}&t=${encodeURIComponent(testo)}`;
 }
 
+/** Il giorno dopo, da una data ISO `YYYY-MM-DD`: serve a chiudere un evento di un
+ * giorno solo (Google Calendar vuole inizio e fine, e la fine è il giorno dopo). */
+function giornoDopo(iso: string): string {
+  const [anno, mese, giorno] = iso.split("-").map(Number);
+  return new Date(Date.UTC(anno, mese - 1, giorno + 1)).toISOString().slice(0, 10);
+}
+
 /**
- * Scheda di un concorso: le tre decisioni (il tipo già scelto resta visibile ma
- * inerte), i link, la condivisione e il ritorno all'elenco da cui si è arrivati.
+ * 📅 Promemoria: la data che conta, già dentro il calendario del telefono.
+ *
+ * Nessuna integrazione e nessun token: è il link pubblico di Google Calendar con
+ * l'evento compilato (`action=TEMPLATE`). Il giorno è quello che si perde più
+ * facilmente — la scadenza del concorso, o la data entro cui chiedere il premio
+ * quando il bando la dichiara — e su un coupon la validità del buono.
+ *
+ * Null quando non c'è una data, su un articolo (non c'è niente da fare) e sui
+ * rimborsi senza data: un evento inventato sarebbe peggio di nessun bottone.
+ */
+export function calendarUrlFor(item: ItemRow, now: Date): { label: string; url: string } | null {
+  if (item.kind === "news") return null;
+  const doveri = dutiesFor(item, now);
+  const richiesta = doveri.claim?.kind === "date" ? doveri.claim.date : null;
+  const giorno = (richiesta ?? item.deadline ?? "").slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(giorno)) return null;
+
+  const titolo = richiesta ? `Richiedi il premio: ${item.title}` : `Scade: ${item.title}`;
+  const dettagli = [
+    richiesta ? `Premio da richiedere entro il ${formatDate(giorno)}: non arriva da solo.` : "",
+    item.prize ? `Premio: ${item.prize}` : "",
+    item.url,
+    `Fonte: ${sourceLabel(item.sourceId)}`,
+  ]
+    .filter((riga) => riga.length > 0)
+    .join("\n");
+  const query = new URLSearchParams({
+    action: "TEMPLATE",
+    text: truncate(titolo, 90),
+    dates: `${giorno.replace(/-/g, "")}/${giornoDopo(giorno).replace(/-/g, "")}`,
+    details: truncate(dettagli, 500),
+  });
+  return {
+    label: richiesta ? "📅 Richiedi il premio" : item.kind === "coupon" ? "📅 Scadenza coupon" : "📅 Scadenza",
+    url: `https://calendar.google.com/calendar/render?${query.toString()}`,
+  };
+}
+
+/**
+ * Scheda di un concorso: le tre decisioni, i link, la condivisione e il ritorno
+ * all'elenco da cui si è arrivati. 🚫 e 🏆, una volta scelti, restano visibili
+ * ma inerti; ⭐ invece si toglie (☆ Togli dalla watchlist), perché una watchlist
+ * da cui non si esce non è una lista, è una condanna.
  */
 export function cardKeyboard(
   item: ItemRow,
@@ -425,12 +570,61 @@ export function cardKeyboard(
   regolamentoUrl: string | null,
   /** Origine della pagina /share (vedi shareUrlFor). */
   shareBase = SHARE_BASE_DEFAULT,
+  /** La richiesta di rimborso di QUESTA chat, se c'è (solo coupon). */
+  refund: RefundRow | null = null,
+  /**
+   * L'istante della schermata, per il promemoria in calendario. Null (o assente)
+   * = nessun bottone 📅: chi costruisce la tastiera per un test non deve
+   * inventarsi una data.
+   */
+  now: Date | null = null,
+  /**
+   * true = la marca di questo item è già spenta in questa chat. Non si legge da
+   * `prefs` qui dentro perché la tastiera è una funzione pura dell'item: chi la
+   * costruisce sa cosa ha scelto l'utente, e glielo dice.
+   */
+  brandMuted = false,
 ): InlineKeyboardMarkup {
+  // Su un coupon 🏆 Vinto non vuol dire niente: un buono sconto non si vince, si
+  // spende. Restano le due decisioni che hanno senso (tenerlo d'occhio, scartarlo)
+  // e al loro posto arriva il bottone del rimborso.
+  // ⭐ è un interruttore, non un timbro: da salito deve poter scendere. Un
+  // "già fatto" inerte lasciava il concorso in watchlist per sempre, senza un
+  // posto da cui toglierlo — la watchlist stessa lo mostra, ma aprirlo non
+  // offriva niente. L'etichetta dice l'azione (togliere), non lo stato: lo stato
+  // è già nella riga "⭐ Nella tua watchlist" sopra la scheda.
   const decisioni: InlineKeyboardButton[] = [
-    decision === "saved" ? done("⭐ In watchlist") : button("⭐ Watchlist", `save:${item.id}`),
+    decision === "saved"
+      ? button("☆ Togli dalla watchlist", `unsave:${item.id}`)
+      : button("⭐ Watchlist", `save:${item.id}`),
     decision === "ignored" ? done("🚫 Ignorato") : button("🚫 Non mi interessa", `ign:${item.id}`),
-    decision === "won" ? done("🏆 Vinto") : button("🏆 Vinto", `won:${item.id}`),
   ];
+  if (item.kind !== "coupon") {
+    decisioni.push(
+      decision === "won" ? done("🏆 Vinto") : button("🏆 Vinto", `won:${item.id}`),
+    );
+  }
+  const dichiarato = item.kind === "coupon" ? refundAmountFor(item) : null;
+  const rimborso: InlineKeyboardButton[] =
+    dichiarato === null
+      ? []
+      : refund === null
+        ? [
+            // Con una cifra dichiarata si registra subito; senza (percentuale,
+            // 1+1) la chat deve chiedere quanto è tornato indietro davvero.
+            dichiarato.cents === null
+              ? button("💰 Ho richiesto · quanto?", `rf:ask:${item.id}`)
+              : button(`💰 Ho richiesto · ${refundDeclaredLabel(dichiarato)}`, `rf:claim:${item.id}`),
+          ]
+        : refund.receivedAt === null
+          ? [
+              button(`✅ L'ho ricevuto · ${refundAmountLabel(refund)}`, `rf:recv:${item.id}`),
+              button("↩️ Annulla", `rf:undo:${item.id}`),
+            ]
+          : [
+              button(`✅ Ricevuto · ${refundAmountLabel(refund)}`, "noop"),
+              button("↩️ Annulla", `rf:undo:${item.id}`),
+            ];
 
   // 🔗 Apri e 📤 Condividi sulla stessa riga: sono le due cose che si fanno con
   // quel link. 📄 Regolamento resta a parte quando c'è, che sono tre bottoni
@@ -439,8 +633,27 @@ export function cardKeyboard(
     { text: "🔗 Apri", url: item.url },
     { text: "📤 Condividi", url: shareUrlFor(item, shareBase) },
   ];
-  const righe: InlineKeyboardButton[][] = [decisioni, link];
-  if (regolamentoUrl) righe.push([{ text: "📄 Regolamento", url: regolamentoUrl }]);
+  const righe: InlineKeyboardButton[][] = [decisioni];
+  if (rimborso.length > 0) righe.push(rimborso);
+  // 🔕 Mai più questa marca: la granularità che mancava fra "questo concorso"
+  // e "questa fonte". È un interruttore e si vede: da spenta il bottone riaccende
+  // (utile sulle schede della ⭐ Watchlist, che i filtri non li applicano).
+  if (typeof item.brand === "string" && item.brand.length > 0) {
+    const marca = truncate(brandLabel(item.brand), 26);
+    righe.push([
+      brandMuted
+        ? button(`🔔 Rivedi ${marca}`, `um:${item.brand}`)
+        : button(`🔕 Mai più ${marca}`, `mb:${item.brand}`),
+    ]);
+  }
+  righe.push(link);
+  // 📄 e 📅 insieme: sono le due cose che si fanno con una data in mano —
+  // leggerla e metterla in agenda.
+  const promemoria = now === null ? null : calendarUrlFor(item, now);
+  const info: InlineKeyboardButton[] = [];
+  if (regolamentoUrl) info.push({ text: "📄 Regolamento", url: regolamentoUrl });
+  if (promemoria) info.push({ text: promemoria.label, url: promemoria.url });
+  if (info.length > 0) righe.push(info);
   righe.push([button("⬅️ Torna all'elenco", "back"), button("🔄 Aggiorna", "refresh"), button("🏠 Menù", "home")]);
   return { inline_keyboard: righe };
 }
@@ -649,11 +862,39 @@ export function backKeyboard(): InlineKeyboardMarkup {
  * `marche` fa lo stesso per la sezione dei preferiti: quando è vuota perché non
  * segui ancora nessuna marca, il posto dove rimediare è la schermata delle marche.
  */
-export function emptyKeyboard(conFiltri: boolean, marche = false): InlineKeyboardMarkup {
+export function emptyKeyboard(
+  conFiltri: boolean,
+  marche = false,
+  extraRows: InlineKeyboardButton[][] = [],
+): InlineKeyboardMarkup {
   const rows: InlineKeyboardButton[][] = [];
   if (marche) rows.push([button("🏷 Marche seguite", "s:preferiti")]);
+  // Anche con l'elenco vuoto le viste restano a portata: "oggi non c'è niente"
+  // non deve essere un vicolo cieco se gli ultimi 7 giorni sono pieni.
+  for (const riga of extraRows) rows.push(riga);
   if (conFiltri) rows.push([button("🎛 Cosa vedi", "s:filtri")]);
   return { inline_keyboard: [...rows, ...navRows()] };
+}
+
+/**
+ * 💶 Le viste dei coupon: gli stessi tagli delle sezioni dei concorsi — oggi,
+ * ultimi 7 giorni, in scadenza — più la fetta dei rimborsi, che è quella con
+ * dentro gli "spendi e riprendi" (soldi indietro su una spesa, non un buono da
+ * ritagliare).
+ *
+ * Perché sotto l'elenco e non in una schermata a parte: la sezione dei coupon
+ * non ha i conteggi del menù, quindi una porta in più non direbbe niente che
+ * l'elenco non dica già. Qui invece si cambia taglio restando sulle offerte, e
+ * la vista attiva è marcata con • come nelle impostazioni.
+ */
+export function couponViewsRows(active: string): InlineKeyboardButton[][] {
+  const vista = (label: string, section: string): InlineKeyboardButton =>
+    button(active === section ? `• ${label}` : label, `s:${section}`);
+  return [
+    [vista("🗂 Tutti", "coupon"), vista("📋 Oggi", "coupon-oggi")],
+    [vista("📅 7 giorni", "coupon-settimana"), vista("⏳ In scadenza", "coupon-scadenze")],
+    [vista("↩️ Rimborsi e cashback", "coupon-rimborsi")],
+  ];
 }
 
 /** Testo leggibile della sezione, per l'intestazione delle schermate. */
@@ -707,6 +948,8 @@ export function sectionTitle(section: string): string {
       return "Watchlist";
     case "storico":
       return "Storico";
+    case "numeri":
+      return "I tuoi numeri";
     case "vinti":
       return "Concorsi vinti";
     case "scaduti":
@@ -717,8 +960,23 @@ export function sectionTitle(section: string): string {
       return "Articoli e news";
     case "coupon":
       return "Coupon e rimborsi";
+    // Le viste dei coupon hanno un titolo che dice il taglio: senza, in cima a
+    // un elenco di buoni sconto, "Oggi" e "In scadenza" sarebbero la stessa
+    // parola con due significati diversi.
+    case "coupon-oggi":
+      return "Coupon di oggi";
+    case "coupon-settimana":
+      return "Coupon degli ultimi 7 giorni";
+    case "coupon-scadenze":
+      return "Coupon in scadenza";
+    case "coupon-rimborsi":
+      return "Rimborsi e cashback";
+    case "rimborsi":
+      return "I miei rimborsi";
     case "gratis":
       return "Solo gratis (senza acquisto)";
+    case "spesa":
+      return "Solo con acquisto (spesa richiesta)";
     case "fonti":
       return "Fonti e raccolte";
     case "vantaggio":
@@ -729,6 +987,8 @@ export function sectionTitle(section: string): string {
       return "Cosa vedi";
     case "filtri-fonti":
       return "Scegli le fonti";
+    case "filtri-marche":
+      return "Marche spente";
     case "preferiti":
       return "Marche seguite";
     case "diagnostica":

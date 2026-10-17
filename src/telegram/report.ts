@@ -75,7 +75,12 @@ export function esitoTentativo(attempt: SourceAttempt): EsitoFonte {
  * l'ultimo successo — sono due colonne diverse di proposito, perché "quando ho
  * provato" e "quando è andata bene" non coincidono quasi mai.
  */
-export function esitoUltimoTentativo(source: SourceRow): EsitoFonte {
+export function esitoUltimoTentativo(
+  // Solo le colonne dell'ultimo tentativo: le stesse righe arrivano anche da D1
+  // grezze (scripts/checklist.ts), e chiedere una SourceRow intera costringerebbe
+  // a inventare i campi della config che qui non servono.
+  source: Pick<SourceRow, "lastStatus" | "lastError" | "lastItems" | "lastRunAt" | "lastOkAt">,
+): EsitoFonte {
   const fallito = source.lastRunAt !== null && source.lastOkAt !== source.lastRunAt;
   return esitoFonte({
     httpStatus: source.lastStatus,

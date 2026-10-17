@@ -194,8 +194,18 @@ export function priorityPool(
 }
 
 /**
- * Il file di configurazione resta la fonte di verità per come si legge una
- * fonte (pattern, tetti); D1 conserva lo stato (etag, ultimo giro, fallimenti).
+ * Come si legge una fonte: pattern e tetti vengono dalla riga di D1 quando ci
+ * sono, altrimenti dalla configurazione.
+ *
+ * Perché non "la configurazione vince sempre": la raccolta gira su GitHub
+ * Actions, che esegue il codice del COMMIT, mentre `npm run db:sync` semina la
+ * configurazione del working tree. Con la precedente precedenza un pattern
+ * cambiato ma non ancora pubblicato non arrivava mai al runner: la sitemap
+ * veniva letta senza filtro, si prendeva le prime venti pagine (catalogo) e la
+ * fonte sembrava vuota pur essendo configurata bene. Misurato il 17/10/2026 su
+ * Penny ed Eurospin: 40 pagine lette, 40 scartate, zero item.
+ *
+ * Lo stato runtime (etag, ultimo giro, fallimenti) resta in D1 e non si tocca.
  * Una fonte in config ma non ancora seminata in D1 funziona comunque, solo
  * senza cache ETag e senza conteggio dei fallimenti finché non lanci db:seed.
  */
@@ -204,8 +214,8 @@ export function resolveSource(row: SourceRow): SourceRow {
   if (!config) return row;
   return {
     ...row,
-    includePattern: config.includePattern,
-    maxItems: config.maxItems,
+    includePattern: row.includePattern ?? config.includePattern,
+    maxItems: row.maxItems ?? config.maxItems,
   };
 }
 

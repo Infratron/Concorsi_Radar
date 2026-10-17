@@ -317,6 +317,12 @@ export interface ItemQuery {
   /** Tiene fuori gli item che hanno uno di questi tag (filtri della chat). */
   excludeTags?: string[];
   /**
+   * Tiene fuori gli item di queste marche (filtri della chat). Un item senza
+   * marca resta: non si può escludere quello che non si conosce, e sparire per
+   * un dato mancante è peggio che mostrare una riga di troppo.
+   */
+  excludeBrands?: string[];
+  /**
    * Solo gli item che hanno ALMENO uno di questi tag. È l'inclusione che mancava:
    * `excludeTags` spegne un tipo, questo lo chiede. Serve alle sezioni per tipo
    * di premio (🎁 Tipi di premio), dove la domanda è "che premio cerchi?" e non
@@ -326,6 +332,13 @@ export interface ItemQuery {
   tags?: string[];
   /** Solo item senza obbligo di acquisto (filtro "solo gratis" della chat). */
   withoutPurchase?: boolean;
+  /**
+   * Solo item per cui una spesa serve (💸 Con acquisto). È il gemello di
+   * `withoutPurchase`: insieme coprono le due metà dell'archivio, e la sezione
+   * che le mostra è la stessa domanda girata — "quali posso fare senza
+   * comprare?" e "quali chiedono di comprare?".
+   */
+  withPurchase?: boolean;
   /**
    * Solo gli item di queste marche ("Marche seguite"). Elenco vuoto =
    * nessun filtro, come tutti gli altri campi di questa query.
@@ -375,6 +388,14 @@ export interface ChatFilters {
    * valgono di più (vedi brandsOnly).
    */
   favoriteBrands: string[];
+  /**
+   * Le marche che questa chat non vuole più vedere. È l'esclusione che mancava
+   * accanto a fonti, categorie e tipi: la marca è la granularità che si sceglie
+   * guardando un concorso ("basta con questa insegna"), non una fonte intera.
+   * Si accende dalla scheda del concorso, con 🔕 Mai più, e si spegne da
+   * 🎛 Cosa vedi.
+   */
+  mutedBrands: string[];
   /**
    * true = negli elenchi resta SOLO quello che è di una marca seguita. È il
    * filtro vero, quello che nasconde: si accende a parte, perché "seguo
@@ -463,6 +484,47 @@ export interface RobotsRow {
   origin: string;
   body: string;
   fetchedAt: string;
+}
+
+/**
+ * Un rimborso (o cashback) che QUESTA chat ha chiesto indietro.
+ *
+ * Una riga per coppia chat+offerta: chiedere due volte lo stesso rimborso non
+ * raddoppia niente. `amountCents` a 0 vuol dire "il bando non dichiara una
+ * cifra fissa" (una percentuale, un 1+1): il totale del denaro non lo conta, e
+ * la chat lo dice invece di far finta che sia zero.
+ */
+export interface RefundRow {
+  chatId: number;
+  itemId: number;
+  /** L'offerta a cui si riferisce, intera: la scheda e l'elenco la mostrano. */
+  item: ItemRow;
+  amountCents: number;
+  /** true = la cifra è un tetto ("fino a 100 €"), non l'importo esatto. */
+  cap: boolean;
+  claimedAt: string;
+  /** null finché il denaro non è tornato davvero. */
+  receivedAt: string | null;
+}
+
+/** I quattro numeri della schermata 💰 Rimborsi, e del bottone nel menù. */
+export interface RefundTotals {
+  pendingCents: number;
+  receivedCents: number;
+  pending: number;
+  received: number;
+  /** Richieste senza cifra fissa, ancora in attesa: non entrano in pendingCents. */
+  unknownPending: number;
+  /** Richieste senza cifra fissa, già ricevute: non entrano in receivedCents. */
+  unknownReceived: number;
+  /**
+   * Richieste il cui importo è un tetto ("fino a 100 €"), ancora in attesa.
+   * Sono GIÀ dentro pendingCents: il totale è il massimo che può tornare, e la
+   * chat lo dice ("fino a") invece di spacciarlo per la cifra esatta.
+   */
+  capPending: number;
+  /** Richieste con tetto già ricevute: stesso discorso per receivedCents. */
+  capReceived: number;
 }
 
 /** Binding Workers AI (sottoinsieme usato). */

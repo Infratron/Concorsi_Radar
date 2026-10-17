@@ -5,6 +5,8 @@ import type {
   ItemStatus,
   NewItem,
   Prefs,
+  RefundRow,
+  RefundTotals,
   RobotsRow,
   RunRow,
   Sighting,
@@ -110,8 +112,41 @@ export interface Store {
   listChats(): Promise<number[]>;
   isDelivered(chatId: number, itemId: number, kind: string): Promise<boolean>;
   recordDelivery(chatId: number, itemId: number, kind: string, at: string): Promise<void>;
+  /**
+   * Cancella una decisione (⭐ salvato, 🚫 ignorato, 🏆 vinto) per questa chat.
+   * Restituisce true se c'era davvero qualcosa: chi chiama usa la risposta per
+   * non annullare due volte lo stesso effetto (i pesi dei gusti).
+   */
+  deleteDelivery(chatId: number, itemId: number, kind: string): Promise<boolean>;
   lastDeliveryAt(chatId: number, kind: string): Promise<string | null>;
   bumpWeights(chatId: number, delta: Record<string, number>): Promise<void>;
+
+  // --- rimborsi richiesti (per chat) ---
+  /**
+   * Registra che questa chat ha chiesto indietro il rimborso di un'offerta.
+   * Idempotente: la seconda volta non tocca né la cifra né lo stato, così un
+   * doppio tocco (o un messaggio vecchio) non riporta in attesa un rimborso già
+   * ricevuto.
+   */
+  claimRefund(chatId: number, itemId: number, amountCents: number, cap: boolean, at: string): Promise<void>;
+  /**
+   * Segna il rimborso come ricevuto. Restituisce false se non c'era niente da
+   * segnare (nessuna richiesta, o già ricevuto): la chat lo dice invece di
+   * fingere che sia andata.
+   */
+  markRefundReceived(chatId: number, itemId: number, at: string): Promise<boolean>;
+  /** Cancella la richiesta di questa chat: torna come se non l'avesse mai fatta. */
+  undoRefund(chatId: number, itemId: number): Promise<boolean>;
+  /** La richiesta di questa chat per quell'offerta, o null. */
+  getRefund(chatId: number, itemId: number): Promise<RefundRow | null>;
+  /**
+   * Le richieste di questa chat, quelle in attesa per prime e poi le più
+   * recenti: è l'ordine in cui si guardano ("cosa deve ancora tornare?" prima
+   * di "cosa è già tornato?").
+   */
+  listRefunds(chatId: number, limit?: number): Promise<RefundRow[]>;
+  /** Il denaro in attesa e quello già recuperato, senza caricare le righe. */
+  refundTotals(chatId: number): Promise<RefundTotals>;
 
   // --- interfaccia in chat ---
   /** Stato del messaggio unico della chat; null la prima volta. */
