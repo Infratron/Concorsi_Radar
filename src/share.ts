@@ -86,6 +86,7 @@ export function renderSharePage(target: string, text: string): string {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light">
 <title>Condividi</title>
 <style>
   /*
@@ -94,9 +95,11 @@ export function renderSharePage(target: string, text: string): string {
    * per il tema scuro: dentro il browser in-app di Telegram (che forza il tema
    * scuro sulle pagine) il risultato era testo chiaro su carta chiara — la frase
    * non si leggeva affatto. Una pagina sempre chiara, con i suoi colori scritti,
-   * non ha un secondo tema che possa sovrapporsi.
+   * non ha un secondo tema che possa sovrapporsi. "only light" è in più, per il
+   * "force dark" di Chrome su Android: senza, la WebView può invertire i colori
+   * anche quando la pagina dichiara di essere chiara.
    */
-  :root { color-scheme: light; }
+  :root { color-scheme: light; color-scheme: only light; }
   html, body { background: #eef1f5; }
   body { font: 16px/1.5 -apple-system, system-ui, sans-serif; margin: 0; padding: 24px 18px 40px; color: #111827; }
   h1 { font-size: 20px; margin: 0 0 4px; color: #111827; }

@@ -73,6 +73,9 @@ describe("condivisione · la pagina /share", () => {
     // Testo scuro su carta chiara, con il tema di sistema disattivato: dentro la
     // WebView di Telegram il tema scuro forzato rendeva la frase illeggibile.
     expect(html).toContain("color-scheme: light");
+    // Opt-out esplicito dal "force dark" di Chrome Android.
+    expect(html).toContain("color-scheme: only light");
+    expect(html).toContain('<meta name="color-scheme" content="light">');
     expect(html).not.toContain("prefers-color-scheme");
     expect(html).toContain(".frase { margin: 0 0 12px; color: #111827;");
     // Il testo si legge su ogni schermo: contrasto misurato, non "a occhio".
