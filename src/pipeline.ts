@@ -1,4 +1,13 @@
-import type { AiBinding, FetchLike, IngestContext, RawItem, SourceAttempt, SourceRow, SourceRunResult } from "./types.ts";
+import type {
+  AiBinding,
+  Category,
+  FetchLike,
+  IngestContext,
+  RawItem,
+  SourceAttempt,
+  SourceRow,
+  SourceRunResult,
+} from "./types.ts";
 import type { Store } from "./db/store.ts";
 import { CPU_BUDGET_MS, MAX_RULES_LOOKUPS_PER_RUN, MAX_SOURCES_PER_RUN, SOURCES, USER_AGENT } from "./config/sources.ts";
 import { ingestSource, robotsAllows } from "./ingest/index.ts";
@@ -58,6 +67,13 @@ export interface IngestOptions {
    * fonti invisibili per sempre.
    */
   allSources?: boolean;
+  /**
+   * Con `allSources`, le categorie che passano davanti a parità di
+   * trascuratezza (a rango intercalato: vedi priorityPool). La raccolta di
+   * riserva del Worker mette qui `coupon`: se Actions tace per ore, la sezione
+   * 💶 Coupon non deve restare ferma.
+   */
+  priorityCategories?: Category[];
   /**
    * Millisecondi di tempo di PARETE che la ricerca dei regolamenti può spendere
    * in questo giro (default RULES_LOOKUP_BUDGET_MS). È un tetto diverso dal
@@ -133,6 +149,48 @@ export function dueSources(sources: SourceRow[], now: Date, max = MAX_SOURCES_PE
     })
     .sort((a, b) => (a.lastRunAt ?? "").localeCompare(b.lastRunAt ?? ""))
     .slice(0, Math.max(1, max));
+}
+
+/**
+ * Le fonti da provare quando la rotazione a slot non c'è (raccolta di riserva del
+ * Worker, o un `npm run ingest` a mano): dalla più trascurata, ma con una o più
+ * categorie che passano davanti.
+ *
+ * Perché il rango è intercalato e non un blocco: il budget di CPU del Worker
+ * lascia provare tre fonti per tick, quindi mettere tutte le coupon davanti
+ * vorrebbe dire non leggere mai un concorso finché Actions è ferma. Un coupon,
+ * una concorso, un coupon, un concorso: la categoria in priorità prende il primo
+ * posto e metà dei posti — abbastanza perché 💶 Coupon si riempia anche in un
+ * guasto lungo, non abbastanza da svuotare le altre sezioni.
+ *
+ * Dentro ogni gruppo resta l'ordine per trascuratezza (lastRunAt più vecchio per
+ * primo): così una fonte appena provata lascia il posto alle sorelle invece di
+ * essere riletta a ogni tick, e il "priorità" non diventa "sempre la stessa".
+ */
+export function priorityPool(
+  sources: SourceRow[],
+  max = sources.length,
+  priorityCategories: Category[] = [],
+): SourceRow[] {
+  const perTrascuratezza = (elenco: SourceRow[]): SourceRow[] =>
+    [...elenco].sort((a, b) => (a.lastRunAt ?? "").localeCompare(b.lastRunAt ?? ""));
+  const abilitate = sources.filter((source) => source.enabled);
+  const prime = perTrascuratezza(
+    abilitate.filter((source) => priorityCategories.includes(source.category)),
+  );
+  const altre = perTrascuratezza(
+    abilitate.filter((source) => !priorityCategories.includes(source.category)),
+  );
+
+  const ordinate: SourceRow[] = [];
+  const tetto = Math.max(1, max);
+  while (ordinate.length < tetto && (prime.length > 0 || altre.length > 0)) {
+    const prima = prime.shift();
+    if (prima) ordinate.push(prima);
+    const dopo = altre.shift();
+    if (dopo && ordinate.length < tetto) ordinate.push(dopo);
+  }
+  return ordinate;
 }
 
 /**
@@ -247,10 +305,7 @@ export async function runIngest(
 
   const pool = [...rows, ...synthesized].map(resolveSource);
   const due = options.allSources
-    ? pool
-        .filter((source) => source.enabled)
-        .sort((a, b) => (a.lastRunAt ?? "").localeCompare(b.lastRunAt ?? ""))
-        .slice(0, Math.max(1, options.maxSources ?? pool.length))
+    ? priorityPool(pool, options.maxSources ?? pool.length, options.priorityCategories)
     : dueSources(pool, now, options.maxSources ?? MAX_SOURCES_PER_RUN);
   const weights = await mergedWeights(deps.store);
   const brands = await mergedBrands(deps.store);

@@ -112,6 +112,11 @@ async function runCron(env: Env, cron: string, now: Date): Promise<void> {
     const summary: IngestSummary = await runIngest(deps, now, {
       allSources: true,
       maxSources: FALLBACK_MAX_SOURCES,
+      // Le fonti coupon davanti, a rango intercalato: durante un guasto lungo il
+      // budget di CPU lascia leggere poche fonti per tick, e senza questa riga
+      // 💶 Coupon si svuotava proprio quando serviva la riserva. Vedi
+      // priorityPool in src/pipeline.ts: coupon e concorsi si alternano.
+      priorityCategories: ["coupon"],
     });
     sourcesOk = summary.sourcesOk;
     sourcesFail = summary.sourcesFail;

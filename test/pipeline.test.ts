@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { createMemoryStore, type MemoryStore } from "../src/db/memory.ts";
-import { dueSources, expireOldItems, runIngest, type IngestSummary } from "../src/pipeline.ts";
+import { dueSources, expireOldItems, priorityPool, runIngest, type IngestSummary } from "../src/pipeline.ts";
 // La vita di un coupon è UNA regola, scritta dove si applica all'ingresso
 // (src/enrich/freshness.ts) e riusata dalla pulizia periodica: qui si legge da lì.
 import { COUPON_TTL_DAYS } from "../src/enrich/freshness.ts";
@@ -780,6 +780,81 @@ describe("pipeline · raccolta completa (GitHub Actions)", () => {
     expect(summary.itemsSeen).toBe(1);
     const letta = (await store.getSources()).find((row) => row.lastRunAt === NOW.toISOString());
     expect(letta?.id).toBe("largo-0");
+  });
+
+  it("con una categoria in priorità le sue fonti passano davanti, a rango intercalato", () => {
+    // La raccolta di riserva del Worker chiede proprio questo: coupon davanti,
+    // ma non tutte le coupon e basta — un coupon, un concorso, un coupon…
+    const coupon = (index: number): SourceRow => {
+      const row = source(`coupon-${index}`, `Coupon ${index}`, `https://c${index}.example/feed`);
+      row.category = "coupon";
+      return row;
+    };
+    const concorso = (index: number): SourceRow => {
+      const row = source(`concorso-${index}`, `Concorso ${index}`, `https://k${index}.example/feed`);
+      return row;
+    };
+    const pool = [concorso(0), concorso(1), coupon(0), concorso(2), coupon(1), concorso(3)];
+
+    const scelte = priorityPool(pool, 6, ["coupon"]).map((row) => row.id);
+    expect(scelte).toEqual(["coupon-0", "concorso-0", "coupon-1", "concorso-1", "concorso-2", "concorso-3"]);
+    // Con il tetto a tre slot passa comunque un concorso: la priorità non
+    // affama l'altra metà del radar.
+    expect(priorityPool(pool, 3, ["coupon"]).map((row) => row.id)).toEqual([
+      "coupon-0", "concorso-0", "coupon-1",
+    ]);
+    // Senza priorità resta l'ordine per trascuratezza di prima.
+    expect(priorityPool(pool, 2).map((row) => row.id)).toEqual(["concorso-0", "concorso-1"]);
+    // Una fonte spenta non entra mai.
+    const spenta = coupon(9);
+    spenta.enabled = false;
+    expect(priorityPool([spenta], 5, ["coupon"])).toEqual([]);
+  });
+
+  it("la raccolta di riserva legge le fonti coupon per prime, anche se più fresche", async () => {
+    const store = createMemoryStore();
+    const coupon = LARGHE.map((row, index) => {
+      const copia = { ...row, id: `coupon-${index}`, url: `https://coupon${index}.example/feed`, category: "coupon" as const };
+      return copia;
+    });
+    store.seedSources([...LARGHE, ...coupon]);
+    // Le coupon sono state lette ADESSO, i concorsi un'ora fa: senza priorità
+    // passerebbero i concorsi, che sono i più trascurati.
+    for (const row of coupon) {
+      await store.recordSourceRun(row.id, {
+        ok: true, httpStatus: 200, etag: null, lastModified: null, error: null, items: 1, now: NOW.toISOString(),
+      });
+    }
+    const vecchia = new Date(NOW.getTime() - 3_600_000).toISOString();
+    for (const row of LARGHE) {
+      await store.recordSourceRun(row.id, {
+        ok: true, httpStatus: 200, etag: null, lastModified: null, error: null, items: 1, now: vecchia,
+      });
+    }
+
+    const pagine = {
+      ...PAGINE_LARGHE,
+      ...Object.fromEntries(
+        coupon.map((row, index) => [
+          row.url,
+          rssFeed([{ title: `Buono sconto ${index}: coupon da stampare`, link: `https://coupon${index}.example/item`, description: "" }]),
+        ]),
+      ),
+    };
+    const summary = await runIngest(
+      { store, fetcher: fetcherFor(pagine), ai: null },
+      NOW,
+      { allSources: true, maxSources: 2, includeSynthesized: false, cpuBudgetMs: 1000, priorityCategories: ["coupon"] },
+    );
+
+    // Due slot: il primo è una coupon, il secondo un concorso.
+    expect(summary.sourcesDue).toBe(2);
+    const lette = (await store.getSources())
+      .filter((row) => row.lastRunAt === NOW.toISOString())
+      .map((row) => row.id)
+      .sort();
+    expect(lette.some((id) => id.startsWith("coupon-"))).toBe(true);
+    expect(lette.some((id) => id.startsWith("largo-"))).toBe(true);
   });
 });
 
