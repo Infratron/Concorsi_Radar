@@ -271,6 +271,34 @@ HTTP — **non passa da Telegram**: si salva come log dell'esecuzione e si legge
 due secret mancanti non si perde niente di quello che si vedeva prima: i log si
 scrivono comunque, e li legge il bot.
 
+### La sveglia: se GitHub tace, il Worker gli chiede di partire
+
+Il cron di GitHub non è un orologio. I workflow programmati arrivano in ritardo di
+qualche minuto e, quando va male, saltano per ore — è quello che è successo il 17
+di ottobre, con l'ultima raccolta ferma alle 03:21 e il radar che consegnava solo
+quello che aveva già. Il Worker però scatta ogni quindici minuti e legge la
+tabella `runs`: se la raccolta esterna è silenziosa da più di **45 minuti**, manda
+un `workflow_dispatch` al workflow della raccolta ([src/collect/dispatch.ts](src/collect/dispatch.ts))
+e la fa partire lui.
+
+Tre freni, perché una sveglia che suona sempre è peggio di nessuna: si suona solo
+oltre i 45 minuti di silenzio, non più di una volta ogni **20 minuti**, e senza
+token configurato non succede niente e non si scrive niente (un "sveglia non
+inviata" ogni quarto d'ora sarebbe rumore). La sveglia non sostituisce la
+raccolta: fa partire quella vera, dalla rete che le fonti lasciano passare. La
+raccolta di riserva del Worker resta per il guasto diverso — sveglia compresa che
+non funziona (token scaduto, workflow disattivato).
+
+Serve un **token fine-grained** di GitHub con permesso *Actions: Read and write*
+solo su questo repository, messo come secret del Worker (mai in un file):
+
+```bash
+npx wrangler secret put GITHUB_DISPATCH_TOKEN   # incolla il token quando lo chiede
+```
+
+Il repository e il workflow stanno in `[vars]` di `wrangler.toml`
+(`GITHUB_REPO`, `GITHUB_WORKFLOW`, `GITHUB_REF`).
+
 Se questi tre secret mancano, il radar non resta muto: il Worker se ne accorge e
 passa alla **raccolta di riserva**, e dopo **tre ore** senza una raccolta su
 GitHub arriva un **promemoria in chat all'admin** (`⚠️ Raccolta ferma da N ore`,
@@ -465,7 +493,7 @@ scrivere `/start`.
 [⭐ Watchlist (1)]    [📰 News (7)]
 [🔍 Cerca]            [🗂 Storico]
 [💶 Coupon e rimborsi (67)]
-[🏷 Preferiti per marca (4)] [🎛 Cosa vedi]
+[🏷 Marche seguite (4)] [🎛 Cosa vedi]
 [📡 Fonti]            [⚙️ Impostazioni]
 [🔄 Aggiorna]         [❓ Aiuto]
 ```
@@ -487,7 +515,7 @@ all'una e venticinque" quando il radar aveva raccolto mezz'ora prima.
 | 🗂 Storico | cosa è successo a quello che hai visto: 🏆 vinti, ⌛ chiusi (chi ha chiuso per ultimo in cima) e 🚫 scartati, che da lì puoi riprendere. Da qui si entra in 📚 Archivio |
 | 📚 Archivio | **tutto quello che il bot ha mai visto**, dal più recente: concorsi chiusi e coupon scaduti compresi, con le fette 🎁 Concorsi / 💶 Coupon / 📰 Articoli. I filtri di 🎛 Cosa vedi qui non valgono (qui sotto) |
 | 🔍 Cerca | scrivi una parola: il bot cancella il tuo messaggio e mostra i risultati (concorsi e news insieme, gli articoli marcati 📰, e adesso anche il passato, marcato ⛔) |
-| 🏷 Preferiti per marca | le marche che segui: filtrano i concorsi, valgono **10 punti in più** e hanno una sezione loro (qui sotto) |
+| 🏷 Marche seguite | le marche che segui (il numero sono **le marche**, non i loro concorsi): valgono **10 punti in più**, hanno una sezione loro e un avviso quando ne esce un concorso (qui sotto). Si chiamava "Preferiti per marca", e sembrava una watchlist |
 | 🎛 Cosa vedi | i tuoi filtri: quali tipi di concorso, quali categorie di fonti e quali fonti vuoi vedere (qui sotto) |
 | 📡 Fonti | quali fonti rispondono: ora, codice HTTP e item dell'ultimo tentativo, più le ultime raccolte (e le porte a 🌡 Diagnostica e — solo per l'admin — a 🧾 Log delle raccolte) |
 | 🏁 Vantaggio | `/vantaggio`: di quanto arriviamo prima degli aggregatori, e quanto spesso non arriviamo affatto |
@@ -646,10 +674,15 @@ le raccolte punti e la categoria scontrino, l'elenco passa da 3 a 2 concorsi, il
 digest di quella chat cambia e quello dell'altra no, e `♻️ Vedi di nuovo tutto`
 rimette l'archivio intero (31 controlli su 31).
 
-### 🏷 Preferiti per marca: le marche che segui
+### 🏷 Marche seguite: le marche che ti interessano
+
+Si chiamava **Preferiti per marca** e il nome ingannava: sembrava la watchlist
+dei concorsi messi da parte, mentre qui non si salva nessun concorso — si sceglie
+**quali marche seguire**. Il numero sul bottone sono le marche (non i loro
+concorsi), e la schermata dice in due righe cosa comporta seguirne una.
 
 Ferrero, Coca-Cola, Conad: le marche che ti interessano valgono più delle altre, e
-la sezione **🏷 Preferiti per marca** è dove si dicono. Ogni voce è un
+la sezione **🏷 Marche seguite** è dove si dicono. Ogni voce è un
 interruttore (`✅` la segui, `⬜️` no) con **quanti concorsi ha in archivio**: le
 marche che hanno qualcosa stanno in cima, quelle che non ne hanno in fondo, così
 il registro si scorre a pagine di dodici senza cercare niente.
@@ -661,7 +694,10 @@ tutti i segnali di qualità — un premio certo vale 5 — e meno dell'urgenza d
 scadenza a tre giorni);
 2. i concorsi **già in archivio** vengono ripunteggiati subito, con lo stesso
 conto dell'ingestione: la marca che segui oggi non aspetta la prossima raccolta;
-3. nasce la sezione **📋 I loro concorsi**, che mostra solo quello.
+3. nasce la sezione **📋 I loro concorsi**, che mostra solo quello;
+4. un loro concorso **avvisa subito**, anche sotto la soglia degli avvisi
+   immediati: la regola scavalca solo il punteggio, gli altri freni restano (vedi
+   "Le notifiche").
 
 Il filtro vero è a parte, ed è `🌟 Solo le marche seguite: sì`: acceso, **tutti**
 gli elenchi e le notifiche mostrano solo le marche che segui. È voluto che siano
@@ -1158,7 +1194,7 @@ Punteggio 0-100 (`src/enrich/score.ts`), pesi trasparenti: valore del premio
 (30), sforzo richiesto (20), scadenza entro 3 giorni (18) o 14 (12), freschezza
 (12/6), nessun obbligo d'acquisto (10), parole chiave come *gift card* o
 *in palio* (5), più bonus/malus dai tuoi feedback (±1 per tag) e **10 punti per
-una marca che segui** (🏷 Preferiti per marca).
+una marca che segui** (🏷 Marche seguite).
 
 Le regole di arricchimento estraggono scadenza (date numeriche e "30 novembre
 2026", con inferenza dell'anno), premio (importi e marche, comprese le auto

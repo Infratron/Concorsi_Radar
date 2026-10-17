@@ -6,7 +6,7 @@ import { normalizeTitle } from "../lib/text.ts";
  * Pesi trasparenti e modificabili: valore del premio, sforzo richiesto,
  * urgenza della scadenza, freschezza della notizia, segnali di qualità.
  * I pesi appresi dai bottoni ✅/🚫 si sommano sopra questo punteggio, e sopra
- * quelli la marca seguita (⭐ Preferiti per marca).
+ * quelli la marca seguita (⭐ Marche seguite).
  */
 
 export const SCORE_WEIGHTS = {

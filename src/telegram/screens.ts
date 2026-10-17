@@ -244,8 +244,15 @@ export interface ScreenCounts {
   couponTotal: number;
   /** Concorsi in archivio, di qualunque stato: la metà "buona" dell'archivio. */
   contest: number;
-  /** Concorsi delle marche seguite, con i filtri della chat: è il numero sul bottone. */
-  preferiti: number;
+  /** Quante marche segue questa chat: è il numero sul bottone 🏷 Marche seguite. */
+  seguite: number;
+  /**
+   * Concorsi delle marche seguite ADESSO, con i filtri della chat. Si conta solo
+   * aprendo la sezione (è la riga "Segui 2 marche … — 7 concorsi in archivio"):
+   * nel menù quel numero sarebbe una query a ogni schermata, e sul bottone non
+   * ci sta comunque, perché lì il numero sono le marche.
+   */
+  concorsiMarche: number;
   /**
    * Concorsi senza obbligo di acquisto (🆓 Gratis), con i filtri della chat.
    * Nasce dalla stessa query della sezione, quindi il numero sul bottone e
@@ -315,7 +322,7 @@ export interface ScreenData {
   filterSources: FilterSource[];
   /** Quante fonti si possono spegnere in tutto (per la paginazione). */
   filterSourcesTotal: number;
-  /** Pagina di marche da mostrare in 🏷 Preferiti per marca (già ritagliata). */
+  /** Pagina di marche da mostrare in 🏷 Marche seguite (già ritagliata). */
   brandChoices: BrandChoice[];
   /** Quante marche ha il registro in tutto (per la paginazione). */
   brandChoicesTotal: number;
@@ -401,7 +408,7 @@ function listScreen(state: UiState, data: ScreenData, now: Date): Screen {
       scaduti: "Nessun concorso chiuso in archivio: qui finiscono quelli la cui scadenza è passata.",
       ignorati: "Non hai scartato niente: quello che tocchi 🚫 finisce qui, e da qui puoi riprenderlo.",
       "preferiti-lista":
-        "Non segui ancora nessuna marca, quindi non c'è niente da mostrare qui: aprine una in 🏷 Preferiti per marca.",
+        "Non segui ancora nessuna marca, quindi non c'è niente da mostrare qui: aprine una in 🏷 Marche seguite.",
       // 📋 Oggi si svuota ogni mezzanotte: a notte fonda è normale che sia
       // vuota, e senza dirlo sembrerebbe una sezione rotta (o peggio, si
       // aspetterebbe 🔄 Aggiorna che non può far comparire il giorno prima).
@@ -846,10 +853,14 @@ function filtriScreen(data: ScreenData): Screen {
 }
 
 /**
- * 🏷 Preferiti per marca: l'elenco delle marche da seguire, con quanti concorsi
- * ha ciascuna in archivio. È una schermata di scelte, quindi dice cosa cambia
- * accendere una marca — un punteggio più alto e una sezione sua — invece di
- * lasciarlo scoprire toccando.
+ * 🏷 Marche seguite: l'elenco delle marche da seguire, con quanti concorsi ha
+ * ciascuna in archivio. È una schermata di scelte, quindi dice cosa cambia
+ * accendere una marca — un punteggio più alto, una sezione sua e un avviso
+ * quando ne esce un concorso — invece di lasciarlo scoprire toccando.
+ *
+ * Si chiamava "Preferiti per marca", e il nome faceva pensare a concorsi messi
+ * da parte per marca (la watchlist, insomma): qui invece si sceglie quali marche
+ * seguire, e non si salva nessun concorso.
  */
 function marcheScreen(data: ScreenData): Screen {
   const { prefs } = data;
@@ -857,15 +868,16 @@ function marcheScreen(data: ScreenData): Screen {
   const pagine = Math.max(1, Math.ceil(data.brandChoicesTotal / BRANDS_PAGE_SIZE));
   const page = Math.min(Math.max(data.page, 0), pagine - 1);
   const righe = [
-    "🏷 <b>Preferiti per marca</b>",
+    "🏷 <b>Marche seguite</b>",
     "",
-    "✅ la segui · ⬜️ no. Una marca che segui <b>vale 10 punti in più</b> e ha la sua sezione: l'elenco qui sotto è ordinato da chi ha più concorsi in archivio.",
+    "Tocca una marca per seguirla: ⬜️ no · ✅ sì. Tra parentesi, quanti concorsi ha in archivio adesso; in cima stanno quelle che ne hanno di più.",
+    "Se la segui, i suoi concorsi <b>valgono 10 punti in più</b>, hanno una sezione loro (📋 I loro concorsi) e ti avviso appena ne esce uno.",
     "",
     seguite.length === 0
-      ? "Non ne segui ancora nessuna."
+      ? "Non segui ancora nessuna marca."
       : `Segui <b>${seguite.length}</b> ${seguite.length === 1 ? "marca" : "marche"}: ${escapeHtml(
           seguite.map((id) => brandLabel(id)).join(", "),
-        )} — <b>${data.counts.preferiti}</b> concorsi in archivio.`,
+        )} — <b>${data.counts.concorsiMarche}</b> concorsi in archivio.`,
   ];
   if (onlyFavoriteBrands(prefs.filters)) {
     righe.push("🌟 Filtro acceso: negli elenchi e negli avvisi vedi <b>solo</b> queste marche.");

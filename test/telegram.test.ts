@@ -274,7 +274,7 @@ describe("bottoni · costruzione delle tastiere", () => {
   it("il menù porta a tutte le sezioni, con i conteggi", () => {
     const keyboard = menuKeyboard({
       nuovi: 3, oggi: 12, settimana: 40, scadenze: 2, salvati: 1, news: 7, coupon: 5,
-      preferiti: 4, filtri: 0,
+      seguite: 4, filtri: 0,
     });
     const bottoni = keyboard.inline_keyboard.flat();
     expect(bottoni.map((b) => b.callback_data)).toEqual([
@@ -290,6 +290,9 @@ describe("bottoni · costruzione delle tastiere", () => {
     expect(bottoni[5]?.text).toBe("⭐ Watchlist (1)");
     expect(bottoni[6]?.text).toBe("📰 News (7)");
     expect(bottoni[9]?.text).toBe("💶 Coupon e rimborsi (5)");
+    // Il numero qui sono le MARCHE seguite, non i loro concorsi: è quello che il
+    // nome della voce promette.
+    expect(bottoni[10]?.text).toBe("🏷 Marche seguite (4)");
     expect(bottoni[15]?.text).toBe("❓ Aiuto");
   });
 
@@ -1254,7 +1257,7 @@ describe("filtri personali · due chat, due feed", () => {
     expect(cambiato?.text.startsWith("🚫")).toBe(true);
   });
 
-  it("🏷 Preferiti per marca: la marca seguita vale di più e ha la sua sezione", async () => {
+  it("🏷 Marche seguite: la marca seguita vale di più e ha la sua sezione", async () => {
     const store = createMemoryStore();
     await dueChat(store);
     await seed(store, [
@@ -1269,11 +1272,13 @@ describe("filtri personali · due chat, due feed", () => {
 
     await handleUpdate(cmd(CHAT, 1, "/start"), entrambe(store, tg));
     // Il menù ha la voce, e prima di seguire qualcosa conta zero.
-    expect(voci().find((b) => b.callback_data === "s:preferiti")?.text).toBe("🏷 Preferiti per marca (0)");
+    expect(voci().find((b) => b.callback_data === "s:preferiti")?.text).toBe("🏷 Marche seguite (0)");
 
     await handleUpdate(tapIn(CHAT, 2, "s:preferiti", 100), entrambe(store, tg));
-    expect(schermata(calls, CHAT)).toContain("Preferiti per marca");
-    expect(schermata(calls, CHAT)).toContain("vale");
+    expect(schermata(calls, CHAT)).toContain("Marche seguite");
+    // La schermata dice cosa cambia a seguirne una: punti, sezione sua, avviso.
+    expect(schermata(calls, CHAT)).toContain("10 punti in più");
+    expect(schermata(calls, CHAT)).toContain("ti avviso appena ne esce uno");
     // Le marche con concorsi in archivio stanno in cima, con il conteggio.
     const marche = bottoni(calls, CHAT).flat().filter((b) => b.callback_data?.startsWith("cfg:brand:"));
     expect(marche).toHaveLength(BRANDS_PAGE_SIZE);
@@ -1302,7 +1307,7 @@ describe("filtri personali · due chat, due feed", () => {
     expect(schermata(calls, CHAT)).toContain("1 concorso");
 
     await handleUpdate(tapIn(CHAT, 7, "home", 100), entrambe(store, tg));
-    expect(voci().find((b) => b.callback_data === "s:preferiti")?.text).toBe("🏷 Preferiti per marca (1)");
+    expect(voci().find((b) => b.callback_data === "s:preferiti")?.text).toBe("🏷 Marche seguite (1)");
 
     // Il filtro vero: "solo le marche che seguo" toglie il resto dagli elenchi.
     await handleUpdate(tapIn(CHAT, 8, "s:preferiti", 100), entrambe(store, tg));

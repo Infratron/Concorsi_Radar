@@ -79,8 +79,13 @@ export function menuKeyboard(counts: {
   news: number;
   /** Coupon e rimborsi in archivio: è il numero sul bottone 💶. */
   coupon: number;
-  /** Concorsi delle marche seguite: è il numero che sta sul bottone dei preferiti. */
-  preferiti: number;
+  /**
+   * Quante marche segui. È il numero sul bottone, e conta le MARCHE, non i loro
+   * concorsi: la voce si chiama "Marche seguite" e un conteggio di concorsi lì
+   * sopra la farebbe sembrare un elenco ("seguo quattro marche, non quattro
+   * concorsi").
+   */
+  seguite: number;
   /** Quanti filtri sono attivi: 0 = si vede tutto. */
   filtri: number;
 }): InlineKeyboardMarkup {
@@ -98,7 +103,7 @@ export function menuKeyboard(counts: {
       // Le offerte su una riga tutta loro: non sono concorsi e non stanno in
       // mezzo ai concorsi, ma devono restare a un tocco dal menù.
       [button(`💶 Coupon e rimborsi (${counts.coupon})`, "s:coupon")],
-      [button(`🏷 Preferiti per marca (${counts.preferiti})`, "s:preferiti"), button(filtriButtonLabel(counts.filtri), "s:filtri")],
+      [button(`🏷 Marche seguite (${counts.seguite})`, "s:preferiti"), button(filtriButtonLabel(counts.filtri), "s:filtri")],
       [button("📡 Fonti", "s:fonti"), button("⚙️ Impostazioni", "s:impostazioni")],
       // ❓ Aiuto sta accanto ad Aggiorna perché è l'altra cosa che si fa quando
       // non si capisce: rileggere o chiedere come funziona.
@@ -173,13 +178,13 @@ export function filtriKeyboard(prefs: Prefs, info: { sources: number; spenti: nu
       : button("🎁 Solo senza acquisto: no", "cfg:free:on"),
   ]);
   righe.push(starKeyboard(filtro.minScore));
-  righe.push([button(`🏷 Preferiti per marca (${filtro.favoriteBrands.length})`, "s:preferiti")]);
+  righe.push([button(`🏷 Marche seguite (${filtro.favoriteBrands.length})`, "s:preferiti")]);
   righe.push([button(`📡 Scegli le fonti (${info.sources - info.spenti}/${info.sources})`, "s:filtri-fonti")]);
   return { inline_keyboard: [...righe, ...navRows()] };
 }
 
 /**
- * 🏷 Preferiti per marca: l'elenco delle marche da seguire. Ogni bottone è un
+ * 🏷 Marche seguite: l'elenco delle marche da seguire. Ogni bottone è un
  * interruttore (✅ la segui · ⬜️ no) con il numero di concorsi che ha in
  * archivio, così si vede subito quali marche contano davvero.
  *
@@ -597,7 +602,7 @@ export function backKeyboard(): InlineKeyboardMarkup {
  */
 export function emptyKeyboard(conFiltri: boolean, marche = false): InlineKeyboardMarkup {
   const rows: InlineKeyboardButton[][] = [];
-  if (marche) rows.push([button("🏷 Preferiti per marca", "s:preferiti")]);
+  if (marche) rows.push([button("🏷 Marche seguite", "s:preferiti")]);
   if (conFiltri) rows.push([button("🎛 Cosa vedi", "s:filtri")]);
   return { inline_keyboard: [...rows, ...navRows()] };
 }
@@ -676,7 +681,7 @@ export function sectionTitle(section: string): string {
     case "filtri-fonti":
       return "Scegli le fonti";
     case "preferiti":
-      return "Preferiti per marca";
+      return "Marche seguite";
     case "diagnostica":
       return "Diagnostica delle fonti";
     case "log":

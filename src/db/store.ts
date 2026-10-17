@@ -124,7 +124,7 @@ export interface Store {
   countItems(query: ItemQuery): Promise<number>;
   /**
    * Quanti concorsi ci sono per ogni marca (id del registro → conteggio). È
-   * quello che ordina la schermata ⭐ Preferiti per marca: le marche presenti in
+   * quello che ordina la schermata ⭐ Marche seguite: le marche presenti in
    * archivio stanno in cima, quelle che non hanno niente in fondo.
    */
   brandCounts(): Promise<Record<string, number>>;

@@ -356,6 +356,12 @@ export async function sendCollectionReminder(deps: CollectionReminderDeps): Prom
   righe.push(
     "",
     "Da controllare: i tre secret del repository (CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_API_TOKEN, D1_DATABASE_ID), e che il workflow non sia stato disattivato per inattività.",
+    // La causa più frequente non è un secret sbagliato: se il segreto fosse
+    // sbagliato il giro partirebbe e fallirebbe, lasciando traccia. Zero giri è
+    // GitHub che non li fa partire — e su un repository privato del piano Free
+    // succede quando i minuti inclusi finiscono, o perché i workflow programmati
+    // lì non sono proprio previsti. Dirlo evita di cercare per ore nei secret.
+    "Se nella scheda Actions non c'è nessun giro (non uno fallito: nessuno), il problema è di GitHub: con il repository privato su piano Free i workflow programmati si fermano quando finiscono i minuti inclusi. Si risolve rendendo pubblico il repository, passando a Pro, o facendo raccogliere il Worker.",
   );
 
   const risultato = await tg.sendMessage(adminChatId, righe.join("\n"), { disablePreview: true });

@@ -2,7 +2,7 @@ import { tokens } from "../lib/text.ts";
 import { SOURCES } from "./sources.ts";
 
 /**
- * Le marche che si possono seguire (⭐ Preferiti per marca).
+ * Le marche che si possono seguire (⭐ Marche seguite).
  *
  * Perché un registro a parte e non l'elenco dei tag degli item: il tag dice da
  * dove arriva un concorso, la marca dice DI CHI è. Le due cose non coincidono —
@@ -150,7 +150,7 @@ export function brandOrder(counts: Record<string, number>): string[] {
     .map((brand) => brand.id);
 }
 
-/** Una marca come compare nella schermata ⭐ Preferiti per marca. */
+/** Una marca come compare nella schermata ⭐ Marche seguite. */
 export interface BrandChoice {
   id: string;
   label: string;

@@ -589,7 +589,7 @@ async function loadScreenData(
   // senza filtri si contano solo per poter dire "vedi 12 di 40".
   const [
     archiveTotal, contest, news, coupon, contestTotal, newsTotal, couponTotal,
-    nuovi, oggi, settimana, scadenze, preferiti, quantiScaduti, gratis,
+    nuovi, oggi, settimana, scadenze, quantiScaduti, gratis,
   ] = await Promise.all([
       store.countItems({}),
       store.countItems(filtersFor(filters, { kinds: CONCORSI })),
@@ -602,12 +602,6 @@ async function loadScreenData(
       store.countItems(sectionQuery("oggi", now, null, filters)),
       store.countItems(sectionQuery("settimana", now, null, filters)),
       store.countItems(scadenza),
-      // I concorsi delle marche seguite. Senza marche da seguire la sezione è
-      // vuota per costruzione, e una query non filtrata conterebbe tutto
-      // l'archivio: il numero sul bottone direbbe una cosa falsa.
-      filters.favoriteBrands.length > 0
-        ? store.countItems(sectionQuery("preferiti-lista", now, null, filters))
-        : Promise.resolve(0),
       // Il conteggio dei chiusi serve solo allo storico: fuori da lì resta a zero.
       state.section === "storico" ? store.countItems(scaduti) : Promise.resolve(0),
       // 🆓 Gratis: il numero è quello che il bottone mostra, e nasce dalla STESSA
@@ -627,8 +621,19 @@ async function loadScreenData(
     }
   }
 
+  // I concorsi delle marche seguite si contano solo aprendo 🏷 Marche seguite:
+  // è l'unico posto dove quel numero si legge, e nel menù il numero sul bottone
+  // sono le marche, non i loro concorsi. Senza marche da seguire la sezione è
+  // vuota per costruzione, e una query non filtrata conterebbe tutto l'archivio.
+  const concorsiMarche =
+    state.section === "preferiti" && filters.favoriteBrands.length > 0
+      ? await store.countItems(sectionQuery("preferiti-lista", now, null, filters))
+      : 0;
+
   const counts: ScreenCounts = {
-    nuovi, oggi, settimana, scadenze, news, contest, coupon, contestTotal, newsTotal, couponTotal, preferiti, gratis,
+    nuovi, oggi, settimana, scadenze, news, contest, coupon, contestTotal, newsTotal, couponTotal, gratis,
+    seguite: filters.favoriteBrands.length,
+    concorsiMarche,
     premi,
     filtri: activeFilterCount(filters),
     salvati: salvati.length, vinti: vinti.length, ignorati: ignorati.length, scaduti: quantiScaduti,

@@ -142,11 +142,10 @@ export const HELP_PAGES: HelpPage[] = [
   {
     id: "preferiti",
     section: "preferiti",
-    title: "🏷 Preferiti per marca",
+    title: "🏷 Marche seguite",
     lines: [
-      "Le marche che segui.",
-      "Un loro concorso vale dieci punti in più e compare in 🏷 Preferiti per marca.",
-      "In più ti arriva subito un avviso quando ne esce uno, anche sotto la soglia degli avvisi.",
+      "Tocca una marca per seguirla: i suoi concorsi valgono dieci punti in più e finiscono in 📋 I loro concorsi.",
+      "Ti avviso appena esce un concorso di una marca che segui, anche sotto la soglia degli avvisi.",
     ],
   },
   {

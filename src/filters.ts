@@ -15,7 +15,7 @@ import type { Category, ChatFilters, ItemKind, ItemQuery } from "./types.ts";
  * tutti finché qualcuno non li spegne. Con l'elenco inverso (inclusioni) una
  * fonte aggiunta oggi resterebbe invisibile a chi non la conosce.
  *
- * L'unica eccezione sono le marche seguite (⭐ Preferiti per marca), e la
+ * L'unica eccezione sono le marche seguite (⭐ Marche seguite), e la
  * differenza è voluta: accendere una marca non toglie niente a nessuno — aggiunge
  * un punteggio più alto e la sua sezione — mentre è `brandsOnly` a nascondere il
  * resto, e quello è un filtro come gli altri.
