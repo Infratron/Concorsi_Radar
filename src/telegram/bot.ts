@@ -24,7 +24,7 @@ import type { TelegramUpdate } from "./api.ts";
 import type { NotifyDeps } from "./digest.ts";
 import { regolamentoUrl } from "./digest.ts";
 import { localDateString, sourceLabel, startOfLocalDay } from "./format.ts";
-import { parseEuroInput, refundAmountFor } from "../refunds.ts";
+import { parseEuroInput, refundAmountFor, sortByConvenience } from "../refunds.ts";
 import { leadHours, summarizeLead } from "../enrich/lead.ts";
 import { BRANDS_PAGE_SIZE, PAGE_SIZE, SHARE_BASE_DEFAULT } from "./keyboard.ts";
 import { SCORE_MAX, SCORE_MIN, hourLabel, parseQuietRange, toggleDigestHour } from "./prefs-config.ts";
@@ -755,12 +755,26 @@ async function loadScreenData(
           : ignorati
       : null;
     const query = sectionQuery(state.section, now, state.lastCheckAt, filters);
-    total = daConsegne ? daConsegne.length : await store.countItems(query);
-    const pagine = Math.max(1, Math.ceil(total / PAGE_SIZE));
-    const pagina = Math.min(Math.max(state.page, 0), pagine - 1);
-    items = daConsegne
-      ? daConsegne.slice(pagina * PAGE_SIZE, pagina * PAGE_SIZE + PAGE_SIZE)
-      : await store.queryItems({ ...query, limit: PAGE_SIZE, offset: pagina * PAGE_SIZE });
+    // ↩️ Rimborsi su spesa: la convenienza è un RAPPORTO fra due cifre lette dal
+    // testo, non una colonna del database. Si carica tutto il mazzetto (i coupon
+    // sono qualche decina), si ordina per "quanto torna per euro speso" e solo
+    // dopo si ritaglia la pagina: ordinare la pagina già tagliata metterebbe in
+    // cima il migliore dei sei arrivati, non il migliore in assoluto.
+    if (state.section === "coupon-rimborsi") {
+      const tutti = await store.queryItems({ ...query, limit: 200 });
+      const ordinati = sortByConvenience(tutti);
+      total = ordinati.length;
+      const pagine = Math.max(1, Math.ceil(total / PAGE_SIZE));
+      const pagina = Math.min(Math.max(state.page, 0), pagine - 1);
+      items = ordinati.slice(pagina * PAGE_SIZE, pagina * PAGE_SIZE + PAGE_SIZE);
+    } else {
+      total = daConsegne ? daConsegne.length : await store.countItems(query);
+      const pagine = Math.max(1, Math.ceil(total / PAGE_SIZE));
+      const pagina = Math.min(Math.max(state.page, 0), pagine - 1);
+      items = daConsegne
+        ? daConsegne.slice(pagina * PAGE_SIZE, pagina * PAGE_SIZE + PAGE_SIZE)
+        : await store.queryItems({ ...query, limit: PAGE_SIZE, offset: pagina * PAGE_SIZE });
+    }
   }
 
   // 💰 Rimborsi non è un elenco di item: il totale da paginare è quello delle

@@ -2,7 +2,7 @@ import type { ItemRow } from "../types.ts";
 import { truncate } from "../lib/text.ts";
 import { dutiesFor } from "../enrich/proof.ts";
 import { playTimeFor } from "../enrich/playtime.ts";
-import { formatEuro, refundAmountFor } from "../refunds.ts";
+import { formatEuro, spendRefundFor } from "../refunds.ts";
 import { SOURCES } from "../config/sources.ts";
 import { MAX_MESSAGE_CHARS } from "./api.ts";
 
@@ -239,10 +239,19 @@ export function deadlineBrief(item: ItemRow, now: Date): string {
  */
 export function prizeBrief(item: ItemRow): string {
   if (item.kind === "coupon") {
-    const amount = refundAmountFor(item);
-    if (amount.cents !== null) {
-      return `💶 ${amount.cap ? "fino a " : ""}${formatEuro(amount.cents)} indietro`;
+    const soldi = spendRefundFor(item);
+    const cents = soldi.refund.cents;
+    if (cents !== null) {
+      const importo = `${soldi.refund.cap ? "fino a " : ""}${formatEuro(cents)}`;
+      // Con la soglia dichiarata il numero utile è il rapporto: "20 € su
+      // 100 €" dice più di "20 € indietro", perché mette le due cifre vicine.
+      if (soldi.spendCents !== null) {
+        const pct = Math.round((cents / soldi.spendCents) * 100);
+        return `💶 ${importo} su ${formatEuro(soldi.spendCents)} · ${pct}%`;
+      }
+      return `💶 ${importo} indietro`;
     }
+    if (soldi.spendCents !== null) return `💶 spesa minima ${formatEuro(soldi.spendCents)}`;
     return "💶 buono sconto";
   }
   if (item.kind === "news") return "📰 articolo";
@@ -315,6 +324,25 @@ export function formatItemCard(item: ItemRow, now: Date): string {
   const fatti: string[] = [];
   if (item.prize) fatti.push(campo(offerta ? "💶" : "🏆", offerta ? "Offerta" : "Premio", escapeHtml(truncate(item.prize, 160))));
   if (item.participation) fatti.push(campo("📝", "Come partecipare", escapeHtml(truncate(item.participation, 160))));
+  // 💰 Il rimborso con la sua soglia: "20 € su una spesa di 100 € · 20%" è
+  // l'unica forma in cui si capisce se conviene. Quando la spesa non è
+  // dichiarata resta la cifra da sola, senza un rapporto inventato.
+  if (offerta) {
+    const soldi = spendRefundFor(item);
+    if (soldi.refund.cents !== null || soldi.spendCents !== null) {
+      const parti: string[] = [];
+      if (soldi.refund.cents !== null) {
+        parti.push(`${soldi.refund.cap ? "fino a " : ""}${formatEuro(soldi.refund.cents)}`);
+        if (soldi.spendCents !== null) {
+          const pct = Math.round((soldi.refund.cents / soldi.spendCents) * 100);
+          parti.push(`su una spesa di ${formatEuro(soldi.spendCents)} · ${pct}%${soldi.refund.cap ? " max" : ""}`);
+        }
+        fatti.push(campo("💰", "Rimborso", parti.join(" ")));
+      } else if (soldi.spendCents !== null) {
+        fatti.push(campo("🧾", "Spesa minima", formatEuro(soldi.spendCents)));
+      }
+    }
+  }
   // 🎁 Premio certo: il bando dice anche QUANDO si gioca. La riga c'è solo se
   // il testo dichiara un orario o una cadenza — una finestra inventata sarebbe
   // peggio di una riga mancante — e lo stato (dentro/fuori) si calcola adesso,

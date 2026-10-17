@@ -269,6 +269,40 @@ describe("format", () => {
     expect(formatItemLine(row({ prize: "Buono <b>&</b>" }), NOW)).toContain("🏆 Buono &lt;b&gt;&amp;&lt;/b&gt;");
   });
 
+  it("un coupon su spesa dice quanto torna e su quanto", () => {
+    const riga = formatItemLine(
+      row({
+        kind: "coupon",
+        title: "Spendi 100, ricevi 20",
+        prize: null,
+        tags: ["coupon", "cashback"],
+        deadline: "2026-12-31",
+      }),
+      NOW,
+    );
+    expect(riga.split("\n")[1]).toBe("💶 20 € su 100 € · 20% · ⏳ 31/12");
+  });
+
+  it("la scheda di un coupon porta il rimborso con la soglia di spesa", () => {
+    const card = formatItemCard(
+      row({
+        kind: "coupon",
+        title: "Spendi 100, ricevi 20",
+        prize: null,
+        tags: ["coupon", "cashback"],
+      }),
+      NOW,
+    );
+    expect(card).toContain("💰 <b>Rimborso</b> · 20 € su una spesa di 100 € · 20%");
+    // Senza spesa dichiarata resta la cifra, senza un rapporto inventato.
+    const senzaSpesa = formatItemCard(
+      row({ kind: "coupon", title: "Rimborso di 5 € su Nutella", prize: null, tags: ["coupon", "cashback"] }),
+      NOW,
+    );
+    expect(senzaSpesa).toContain("💰 <b>Rimborso</b> · 5 €");
+    expect(senzaSpesa).not.toContain("su una spesa");
+  });
+
   it("anche il digest porta le due righe per concorso", () => {
     const messaggi = formatDigest(
       [
@@ -2429,6 +2463,34 @@ describe("coupon e rimborsi · la sezione", () => {
     // Il numero sul bottone e in testa conta la stessa query: 1, non 2.
     const testo = String(lastWith(calls, "sendMessage")?.payload.text ?? "");
     expect(testo).toContain("1 coupon");
+  });
+
+  it("↩️ Rimborsi su spesa: ordinati per convenienza, col rapporto nel bottone", async () => {
+    const store = createMemoryStore();
+    await store.upsertPrefs(prefs());
+    await seed(store, [
+      { title: "Spendi 100, ricevi 10", kind: "coupon", tags: ["coupon", "cashback"], deadline: "2026-12-31" },
+      { title: "Spendi 20, ricevi 5", kind: "coupon", tags: ["coupon", "cashback"], deadline: "2026-12-31" },
+      { title: "Spendi 50, ricevi 20", kind: "coupon", tags: ["coupon", "cashback"], deadline: "2026-12-31" },
+      // Senza soglia dichiarata: non si può confrontare, va in fondo.
+      { title: "Rimborso di 3 €", kind: "coupon", tags: ["coupon", "cashback"], deadline: "2026-12-31" },
+    ]);
+    const { tg, calls } = makeTg();
+
+    await handleUpdate(command(1, "/coupon"), deps(store, tg));
+    await handleUpdate(tap(2, "s:coupon-rimborsi", 100), deps(store, tg));
+
+    const bottoni = (lastKeyboard(calls)?.inline_keyboard.flat() ?? []).filter((b) =>
+      b.callback_data?.startsWith("open:"),
+    );
+    // Dal più conveniente al meno; l'ultimo non ha il rapporto.
+    expect(bottoni.map((b) => b.text.split("\n")[0])).toEqual([
+      "💶 · Spendi 50, ricevi 20",
+      "💶 · Spendi 20, ricevi 5",
+      "💶 · Spendi 100, ricevi 10",
+      "💶 · Rimborso di 3 €",
+    ]);
+    expect(bottoni[0]?.text.split("\n")[1]).toBe("💶 20 € su 50 € · 40% · ⏳ 31/12");
   });
 
   it("💶 Coupon ha le stesse viste dei concorsi: oggi, 7 giorni, scadenze, tutti", async () => {

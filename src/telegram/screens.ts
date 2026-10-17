@@ -678,7 +678,7 @@ function listScreen(state: UiState, data: ScreenData, now: Date): Screen {
       : state.section === "coupon-scadenze"
         ? "I coupon con una validità che finisce entro 7 giorni: chi chiude prima sta in cima."
       : state.section === "coupon-rimborsi"
-        ? "Spendi e riprendi, cashback e rimborsi: qui si compra e tornano soldi, non si ritaglia un buono."
+        ? "Spendi e riprendi, cashback e rimborsi: qui si compra e tornano soldi, non si ritaglia un buono. In cima chi rende di più per ogni euro speso; chi non dichiara la spesa resta in fondo."
         : state.section === "gratis"
         ? "Solo concorsi senza acquisto: niente scontrino, niente codice, niente spesa minima."
         : state.section === "spesa"

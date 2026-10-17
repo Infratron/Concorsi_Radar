@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  convenienceOf,
   formatEuro,
   parseEuroInput,
   refundAmountFor,
@@ -7,6 +8,9 @@ import {
   refundAmountLabel,
   refundDeclaredLabel,
   refundMenuLabel,
+  sortByConvenience,
+  spendFrom,
+  spendRefundFor,
   totalsOfRefunds,
 } from "../src/refunds.ts";
 
@@ -83,6 +87,56 @@ describe("importo dichiarato dal bando", () => {
         prize: null,
       }),
     ).toEqual({ cents: 750, cap: true });
+  });
+});
+
+describe("spesa richiesta e convenienza", () => {
+  it("legge la soglia di spesa dalle forme che le fonti usano", () => {
+    expect(spendFrom("Spendi 100, ricevi 20")).toBe(10000);
+    expect(spendFrom("Spendi 20 € e ricevi 5 € di rimborso")).toBe(2000);
+    expect(spendFrom("10€ di rimborso con 20€ di acquisti")).toBe(2000);
+    expect(spendFrom("Ricevi 5€ di rimborso spendendone 10")).toBe(1000);
+    expect(spendFrom("Cashback 5 € con una spesa minima di 30 €")).toBe(3000);
+    expect(spendFrom("Acquista 15 euro di prodotti e ricevi il rimborso del 50%")).toBe(1500);
+  });
+
+  it("non legge come spesa un punto, una percentuale o un prezzo", () => {
+    expect(spendFrom("Rimborso del 50% su tutti i prodotti")).toBeNull();
+    expect(spendFrom("Spendi 100 punti fedeltà")).toBeNull();
+    expect(spendFrom("Buono da 1,50 € su un gelato")).toBeNull();
+  });
+
+  it("legge anche il rimborso senza valuta: \"ricevi 20\"", () => {
+    expect(refundAmountFrom("Spendi 100, ricevi 20")).toEqual({ cents: 2000, cap: false });
+    expect(refundAmountFrom("Spendi 50 e ricevi 10 euro")).toEqual({ cents: 1000, cap: false });
+  });
+
+  it("spesa e rimborso insieme, e il rapporto fra le due", () => {
+    const value = spendRefundFor({ title: "Spendi 100, ricevi 20", summary: null, prize: null });
+    expect(value).toEqual({ spendCents: 10000, refund: { cents: 2000, cap: false } });
+    expect(convenienceOf(value)).toBeCloseTo(0.2);
+    // Manca una delle due: niente rapporto, non zero.
+    expect(convenienceOf(spendRefundFor({ title: "Rimborso di 5 €", summary: null, prize: null }))).toBeNull();
+    // Sopra il 100% non è un rimborso sulla spesa (bonus di benvenuto, o cifra
+    // letta male): resta in elenco, ma fuori dalla classifica della convenienza.
+    const bonus = spendRefundFor({ title: "Spendi 5 € e ricevi 35 € di bonus", summary: null, prize: null });
+    expect(bonus.spendCents).toBe(500);
+    expect(convenienceOf(bonus)).toBeNull();
+  });
+
+  it("ordina dal più conveniente, e chi non si può confrontare va in fondo", () => {
+    const items = [
+      { title: "Spendi 100, ricevi 10", summary: null, prize: null },
+      { title: "Spendi 20, ricevi 5", summary: null, prize: null },
+      { title: "Rimborso di 3 €", summary: null, prize: null },
+      { title: "Spendi 50, ricevi 20", summary: null, prize: null },
+    ];
+    expect(sortByConvenience(items).map((item) => item.title)).toEqual([
+      "Spendi 50, ricevi 20", // 40%
+      "Spendi 20, ricevi 5", // 25%
+      "Spendi 100, ricevi 10", // 10%
+      "Rimborso di 3 €", // senza spesa: non confrontabile
+    ]);
   });
 });
 

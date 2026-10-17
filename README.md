@@ -1088,6 +1088,21 @@ interessa di più quando si compra tanto: spendi e riprendi, rimborsi e cashback
 il `•` davanti, come nelle impostazioni; i filtri di 🎛 Cosa vedi valgono in
 tutte, perché sono sezioni che suggeriscono cosa guardare.
 
+**↩️ Rimborsi e cashback è ordinata per convenienza**, non per data di arrivo:
+prima chi rende di più per ogni euro speso. La soglia di spesa si legge dal
+testo insieme al rimborso (`Spendi 100, ricevi 20`, `spendi 15 euro e riprendi
+10`, `10€ di rimborso con 20€ di acquisti`, `spendendone 10`) e il bottone dice
+le due cifre vicine: `💶 20 € su 100 € · 20%`. Chi non dichiara la spesa resta
+in elenco ma va in fondo, perché non si può confrontare. Un rapporto sopra il
+100% viene trattato allo stesso modo: non è un rimborso sulla spesa, è un bonus
+di benvenuto o una cifra letta male — il caso misurato il 17/10/2026 è Satispay
+("ti regala 35€ alla prima ricarica da 5€"), che in cima alla classifica
+sarebbe stato il numero più sbagliato della schermata. Misurato lo stesso
+giorno sull'archivio: **45 coupon con tag cashback, 26 con un rimborso
+leggibile, 9 con una soglia di spesa, 8 confrontabili**; le prime della
+classifica sono i due rimborsi al 100% (Henkel, Parodontax), poi i cashback al
+67% e al 50%.
+
 **Niente conteggi sulle viste**, ed è voluto: i numeri sul menù restano quelli
 della sezione intera, e ogni vista dice quanti coupon ha nella sua intestazione
 (`Coupon in scadenza · 4 coupon`). Un numero su cinque bottoni sarebbero cinque
@@ -1151,7 +1166,8 @@ scheda di un coupon con `💰 Ho richiesto`; quando i soldi arrivano si tocca
 L'importo lo legge il bando — prima il titolo, poi il riassunto — e distingue la
 cifra esatta dal **tetto** (`rimborso di 25 €` contro `fino a 6 euro`). La spesa
 richiesta non viene scambiata per il rimborso: in "10 € di rimborso con 20 € di
-acquisti" il rimborso è 10 €. Quando il bando dichiara una **percentuale** o un
+acquisti" il rimborso è 10 €, e la spesa di 20 € è letta a parte come soglia.
+Quando il bando dichiara una **percentuale** o un
 1+1 non c'è una cifra da leggere, quindi la chat chiede quanto è tornato davvero
 e quel rimborso entra nel conteggio solo dopo la risposta; se resta senza cifra,
 la schermata lo dice (`N senza cifra fissa`) invece di contarlo come zero. Un
