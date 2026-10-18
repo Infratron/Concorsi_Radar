@@ -1,10 +1,10 @@
 import { readFileSync } from "node:fs";
-import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import { beforeEach, describe, expect, it } from "vitest";
-import { createD1Store, type D1Like, type D1LikeStatement } from "../src/db/d1.ts";
+import { createD1Store } from "../src/db/d1.ts";
 import { DUP_CANDIDATE_MAX_HAMMING, hammingHex, simhash } from "../src/lib/text.ts";
 import { defaultFilters, filtersFor } from "../src/filters.ts";
 import type { NewItem } from "../src/types.ts";
+import { Sqlite, sqliteBinding } from "./sqlite.ts";
 
 /**
  * Store D1 eseguito su SQLite vero (node:sqlite) con lo schema di produzione.
@@ -18,20 +18,6 @@ import type { NewItem } from "../src/types.ts";
  * cercherebbe un pacchetto chiamato `sqlite`, che non esiste (il modulo compare
  * in `builtinModules` solo con il prefisso).
  */
-const { DatabaseSync: Sqlite } = process.getBuiltinModule("node:sqlite") as typeof import("node:sqlite");
-
-function sqliteBinding(db: DatabaseSync): D1Like {
-  const statement = (sql: string, params: unknown[]): D1LikeStatement => ({
-    bind: (...next: unknown[]) => statement(sql, next),
-    // I parametri arrivano come unknown dal contratto D1Like, ma lo store passa
-    // solo primitivi (o null): è lo stesso confine che attraversano su D1.
-    first: async <T>() => ((db.prepare(sql).get(...(params as SQLInputValue[])) as unknown as T | undefined) ?? null),
-    all: async <T>() => ({ results: db.prepare(sql).all(...(params as SQLInputValue[])) as unknown as T[] }),
-    run: async () => ({ meta: { changes: Number(db.prepare(sql).run(...(params as SQLInputValue[])).changes) } }),
-  });
-  return { prepare: (sql: string) => statement(sql, []) };
-}
-
 function freshStore() {
   const db = new Sqlite(":memory:");
   db.exec(readFileSync(new URL("../src/db/schema.sql", import.meta.url), "utf8"));
@@ -427,6 +413,30 @@ describe("store D1 · SQL vero su SQLite", () => {
     expect(runs[1].log).toContain("\n🔴 Soldissimi");
     expect(runs[0].log).toBeNull();
     expect((await store.recentLogs(5)).map((run) => run.note)).toEqual(["primo"]);
+  });
+
+  it("toglie le esecuzioni e gli update vecchi, e tiene i recenti", async () => {
+    const run = { trigger: "actions", sourcesOk: 0, sourcesFail: 0, itemsNew: 0, ms: 0, log: null };
+    await store.recordRun({ ...run, startedAt: "2026-09-01T08:00:00.000Z", note: "vecchia" });
+    await store.recordRun({ ...run, startedAt: "2026-10-16T08:00:00.000Z", note: "recente" });
+    await store.claimUpdate(1, "2026-10-01T08:00:00.000Z");
+    await store.claimUpdate(2, "2026-10-16T08:00:00.000Z");
+
+    await store.pruneLogs("2026-09-16T00:00:00.000Z", "2026-10-13T00:00:00.000Z");
+
+    expect((await store.recentRuns(10)).map((riga) => riga.note)).toEqual(["recente"]);
+    // L'update vecchio è uscito: lo stesso id tornerebbe "nuovo", quello recente no.
+    expect(await store.claimUpdate(1, "2026-10-16T09:00:00.000Z")).toBe(true);
+    expect(await store.claimUpdate(2, "2026-10-16T09:00:00.000Z")).toBe(false);
+  });
+
+  it("legge la finestra di deduplica ridotta e la riga per urlKey", async () => {
+    await store.insertItem(item());
+    expect((await store.getItemByUrlKey("key-esselunga"))?.id).toBe(1);
+    expect(await store.getItemByUrlKey("chiave-assente")).toBeNull();
+    const finestra = await store.dedupeWindow("2026-10-01T00:00:00.000Z", 10);
+    expect(finestra).toEqual([{ id: 1, urlKey: "key-esselunga", simhash: finestra[0].simhash, title: finestra[0].title }]);
+    expect(await store.dedupeWindow("2027-01-01T00:00:00.000Z", 10)).toEqual([]);
   });
 
   it("conserva la cache di robots.txt e il consumo AI giornaliero", async () => {

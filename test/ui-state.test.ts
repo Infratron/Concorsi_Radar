@@ -1,11 +1,11 @@
 import { readFileSync } from "node:fs";
-import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import { describe, expect, it } from "vitest";
-import { createD1Store, type D1Like, type D1LikeStatement } from "../src/db/d1.ts";
+import { createD1Store } from "../src/db/d1.ts";
 import { createMemoryStore } from "../src/db/memory.ts";
 import type { Store } from "../src/db/store.ts";
 import { simhash } from "../src/lib/text.ts";
 import type { NewItem, ItemQuery, UiState } from "../src/types.ts";
+import { Sqlite, sqliteBinding } from "./sqlite.ts";
 
 /**
  * Lo stato dell'interfaccia in chat (il messaggio unico che il bot modifica) e i
@@ -19,18 +19,6 @@ import type { NewItem, ItemQuery, UiState } from "../src/types.ts";
  * `node:sqlite` va caricato a runtime: Vite toglierebbe il prefisso `node:` e
  * cercherebbe un pacchetto chiamato `sqlite`, che non esiste.
  */
-const { DatabaseSync: Sqlite } = process.getBuiltinModule("node:sqlite") as typeof import("node:sqlite");
-
-function sqliteBinding(db: DatabaseSync): D1Like {
-  const statement = (sql: string, params: unknown[]): D1LikeStatement => ({
-    bind: (...next: unknown[]) => statement(sql, next),
-    first: async <T>() => ((db.prepare(sql).get(...(params as SQLInputValue[])) as unknown as T | undefined) ?? null),
-    all: async <T>() => ({ results: db.prepare(sql).all(...(params as SQLInputValue[])) as unknown as T[] }),
-    run: async () => ({ meta: { changes: Number(db.prepare(sql).run(...(params as SQLInputValue[])).changes) } }),
-  });
-  return { prepare: (sql: string) => statement(sql, []) };
-}
-
 function d1Store(): Store {
   const db = new Sqlite(":memory:");
   db.exec(readFileSync(new URL("../src/db/schema.sql", import.meta.url), "utf8"));

@@ -992,14 +992,14 @@ export async function handleUpdate(update: TelegramUpdate, deps: BotDeps): Promi
   const allowed = new Set(deps.allowedChatIds && deps.allowedChatIds.length > 0 ? deps.allowedChatIds : [adminChatId]);
   const nowIso = now.toISOString();
 
-  if (!(await store.claimUpdate(update.update_id, nowIso))) return { handled: false };
-
   const callback = update.callback_query;
   const message = update.message;
   const chatId = callback?.message?.chat.id ?? message?.chat.id;
   if (chatId === undefined) return { handled: false };
   if (!callback && message?.text === undefined) return { handled: false };
 
+  // Il cancello viene PRIMA di ogni scrittura: un estraneo che scrive al bot non
+  // deve poter riempire `updates` di righe, né consumare le scritture di D1.
   if (!allowed.has(chatId)) {
     // Il tuo id è la chiave d'accesso: lo mostriamo così l'admin può aggiungerti.
     if (callback) await tg.answerCallbackQuery(callback.id, "⛔ Bot privato.");
@@ -1011,6 +1011,8 @@ export async function handleUpdate(update: TelegramUpdate, deps: BotDeps): Promi
     }
     return { handled: true };
   }
+
+  if (!(await store.claimUpdate(update.update_id, nowIso))) return { handled: false };
 
   const state = (await store.getUiState(chatId)) ?? emptyState(chatId);
   // Prefisso `d:` = il tocco arriva da un digest: quel messaggio è contenuto da

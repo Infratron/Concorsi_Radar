@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { createD1HttpBinding, createD1HttpStore, d1HttpOptionsFromEnv } from "../src/db/d1-http.ts";
 import { simhash } from "../src/lib/text.ts";
 import type { NewItem } from "../src/types.ts";
+import { Sqlite } from "./sqlite.ts";
 
 /**
  * L'adapter HTTP di D1 serve alla raccolta che gira su GitHub Actions. Qui il
@@ -11,8 +12,6 @@ import type { NewItem } from "../src/types.ts";
  * risultato nella forma dell'API di Cloudflare. Così il test copre il tragitto
  * completo — store → corpo JSON → righe di risposta — senza usare la rete.
  */
-
-const { DatabaseSync: Sqlite } = process.getBuiltinModule("node:sqlite") as typeof import("node:sqlite");
 
 interface Chiamata {
   url: string;

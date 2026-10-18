@@ -1,4 +1,5 @@
 import type {
+  DedupeRow,
   ItemPatch,
   ItemQuery,
   ItemRow,
@@ -78,6 +79,14 @@ export interface Store {
    * perché il solo SimHash non separa i duplicati veri dai concorsi diversi.
    */
   findDuplicateCandidates(urlKey: string, simhash: string, sinceIso: string, limit?: number): Promise<ItemRow[]>;
+  /** La riga con quell'urlKey, in qualunque data: è il controllo di duplicato più economico. */
+  getItemByUrlKey(urlKey: string): Promise<ItemRow | null>;
+  /**
+   * La finestra di deduplica in forma ridotta, dalla più recente. La raccolta la
+   * legge UNA volta per giro (src/dedupe.ts, duplicateFinder): rileggerla per
+   * ogni item era il 60% delle righe lette da D1 (misurato il 18/10/2026).
+   */
+  dedupeWindow(sinceIso: string, limit: number): Promise<DedupeRow[]>;
   /** Inserisce l'item; se urlKey esiste già restituisce la riga esistente e created=false. */
   insertItem(item: NewItem): Promise<{ item: ItemRow; created: boolean }>;
   updateItem(id: number, patch: ItemPatch): Promise<void>;
@@ -190,6 +199,12 @@ export interface Store {
   recentLogs(limit: number): Promise<RunRow[]>;
   /** true la prima volta che vede l'update_id, false se è un retry Telegram. */
   claimUpdate(updateId: number, at: string): Promise<boolean>;
+  /**
+   * Toglie le esecuzioni più vecchie di `runsBefore` e gli update_id più vecchi
+   * di `updatesBefore`. Le due tabelle crescono a ogni tick e a ogni tocco, e
+   * nessuno le legge oltre le ultime righe: senza pulizia D1 si riempie di log.
+   */
+  pruneLogs(runsBefore: string, updatesBefore: string): Promise<void>;
 
   // --- Workers AI ---
   aiUsage(day: string): Promise<number>;

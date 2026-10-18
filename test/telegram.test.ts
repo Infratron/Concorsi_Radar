@@ -1472,6 +1472,9 @@ describe("interfaccia · un solo messaggio per chat", () => {
     expect(lastWith(calls, "sendMessage")?.payload.text).toContain("999");
     expect(calls.filter((call) => call.method === "deleteMessage")).toHaveLength(0);
     expect(await store.getUiState(999)).toBeNull();
+    // Nessuna scrittura per un estraneo: lo stesso update_id, se poi arrivasse
+    // da una chat autorizzata, non risulterebbe già visto.
+    expect(await store.claimUpdate(4, "2026-10-16T08:00:00.000Z")).toBe(true);
   });
 
   it("i comandi restano scorciatoie: /scadenze apre la sezione giusta", async () => {

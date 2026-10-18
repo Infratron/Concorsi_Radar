@@ -1,4 +1,4 @@
-import type { FetchLike, IngestContext } from "../types.ts";
+import type { IngestContext } from "../types.ts";
 
 export interface ConditionalHeaders {
   etag: string | null;
@@ -109,7 +109,7 @@ export function htmlResponse(html: string, status = 200): Response {
       "content-type": "text/html; charset=utf-8",
       "cache-control": "no-store",
       "content-security-policy":
-        "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; base-uri 'none'; form-action 'none'",
+        "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
       "referrer-policy": "no-referrer",
       "x-content-type-options": "nosniff",
     },

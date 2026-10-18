@@ -1,10 +1,10 @@
 import { readFileSync } from "node:fs";
-import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import worker from "../src/index.ts";
-import { createD1Store, type D1Like, type D1LikeStatement } from "../src/db/d1.ts";
+import { createD1Store } from "../src/db/d1.ts";
 import { NOTIFY_CRON } from "../src/schedule.ts";
 import type { Env } from "../src/types.ts";
+import { Sqlite, sqliteBinding } from "./sqlite.ts";
 
 /**
  * Il tick del Worker, eseguito davvero: `scheduled()` dell'entry point, il D1 su
@@ -20,18 +20,6 @@ import type { Env } from "../src/types.ts";
  * la raccolta di riserva fallisce senza uscire da qui (è il caso di produzione in
  * cui la rete di Cloudflare viene bloccata).
  */
-
-const { DatabaseSync: Sqlite } = process.getBuiltinModule("node:sqlite") as typeof import("node:sqlite");
-
-function sqliteBinding(db: DatabaseSync): D1Like {
-  const statement = (sql: string, params: unknown[]): D1LikeStatement => ({
-    bind: (...next: unknown[]) => statement(sql, next),
-    first: async <T>() => ((db.prepare(sql).get(...(params as SQLInputValue[])) as unknown as T | undefined) ?? null),
-    all: async <T>() => ({ results: db.prepare(sql).all(...(params as SQLInputValue[])) as unknown as T[] }),
-    run: async () => ({ meta: { changes: Number(db.prepare(sql).run(...(params as SQLInputValue[])).changes) } }),
-  });
-  return { prepare: (sql: string) => statement(sql, []) };
-}
 
 /** 20/11/2026 11:00 a Roma: fuori dalla fascia di silenzio. */
 const NOW = new Date("2026-11-20T10:00:00.000Z");

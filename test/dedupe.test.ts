@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createMemoryStore } from "../src/db/memory.ts";
-import { findDuplicate, isBetterTitle, prepareItem, toNewItem, upgradeTitle } from "../src/dedupe.ts";
+import { duplicateFinder, findDuplicate, isBetterTitle, pickDuplicate, prepareItem, toNewItem, upgradeTitle } from "../src/dedupe.ts";
 import { enrichWithRules } from "../src/enrich/rules.ts";
 import { baseScore } from "../src/enrich/score.ts";
 import type { RawItem } from "../src/types.ts";
@@ -137,5 +137,51 @@ describe("il titolo migliore vince", () => {
 
     // E la seconda volta non riscrive niente (è già il titolo migliore).
     expect(await upgradeTitle(store, row!, candidate)).toBe(false);
+  });
+});
+
+describe("duplicateFinder · una finestra per giro", () => {
+  it("riconosce un duplicato anche con più di 300 item più recenti, e legge la finestra una volta", async () => {
+    const { store } = await storeWith(
+      raw("In palio una Fiat Panda con il concorso Barilla, scade il 25 ottobre 2026", "https://a.example/1"),
+    );
+    // 400 item più recenti: con il vecchio tetto di 300 il concorso Barilla
+    // usciva dalla finestra e la copia dell'aggregatore diventava una riga doppia.
+    for (let index = 0; index < 400; index++) {
+      const item = raw(`Concorso numero ${index} vinci uno smartphone modello ${index}`, `https://c.example/${index}`);
+      const prepared = await prepareItem(item);
+      const insight = enrichWithRules(item, { tags: [] }, NOW);
+      const later = new Date(NOW.getTime() + (index + 1) * 60_000);
+      await store.insertItem(toNewItem(item, prepared, insight, 0, later));
+    }
+    let letture = 0;
+    const dedupeWindow = store.dedupeWindow.bind(store);
+    store.dedupeWindow = async (since, limit) => {
+      letture++;
+      return dedupeWindow(since, limit);
+    };
+
+    const finder = duplicateFinder(store, NOW);
+    const copia = await prepareItem(
+      raw("Scontrino Felice - In palio una Fiat Panda con il concorso Barilla", "https://b.example/1", "", "fonte-b"),
+      "Scontrino Felice · concorsi con acquisto",
+    );
+    const altra = await prepareItem(raw("Concorso Lindt vinci un viaggio a Zurigo", "https://b.example/2"));
+    const primo = await finder.candidates(copia);
+    await finder.candidates(altra);
+
+    expect(primo.byKey).toBeNull();
+    expect(pickDuplicate(primo.near, copia)?.id).toBe(1);
+    expect(letture).toBe(1);
+  });
+
+  it("un item inserito nel giro entra nella finestra già letta", async () => {
+    const store = createMemoryStore();
+    const finder = duplicateFinder(store, NOW);
+    const nuovo = await prepareItem(raw("Concorso Lindt vinci un viaggio a Zurigo", "https://a.example/lindt"));
+    expect((await finder.candidates(nuovo)).near).toEqual([]);
+    finder.remember({ id: 7, urlKey: nuovo.urlKey, simhash: nuovo.simhash, title: nuovo.title });
+    const copia = await prepareItem(raw("Lindt: vinci un viaggio a Zurigo", "https://b.example/lindt"));
+    expect(pickDuplicate((await finder.candidates(copia)).near, copia)?.id).toBe(7);
   });
 });

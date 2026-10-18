@@ -231,7 +231,8 @@ npm run secrets:chats
 npm run deploy                    # stampa l'URL del Worker, es. https://concorsi-radar.<tuo>.workers.dev
 
 # 4. registra webhook e menu comandi (usa lo stesso WEBHOOK_SECRET)
-curl "https://concorsi-radar.<tuo>.workers.dev/setup?secret=IL_TUO_WEBHOOK_SECRET"
+# il secret va nell'header, non nell'URL: un ?secret= finirebbe nei log delle richieste
+curl -H "Authorization: Bearer IL_TUO_WEBHOOK_SECRET" "https://concorsi-radar.<tuo>.workers.dev/setup"
 ```
 
 Poi la raccolta: i tre secret su GitHub, come spiegato in
@@ -259,7 +260,7 @@ npm run db:seed:local
 npm run dev:cron                  # wrangler dev --local --test-scheduled
 curl "http://127.0.0.1:8787/status"                                   # variabili mancanti
 curl "http://127.0.0.1:8787/__scheduled?cron=*/15+*+*+*+*"            # tick di avvisi e pulizia
-curl "http://127.0.0.1:8787/health?secret=IL_TUO_WEBHOOK_SECRET"
+curl -H "Authorization: Bearer IL_TUO_WEBHOOK_SECRET" "http://127.0.0.1:8787/health"
 ```
 
 Gli script di sviluppo passano `--local` di proposito: da wrangler 4 i binding
@@ -642,10 +643,14 @@ di condivisione, quindi il link apre una pagina nostra, `/share`
 ([src/share.ts](src/share.ts)): lì `navigator.share()` chiama il pannello di
 sistema del telefono — WhatsApp, messaggi, mail, qualunque app — e dove quella
 API non c'è restano quattro vie esplicite: 💬 WhatsApp, ✈️ Telegram, ✉️ Email e
-📋 Copia frase e link. La pagina riceve solo `u` (il link) e `t` (la frase),
-accetta **solo http/https** (uno schema `javascript:` non viene mai servito),
-escape tutto quello che stampa e si porta dietro una CSP chiusa:
-`default-src 'none'` più lo stile e lo script inline della pagina. L'origine
+📋 Copia frase e link. La pagina riceve `u` (il link), accetta **solo
+http/https** (uno schema `javascript:` non viene mai servito) e **serve solo i
+link che sono in archivio**: link e frase vengono dalla riga di D1, cercata per
+`url_key`, non dall'URL della richiesta. Prima stampava qualunque `u` e `t`, e il
+dominio del bot poteva diventare la vetrina di un messaggio falso ("Hai vinto!
+Ritira qui") con un link a piacere; ora un link estraneo risponde 404. Escape
+tutto quello che stampa e si porta dietro una CSP chiusa: `default-src 'none'`
+più lo stile e lo script inline della pagina, e `frame-ancestors 'none'`. L'origine
 arriva dalla richiesta (`shareBase` in `BotDeps`), quindi funziona anche su un
 dominio custom senza costanti da aggiornare.
 
@@ -1498,6 +1503,18 @@ un falso accoppiamento costa un concorso perso. Le stesse coppie sono bloccate
 come test in [test/text.test.ts](test/text.test.ts) e
 [test/dedupe.test.ts](test/dedupe.test.ts).
 
+**La finestra si legge una volta per giro.** I 60 giorni di candidati si
+caricano in forma ridotta (id, url_key, simhash, titolo) alla prima domanda della
+raccolta e si tengono aggiornati in memoria con gli item inseriti e i titoli
+migliorati (`duplicateFinder` in [src/dedupe.ts](src/dedupe.ts)); la riga intera
+si rilegge solo per il candidato che vince. Prima la finestra si rileggeva per
+ogni item senza URL noto, ed era tagliata a 300 righe: misurato il 18/10/2026,
+quella query faceva **411.660 delle 690.099 righe lette in un giorno** (il piano
+Free ne concede 5 milioni, e la cifra cresceva con l'archivio), e con 285 item già
+in archivio dopo due giorni il taglio a 300 stava per far passare i duplicati di
+un concorso di qualche settimana prima. Il tetto ora è 5.000 righe
+(`DUP_WINDOW_MAX_ROWS` in [src/lib/text.ts](src/lib/text.ts)).
+
 **Quando vincono due copie dello stesso concorso, in archivio resta il nome
 migliore.** Un duplicato non crea una seconda riga, ma può portare un nome più
 completo: se il candidato contiene tutte le parole del titolo già salvato e ne ha
@@ -1983,7 +2000,7 @@ entrambi ripetibili:
 
 ```bash
 npm run bench:cpu                                       # su Node, fonti vere
-curl "http://127.0.0.1:8788/bench?secret=WEBHOOK_SECRET&fonti=8"   # dentro workerd
+curl -H "Authorization: Bearer WEBHOOK_SECRET" "http://127.0.0.1:8788/bench?fonti=8"   # dentro workerd
 ```
 
 Ultima misura su 6-8 fonti reali (16/10/2026):
@@ -2043,7 +2060,7 @@ per leggere il numero della piattaforma serve `npx wrangler tail` su un deploy.
 ## 10. Diagnostica
 
 ```bash
-curl "https://<worker>/health?secret=WEBHOOK_SECRET"   # esecuzioni e stato fonti
+curl -H "Authorization: Bearer WEBHOOK_SECRET" "https://<worker>/health"   # esecuzioni e stato fonti
 npm run dry-run                                        # cosa verrebbe inviato, senza inviare
 npm run ingest                                         # raccolta vera, come su Actions
 npm run prune                                          # cosa non è più un concorso attivo (elenco)
@@ -2052,7 +2069,7 @@ npm run checklist                                      # le quattro caselle di c
 npm run checklist -- --fonte <id>                      # ...e per una fonte sola, tipi compresi
 npm run tags                                           # tag di contenuto mancanti (elenco)
 npm run tags -- --apply                                # e li aggiunge (solo aggiunta)
-npm test                                               # 642 test
+npm test                                               # 746 test
 npm run typecheck
 ```
 
@@ -2067,7 +2084,10 @@ fonte stanno in `/health`, nei campi `lastStatus` / `lastError` / `lastItems`.
 La tabella `runs` in D1 conserva la nota e il log di ogni esecuzione: quelle con
 `trigger = actions` sono la raccolta su GitHub, le altre i tick del Worker, e il
 log (`log`) ce l'hanno solo le raccolte — i tick e i digest lo lasciano vuoto, ed
-è per questo che 🧾 Log delle raccolte è l'elenco dei lanci.
+è per questo che 🧾 Log delle raccolte è l'elenco dei lanci. Il tick dei 15
+minuti tiene **30 giorni** di esecuzioni e **3 giorni** di `updates` (gli id di
+Telegram servono solo contro i suoi retry): le due tabelle crescevano a ogni tick
+e a ogni tocco, e nessuno le legge oltre le ultime righe.
 
 ## 11. Limiti noti
 
@@ -2263,7 +2283,7 @@ scripts/
   dry-run.ts               prova generale senza inviare nulla
   bench-cpu.ts             stessa misura su Node, con le fonti vere
   seed-sources.ts          genera l'SQL di sincronizzazione delle fonti
-test/                      25 file, 493 test (vitest, nessuna rete tranne i finti)
+test/                      34 file, 746 test (vitest, nessuna rete tranne i finti); sqlite.ts è il D1 su SQLite condiviso
 ```
 
 Il tratto che tiene insieme tutto: **una sola copia dell'SQL**. `src/db/d1.ts`

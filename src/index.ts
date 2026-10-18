@@ -13,6 +13,8 @@ import { benchDedupeLookup, benchSource, downloadBodies, summarise } from "./deb
 import { htmlResponse, jsonResponse } from "./lib/http.ts";
 import { isShareableUrl, renderSharePage } from "./share.ts";
 import { dispatchIfSilent } from "./collect/dispatch.ts";
+import { urlKey } from "./lib/text.ts";
+import { sharePhrase } from "./telegram/keyboard.ts";
 
 /**
  * Quante fonti prova la raccolta di riserva in un tick. Il tetto vero resta il
@@ -20,6 +22,13 @@ import { dispatchIfSilent } from "./collect/dispatch.ts";
  * coda, e le fonti che non ci stanno vengono riprese dal tick successivo.
  */
 const FALLBACK_MAX_SOURCES = 12;
+/**
+ * Quanto si tengono le esecuzioni: le schermate ne leggono al massimo 50 (circa
+ * dodici ore), quindi trenta giorni bastano per qualunque indagine a mano.
+ */
+const RUNS_KEEP_MS = 30 * 86_400_000;
+/** Gli update_id servono solo contro i retry di Telegram, che durano ore. */
+const UPDATES_KEEP_MS = 3 * 86_400_000;
 
 /**
  * Entry point del Worker.
@@ -35,12 +44,25 @@ const FALLBACK_MAX_SOURCES = 12;
  * sua rete raggiunge (vedi shouldFallbackIngest in src/schedule.ts).
  */
 
-/** Confronto a tempo costante per i secret nell'URL. */
+/** Confronto a tempo costante per i secret. */
 function safeEqual(a: string | null, b: string | null): boolean {
   if (!a || !b || a.length !== b.length) return false;
   let diff = 0;
   for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
   return diff === 0;
+}
+
+/**
+ * Le rotte di servizio (/setup, /health, /bench) vogliono il secret nell'header
+ * `Authorization: Bearer …`, non più in `?secret=`. Un secret nell'URL finisce
+ * nei log delle richieste (observability è accesa), nella cronologia del browser
+ * e nella shell: ed è lo stesso secret che firma il webhook, quindi chi lo legge
+ * può spedire al bot update finti a nome di una chat autorizzata.
+ */
+function isAuthorized(request: Request, env: Env): boolean {
+  const header = request.headers.get("authorization") ?? "";
+  const token = /^Bearer\s+(.+)$/i.exec(header.trim())?.[1] ?? null;
+  return safeEqual(token, env.WEBHOOK_SECRET);
 }
 
 async function runCron(env: Env, cron: string, now: Date): Promise<void> {
@@ -157,6 +179,10 @@ async function runCron(env: Env, cron: string, now: Date): Promise<void> {
   // in un giro in cui non c'era niente da notificare (anzi, soprattutto in quello).
   const raccolta = await sendCollectionReminder({ store, tg, now, runs, adminChatId, fallback });
   const expired = await expireOldItems(store, now);
+  await store.pruneLogs(
+    new Date(now.getTime() - RUNS_KEEP_MS).toISOString(),
+    new Date(now.getTime() - UPDATES_KEEP_MS).toISOString(),
+  );
   note.push(
     `avvisi: ${instant} istantanei`,
     `promemoria: ${reminders}`,
@@ -177,7 +203,6 @@ async function runCron(env: Env, cron: string, now: Date): Promise<void> {
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
-    const secret = url.searchParams.get("secret");
 
     if (url.pathname === "/" || url.pathname === "/status") {
       return jsonResponse({ ok: true, bot: "Concorsi Radar", missing: missingBindings(env) });
@@ -213,15 +238,21 @@ export default {
     // `navigator.share()` chiama il pannello di sistema (WhatsApp, messaggi,
     // mail) invece delle sole chat di Telegram. Pubblica di proposito: non legge
     // niente e non ha segreti, riceve solo il link e la frase.
+    //
+    // Si condivide solo quello che è in archivio: link e frase vengono dalla riga,
+    // non dall'URL. Prima la pagina stampava qualunque `u` e `t`, e il dominio del
+    // bot diventava una vetrina per chiunque ("Hai vinto! Ritira qui" + un link a
+    // piacere). `t` resta nei link vecchi ma non si legge più.
     if (url.pathname === "/share") {
       const target = url.searchParams.get("u") ?? "";
-      const testo = url.searchParams.get("t") ?? "";
       if (!isShareableUrl(target)) return htmlResponse("<h1>Link non valido</h1>", 400);
-      return htmlResponse(renderSharePage(target, testo));
+      const item = await createD1Store(env.DB).getItemByUrlKey(urlKey(target));
+      if (!item) return htmlResponse("<h1>Link non valido</h1>", 404);
+      return htmlResponse(renderSharePage(item.url, sharePhrase(item.kind)));
     }
 
     if (url.pathname === "/setup") {
-      if (!safeEqual(secret, env.WEBHOOK_SECRET)) return jsonResponse({ ok: false, error: "forbidden" }, 403);
+      if (!isAuthorized(request, env)) return jsonResponse({ ok: false, error: "forbidden" }, 403);
       const access = chatAccess(env);
       const tg = new TelegramClient(env.TELEGRAM_BOT_TOKEN, (input, init) => fetch(input, init));
       const me = await tg.getMe();
@@ -237,7 +268,7 @@ export default {
     }
 
     if (url.pathname === "/bench") {
-      if (!safeEqual(secret, env.WEBHOOK_SECRET)) return jsonResponse({ ok: false, error: "forbidden" }, 403);
+      if (!isAuthorized(request, env)) return jsonResponse({ ok: false, error: "forbidden" }, 403);
       const store = createD1Store(env.DB);
       // Come la pipeline: i tetti per fonte vengono dalla config, non dalle righe
       // in D1 (che possono essere di un seed vecchio). Altrimenti si misura uno
@@ -259,7 +290,7 @@ export default {
     }
 
     if (url.pathname === "/health") {
-      if (!safeEqual(secret, env.WEBHOOK_SECRET)) return jsonResponse({ ok: false, error: "forbidden" }, 403);
+      if (!isAuthorized(request, env)) return jsonResponse({ ok: false, error: "forbidden" }, 403);
       const access = chatAccess(env);
       const store = createD1Store(env.DB);
       const [runs, sources] = await Promise.all([store.recentRuns(5), store.getSources()]);

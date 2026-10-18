@@ -270,6 +270,26 @@ export function numbersOf(input: string): string[] {
  */
 export const DUP_CANDIDATE_MAX_HAMMING = 32;
 
+/**
+ * Quante righe della finestra di deduplica si leggono al massimo. Prima erano
+ * 300, e con un archivio che entra a 140 item al giorno (misurato il 18/10/2026:
+ * 285 in due giorni) la finestra dei 60 giorni ne conteneva una frazione: un
+ * concorso di tre settimane fa ripubblicato da un aggregatore non veniva più
+ * riconosciuto e diventava una riga doppia, senza errori da nessuna parte.
+ * ponytail: tetto fisso; oltre ~5000 item in 60 giorni serve un indice per simhash.
+ */
+export const DUP_WINDOW_MAX_ROWS = 5000;
+
+/** Le righe più vicine per simhash, dentro la soglia larga del prefilter. */
+export function nearestBySimhash<T extends { simhash: string }>(rows: T[], simhashValue: string, limit: number): T[] {
+  return rows
+    .map((row) => ({ row, distance: hammingHex(row.simhash, simhashValue) }))
+    .filter((entry) => entry.distance <= DUP_CANDIDATE_MAX_HAMMING)
+    .sort((a, b) => a.distance - b.distance)
+    .slice(0, Math.max(1, limit))
+    .map((entry) => entry.row);
+}
+
 /** Somiglianza minima sui token distintivi per parlare di duplicato. */
 export const DUP_MIN_JACCARD = 0.6;
 

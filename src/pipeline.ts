@@ -18,8 +18,8 @@ import { MAX_AI_CALLS_PER_RUN, enrichWithAi, mergeInsight, needsAi } from "./enr
 import { applyBrandBonus, applyWeights, baseScore } from "./enrich/score.ts";
 import {
   type PreparedItem,
+  duplicateFinder,
   isFullyEnriched,
-  loadDuplicateCandidates,
   mergeDuplicate,
   pickDuplicate,
   prepareItem,
@@ -319,6 +319,7 @@ export async function runIngest(
     : dueSources(pool, now, options.maxSources ?? MAX_SOURCES_PER_RUN);
   const weights = await mergedWeights(deps.store);
   const brands = await mergedBrands(deps.store);
+  const duplicati = duplicateFinder(deps.store, now);
 
   let sourcesOk = 0;
   let sourcesFail = 0;
@@ -510,10 +511,13 @@ export async function runIngest(
         const prepareStart = cpuStart();
         const prepared = await prepareItem(raw, nomeFonte, source.kind, source.category);
         cpuProxyMs += performance.now() - prepareStart;
-        const candidates = await loadDuplicateCandidates(deps.store, prepared, now);
+        const { byKey, near } = await duplicati.candidates(prepared);
         const dedupeStart = cpuStart();
-        const existing = pickDuplicate(candidates, prepared);
+        const vicino = byKey === null ? pickDuplicate(near, prepared) : null;
         cpuProxyMs += performance.now() - dedupeStart;
+        // Il vincente della finestra è una riga ridotta: la riga completa si
+        // rilegge, perché un giro può averla già cambiata (cluster, premio).
+        const existing = byKey ?? (vicino === null ? null : await deps.store.getItem(vicino.id));
 
         if (existing) {
           duplicates++;
@@ -522,7 +526,9 @@ export async function runIngest(
           await registraVista(source, prepared, existing.id, true);
           // Un duplicato non crea una seconda riga, ma può portare un nome
           // migliore: la copia con il titolo più completo lo sostituisce.
-          await upgradeTitle(deps.store, existing, prepared);
+          if (await upgradeTitle(deps.store, existing, prepared)) {
+            duplicati.remember({ id: existing.id, urlKey: existing.urlKey, simhash: prepared.simhash, title: prepared.title });
+          }
           // Il bando scritto nel testo si salva anche su una riga che è già in
           // archivio: non costa una richiesta, e una riga che ce l'ha non si
           // tocca (l'archivio ha il valore più vecchio e più completo — il
@@ -596,7 +602,11 @@ export async function runIngest(
         // bottone (mai un link inventato).
         const rulesUrl = await regolamentoPer(raw, prepared);
         const inserted = await deps.store.insertItem(toNewItem(raw, prepared, insight, score, now, rulesUrl));
-        if (inserted.created) itemsNew++;
+        if (inserted.created) {
+          itemsNew++;
+          const { id, urlKey, simhash, title } = inserted.item;
+          duplicati.remember({ id, urlKey, simhash, title });
+        }
         await registraVista(source, prepared, inserted.item.id, true);
       } catch (error) {
         notes.push(`${source.id}: item scartato (${errorMessage(error)})`);

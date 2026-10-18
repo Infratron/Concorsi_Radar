@@ -1,11 +1,13 @@
-import type { Category, Insight, ItemKind, ItemRow, NewItem, RawItem, SourceKind } from "./types.ts";
+import type { Category, DedupeRow, Insight, ItemKind, ItemRow, NewItem, RawItem, SourceKind } from "./types.ts";
 import type { Store } from "./db/store.ts";
 import { brandFor } from "./config/brands.ts";
 import { classifyKind } from "./enrich/kind.ts";
 import { readableTitle } from "./lib/titles.ts";
 import {
+  DUP_WINDOW_MAX_ROWS,
   canonicalUrl,
   isDuplicateTitle,
+  nearestBySimhash,
   simhash,
   stripBoilerplate,
   stripSourceTokens,
@@ -161,11 +163,47 @@ export async function loadDuplicateCandidates(
 }
 
 /**
+ * La deduplica di un giro di raccolta: la finestra si legge UNA volta e poi si
+ * tiene aggiornata in memoria con gli item inseriti e i titoli migliorati.
+ *
+ * Perché: `findDuplicateCandidates` rileggeva la finestra intera per ogni item
+ * senza urlKey noto — 1.469 letture al giorno per il 60% delle righe lette da
+ * D1 (misurato il 18/10/2026: 411.660 su 690.099). La riga completa del
+ * candidato vincente si rilegge per id, così i campi che cambiano durante il
+ * giro (cluster, scadenza, premio) non sono mai quelli di una copia vecchia.
+ */
+export interface DuplicateFinder {
+  /** La riga con lo stesso urlKey (completa), oppure i più vicini per simhash. */
+  candidates(prepared: PreparedItem): Promise<{ byKey: ItemRow | null; near: DedupeRow[] }>;
+  /** Tiene la finestra in pari: una riga nuova o un titolo cambiato. */
+  remember(row: DedupeRow): void;
+}
+
+export function duplicateFinder(store: Store, now: Date): DuplicateFinder {
+  const since = new Date(now.getTime() - DEDUPE_WINDOW_DAYS * 86_400_000).toISOString();
+  let finestra: DedupeRow[] | null = null;
+  return {
+    async candidates(prepared) {
+      const byKey = await store.getItemByUrlKey(prepared.urlKey);
+      if (byKey) return { byKey, near: [] };
+      finestra ??= await store.dedupeWindow(since, DUP_WINDOW_MAX_ROWS);
+      return { byKey: null, near: nearestBySimhash(finestra, prepared.simhash, DEDUPE_CANDIDATE_LIMIT) };
+    },
+    remember(row) {
+      if (finestra === null) return;
+      const index = finestra.findIndex((entry) => entry.id === row.id);
+      if (index >= 0) finestra[index] = row;
+      else finestra.unshift(row);
+    },
+  };
+}
+
+/**
  * Seconda metà: la decisione sui candidati. Questa è CPU nostra (confronto dei
  * token e degli importi) e per item costa quanto l'arricchimento: la pipeline la
  * cronometra per il freno di budget, per questo è separata dalla query.
  */
-export function pickDuplicate(candidates: ItemRow[], prepared: PreparedItem): ItemRow | null {
+export function pickDuplicate<T extends Pick<ItemRow, "urlKey" | "title">>(candidates: T[], prepared: PreparedItem): T | null {
   for (const candidate of candidates) {
     if (candidate.urlKey === prepared.urlKey) return candidate;
     if (isDuplicateTitle(candidate.title, prepared.title)) return candidate;

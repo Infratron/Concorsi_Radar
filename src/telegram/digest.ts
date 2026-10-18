@@ -3,7 +3,7 @@ import type { ItemKind, ItemRow, Prefs, RunRow } from "../types.ts";
 import { COLLECTION_SILENCE_MS, collectionCheck } from "../schedule.ts";
 import type { TelegramClient } from "./api.ts";
 import { brandLabel } from "../config/brands.ts";
-import { daysLeft, escapeHtml, formatDigest, formatItemCard, localDateString, localHour, type DigestSection } from "./format.ts";
+import { daysLeft, escapeHtml, formatDigest, formatItemCard, localHour, type DigestSection } from "./format.ts";
 import { digestKeyboard, instantKeyboard } from "./keyboard.ts";
 import { staleItemReason } from "../enrich/freshness.ts";
 import { isSamePage, regulationUrlFromText } from "../enrich/regulation.ts";

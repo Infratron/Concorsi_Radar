@@ -217,6 +217,12 @@ CREATE TABLE IF NOT EXISTS runs (
   log          TEXT
 );
 
+-- Ogni tick legge "le ultime 50 esecuzioni" e ogni schermata del menù l'ora
+-- dell'ultima raccolta: senza indice sono scansioni della tabella intera, che
+-- cresce di circa 150 righe al giorno (misurato il 18/10/2026: 64.238 righe
+-- lette in 142 letture). Il tick toglie le righe più vecchie di 30 giorni.
+CREATE INDEX IF NOT EXISTS idx_runs_started ON runs (started_at DESC);
+
 -- `log` è il racconto fonte per fonte di UNA raccolta (chi ha risposto, con che
 -- codice HTTP, quanti item): la stessa cosa che il job su GitHub scrive nella
 -- pagina di riepilogo, ma leggibile dalla chat in 🧾 Log delle raccolte — la
@@ -242,6 +248,9 @@ CREATE TABLE IF NOT EXISTS updates (
   update_id    INTEGER PRIMARY KEY,
   processed_at TEXT NOT NULL
 );
+-- Telegram ritenta per qualche ora al massimo: il tick toglie gli id più
+-- vecchi di 3 giorni, e questo indice gli evita di scorrere la tabella.
+CREATE INDEX IF NOT EXISTS idx_updates_processed ON updates (processed_at);
 
 -- Tetto giornaliero Workers AI (10.000 Neurons/giorno sul piano Free).
 CREATE TABLE IF NOT EXISTS ai_usage (

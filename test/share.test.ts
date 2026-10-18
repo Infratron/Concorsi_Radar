@@ -2,6 +2,12 @@ import { describe, expect, it } from "vitest";
 import worker from "../src/index.ts";
 import { isShareableUrl, renderSharePage } from "../src/share.ts";
 import type { Env } from "../src/types.ts";
+import { createD1Store } from "../src/db/d1.ts";
+import { prepareItem, toNewItem } from "../src/dedupe.ts";
+import { enrichWithRules } from "../src/enrich/rules.ts";
+import { schemaDb, sqliteBinding } from "./sqlite.ts";
+
+const NOW = new Date("2026-10-16T12:00:00.000Z");
 
 /**
  * La pagina di condivisione.
@@ -97,26 +103,45 @@ describe("condivisione · la pagina /share", () => {
 });
 
 describe("condivisione · la rotta del Worker", () => {
-  const env = {} as Env;
+  async function envConConcorso(): Promise<Env> {
+    const DB = sqliteBinding(schemaDb());
+    const item = { sourceId: "fonte-a", url: "https://esempio.it/concorso", title: "Concorso Barilla", summary: "", publishedAt: null, guid: null };
+    const prepared = await prepareItem(item);
+    const insight = enrichWithRules(item, { tags: [] }, NOW);
+    await createD1Store(DB).insertItem(toNewItem(item, prepared, insight, 0, NOW));
+    return { DB } as unknown as Env;
+  }
 
-  it("serve la pagina con il link giusto", async () => {
+  it("serve la pagina di un concorso in archivio, con la frase del suo tipo", async () => {
     const risposta = await worker.fetch(
       new Request("https://bot.example/share?u=https%3A%2F%2Fesempio.it%2Fconcorso&t=Ciao"),
-      env,
+      await envConConcorso(),
     );
     expect(risposta.status).toBe(200);
     expect(risposta.headers.get("content-type")).toContain("text/html");
+    expect(risposta.headers.get("content-security-policy")).toContain("frame-ancestors 'none'");
     const html = await risposta.text();
     expect(html).toContain("https://esempio.it/concorso");
-    expect(html).toContain("Ciao");
-    // La frase sta nel suo blocco, separata dal link.
-    expect(html).toContain('<p class="frase" id="frase">Ciao</p>');
+    // La frase viene dalla riga, non dall'URL: `t` non si stampa più.
+    expect(html).toContain("questo concorso!");
+    expect(html).not.toContain(">Ciao<");
+  });
+
+  it("non fa da vetrina a un link che non è in archivio", async () => {
+    const risposta = await worker.fetch(
+      new Request("https://bot.example/share?u=https%3A%2F%2Fphishing.example%2Fritira&t=Hai%20vinto"),
+      await envConConcorso(),
+    );
+    expect(risposta.status).toBe(404);
+    const html = await risposta.text();
+    expect(html).not.toContain("phishing.example");
+    expect(html).not.toContain("Hai vinto");
   });
 
   it("rifiuta uno schema eseguibile invece di servirlo", async () => {
     const risposta = await worker.fetch(
       new Request("https://bot.example/share?u=javascript%3Aalert(1)"),
-      env,
+      {} as Env,
     );
     expect(risposta.status).toBe(400);
     const html = await risposta.text();
@@ -124,7 +149,29 @@ describe("condivisione · la rotta del Worker", () => {
   });
 
   it("senza link non serve niente", async () => {
-    const risposta = await worker.fetch(new Request("https://bot.example/share"), env);
+    const risposta = await worker.fetch(new Request("https://bot.example/share"), {} as Env);
     expect(risposta.status).toBe(400);
+  });
+});
+
+describe("rotte di servizio · il secret sta nell'header", () => {
+  const env = { WEBHOOK_SECRET: "segreto-lungo", DB: sqliteBinding(schemaDb()) } as unknown as Env;
+
+  it("/health risponde con Authorization: Bearer", async () => {
+    const risposta = await worker.fetch(
+      new Request("https://bot.example/health", { headers: { authorization: "Bearer segreto-lungo" } }),
+      env,
+    );
+    expect(risposta.status).toBe(200);
+  });
+
+  it("/health rifiuta il secret nell'URL, sbagliato o assente", async () => {
+    for (const richiesta of [
+      new Request("https://bot.example/health?secret=segreto-lungo"),
+      new Request("https://bot.example/health", { headers: { authorization: "Bearer segreto-sbagliat" } }),
+      new Request("https://bot.example/health"),
+    ]) {
+      expect((await worker.fetch(richiesta, env)).status).toBe(403);
+    }
   });
 });

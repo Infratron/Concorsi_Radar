@@ -201,6 +201,12 @@ export interface ItemRow {
   aiUsed: boolean;
 }
 
+/**
+ * La riga ridotta della finestra di deduplica: solo quello che serve a scegliere
+ * il duplicato. La riga completa si rilegge per id quando un candidato vince.
+ */
+export type DedupeRow = Pick<ItemRow, "id" | "urlKey" | "simhash" | "title">;
+
 /** Item pronto per l'inserimento (senza i campi generati dal database). */
 export interface NewItem {
   sourceId: string;

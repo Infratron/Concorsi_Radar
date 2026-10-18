@@ -1,9 +1,9 @@
-import { readFileSync } from "node:fs";
-import type { DatabaseSync, SQLInputValue } from "node:sqlite";
+import type { DatabaseSync } from "node:sqlite";
 import { beforeEach, describe, expect, it } from "vitest";
-import type { D1Like, D1LikeStatement } from "../src/db/d1.ts";
+import type { D1Like } from "../src/db/d1.ts";
 import { colonneAttese, statementsFromSchema, upgradeDatabase } from "../src/db/upgrade.ts";
 import { sourceSeedStatements } from "../src/db/seeds.ts";
+import { Sqlite, sqliteBinding, SCHEMA } from "./sqlite.ts";
 
 /**
  * L'allineamento del database, sul SQL vero (node:sqlite) e sullo schema vero
@@ -19,21 +19,6 @@ import { sourceSeedStatements } from "../src/db/seeds.ts";
  */
 
 /** `node:sqlite` a runtime: Vite toglierebbe il prefisso `node:`. */
-const { DatabaseSync: Sqlite } = process.getBuiltinModule("node:sqlite") as typeof import("node:sqlite");
-
-const SCHEMA = readFileSync(new URL("../src/db/schema.sql", import.meta.url), "utf8");
-
-function sqliteBinding(db: DatabaseSync): D1Like {
-  const statement = (sql: string, params: unknown[]): D1LikeStatement => ({
-    bind: (...next: unknown[]) => statement(sql, next),
-    first: async <T>() =>
-      ((db.prepare(sql).get(...(params as SQLInputValue[])) as unknown as T | undefined) ?? null),
-    all: async <T>() => ({ results: db.prepare(sql).all(...(params as SQLInputValue[])) as unknown as T[] }),
-    run: async () => ({ meta: { changes: Number(db.prepare(sql).run(...(params as SQLInputValue[])).changes) } }),
-  });
-  return { prepare: (sql: string) => statement(sql, []) };
-}
-
 function freshDb() {
   const db = new Sqlite(":memory:");
   return { db, binding: sqliteBinding(db) };
@@ -41,12 +26,6 @@ function freshDb() {
 
 function nomi(tipo: "table" | "index", db: DatabaseSync): string[] {
   return (db.prepare("SELECT name FROM sqlite_master WHERE type = ? ORDER BY name").all(tipo) as { name: string }[]).map(
-    (riga) => riga.name,
-  );
-}
-
-function colonneDi(db: DatabaseSync, tabella: string): string[] {
-  return (db.prepare(`SELECT name FROM pragma_table_info('${tabella}')`).all() as { name: string }[]).map(
     (riga) => riga.name,
   );
 }

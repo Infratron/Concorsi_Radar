@@ -1,5 +1,6 @@
 import type { SourceStat, Store } from "./store.ts";
 import type {
+  DedupeRow,
   ItemKind,
   ItemPatch,
   ItemQuery,
@@ -16,7 +17,7 @@ import type {
   SourceRow,
   UiState,
 } from "../types.ts";
-import { DUP_CANDIDATE_MAX_HAMMING, hammingHex } from "../lib/text.ts";
+import { DUP_WINDOW_MAX_ROWS, nearestBySimhash } from "../lib/text.ts";
 import { defaultFilters, parseFilters } from "../filters.ts";
 
 /**
@@ -549,15 +550,25 @@ export function createD1Store(db: D1Like): Store {
       if (byKey) return [rowToItem(byKey)];
 
       const candidates = await db
-        .prepare("SELECT * FROM items WHERE first_seen_at >= ? ORDER BY first_seen_at DESC LIMIT 300")
-        .bind(sinceIso)
+        .prepare("SELECT * FROM items WHERE first_seen_at >= ? ORDER BY first_seen_at DESC LIMIT ?")
+        .bind(sinceIso, DUP_WINDOW_MAX_ROWS)
         .all<ItemDbRow>();
-      return (candidates.results ?? [])
-        .map((row) => ({ row, distance: hammingHex(row.simhash, simhashValue) }))
-        .filter((entry) => entry.distance <= DUP_CANDIDATE_MAX_HAMMING)
-        .sort((a, b) => a.distance - b.distance)
-        .slice(0, Math.max(1, limit))
-        .map((entry) => rowToItem(entry.row));
+      return nearestBySimhash(candidates.results ?? [], simhashValue, limit).map(rowToItem);
+    },
+
+    async getItemByUrlKey(key: string): Promise<ItemRow | null> {
+      const row = await db.prepare("SELECT * FROM items WHERE url_key = ?").bind(key).first<ItemDbRow>();
+      return row ? rowToItem(row) : null;
+    },
+
+    async dedupeWindow(sinceIso: string, limit: number): Promise<DedupeRow[]> {
+      const result = await db
+        .prepare(
+          "SELECT id, url_key, simhash, title FROM items WHERE first_seen_at >= ? ORDER BY first_seen_at DESC LIMIT ?",
+        )
+        .bind(sinceIso, Math.max(1, Math.trunc(limit)))
+        .all<{ id: number; url_key: string; simhash: string; title: string }>();
+      return (result.results ?? []).map((row) => ({ id: row.id, urlKey: row.url_key, simhash: row.simhash, title: row.title }));
     },
 
     async insertItem(item: NewItem): Promise<{ item: ItemRow; created: boolean }> {
@@ -1086,6 +1097,11 @@ export function createD1Store(db: D1Like): Store {
       const changes = (result.meta as { changes?: number } | undefined)?.changes;
       if (typeof changes === "number") return changes > 0;
       return true;
+    },
+
+    async pruneLogs(runsBefore: string, updatesBefore: string): Promise<void> {
+      await db.prepare("DELETE FROM runs WHERE started_at < ?").bind(runsBefore).run();
+      await db.prepare("DELETE FROM updates WHERE processed_at < ?").bind(updatesBefore).run();
     },
 
     async aiUsage(day: string): Promise<number> {

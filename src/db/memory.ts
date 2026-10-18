@@ -1,5 +1,6 @@
 import type { SourceStat, Store } from "./store.ts";
 import type {
+  DedupeRow,
   ItemPatch,
   ItemQuery,
   ItemRow,
@@ -14,7 +15,7 @@ import type {
   SourceRow,
   UiState,
 } from "../types.ts";
-import { DUP_CANDIDATE_MAX_HAMMING, hammingHex } from "../lib/text.ts";
+import { DUP_WINDOW_MAX_ROWS, nearestBySimhash } from "../lib/text.ts";
 import { defaultFilters } from "../filters.ts";
 import { totalsOfRefunds } from "../refunds.ts";
 
@@ -86,7 +87,7 @@ export function createMemoryStore(): MemoryStore {
   };
   const prefs = new Map<number, Prefs>();
   const runs: RunRow[] = [];
-  const updates = new Set<number>();
+  const updates = new Map<number, string>();
   const aiUsage = new Map<string, { calls: number; neurons: number }>();
   const robots = new Map<string, RobotsRow>();
   const ui = new Map<number, UiState>();
@@ -222,13 +223,21 @@ export function createMemoryStore(): MemoryStore {
       const candidates = items
         .filter((row) => row.firstSeenAt >= sinceIso)
         .sort((a, b) => b.firstSeenAt.localeCompare(a.firstSeenAt))
-        .slice(0, 300);
-      return candidates
-        .map((row) => ({ row, distance: hammingHex(row.simhash, simhashValue) }))
-        .filter((entry) => entry.distance <= DUP_CANDIDATE_MAX_HAMMING)
-        .sort((a, b) => a.distance - b.distance)
-        .slice(0, Math.max(1, limit))
-        .map((entry) => clone(entry.row));
+        .slice(0, DUP_WINDOW_MAX_ROWS);
+      return nearestBySimhash(candidates, simhashValue, limit).map(clone);
+    },
+
+    async getItemByUrlKey(key: string): Promise<ItemRow | null> {
+      const row = items.find((candidate) => candidate.urlKey === key);
+      return row ? clone(row) : null;
+    },
+
+    async dedupeWindow(sinceIso: string, limit: number): Promise<DedupeRow[]> {
+      return items
+        .filter((row) => row.firstSeenAt >= sinceIso)
+        .sort((a, b) => b.firstSeenAt.localeCompare(a.firstSeenAt))
+        .slice(0, Math.max(1, Math.trunc(limit)))
+        .map(({ id, urlKey, simhash, title }) => ({ id, urlKey, simhash, title }));
     },
 
     async insertItem(item: NewItem): Promise<{ item: ItemRow; created: boolean }> {
@@ -524,10 +533,16 @@ export function createMemoryStore(): MemoryStore {
         .map((run) => clone(run));
     },
 
-    async claimUpdate(updateId: number, _at: string): Promise<boolean> {
+    async claimUpdate(updateId: number, at: string): Promise<boolean> {
       if (updates.has(updateId)) return false;
-      updates.add(updateId);
+      updates.set(updateId, at);
       return true;
+    },
+
+    async pruneLogs(runsBefore: string, updatesBefore: string): Promise<void> {
+      const tenute = runs.filter((run) => run.startedAt >= runsBefore);
+      runs.splice(0, runs.length, ...tenute);
+      for (const [id, at] of updates) if (at < updatesBefore) updates.delete(id);
     },
 
     async aiUsage(day: string): Promise<number> {

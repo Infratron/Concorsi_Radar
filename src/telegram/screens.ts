@@ -18,12 +18,10 @@ import { HELP_PAGES, helpIndexFor, helpPageForSection } from "./help.ts";
 import { MAX_MESSAGE_CHARS, type InlineKeyboardMarkup } from "./api.ts";
 import {
   escapeHtml,
-  formatDate,
   formatItemCard,
   formatScoreBreakdown,
   localDateString,
   localDayMonthTime,
-  sourceLabel,
 } from "./format.ts";
 import { esitoUltimoTentativo } from "./report.ts";
 import { truncate } from "../lib/text.ts";
@@ -45,7 +43,6 @@ import {
   filtriFontiKeyboard,
   filtriMarcheKeyboard,
   fontiKeyboard,
-  itemButtonLabel,
   listKeyboard,
   logKeyboard,
   marcheKeyboard,
