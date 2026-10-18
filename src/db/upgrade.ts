@@ -1,4 +1,5 @@
 import type { D1Like } from "./d1.ts";
+import { DAILY_PLAY_PHRASES, DAILY_PLAY_TAG, INSTANT_WIN_SPELLINGS, WEEKLY_HINT } from "../enrich/rules.ts";
 
 /**
  * Porta il database allo schema che il codice si aspetta, senza chiedere niente
@@ -85,6 +86,7 @@ const COLONNE_ATTESE: ColonnaAttesa[] = [
     perche: "avvisi per punteggio: spenti finché la chat non li accende",
   },
   { tabella: "runs", colonna: "log", tipo: "TEXT", perche: "racconto fonte per fonte di una raccolta" },
+  { tabella: "prefs", colonna: "giro_hour", tipo: "INTEGER", perche: "ora del promemoria del giro di oggi (NULL = spento)" },
   {
     tabella: "ui",
     colonna: "history",
@@ -117,7 +119,38 @@ const MIGRAZIONI_DATI: MigrazioneDati[] = [
     perche: "toglie i digest che le righe vecchie avevano ereditato dal default [8,19]",
     sql: ["UPDATE prefs SET digest_hours = '[]' WHERE digest_hours <> '[]'"],
   },
+  {
+    // La raccolta assegna il tag ai concorsi nuovi; quelli già in archivio non
+    // ripassano dall'arricchimento, e senza questo passo il giro partirebbe
+    // vuoto. Le frasi sono le stesse della regola (DAILY_PLAY_PHRASES).
+    id: "2026-10-19-tag-giornaliero",
+    perche: "assegna il tag del giro di oggi ai concorsi già in archivio che si giocano ogni giorno",
+    sql: [dailyPlayBackfillSql()],
+  },
+  {
+    // Lo stesso riempimento con la regola allargata agli instant win gratuiti:
+    // un passo nuovo perché quello di prima risulta già fatto in produzione.
+    id: "2026-10-19-tag-giornaliero-instant-win",
+    perche: "aggiunge al giro gli instant win gratuiti già in archivio",
+    sql: [dailyPlayBackfillSql()],
+  },
 ];
+
+/**
+ * Il riempimento del tag del giro, in SQL: una LIKE per frase della regola, più
+ * l'instant win senza acquisto e non settimanale — le stesse liste della
+ * raccolta (src/enrich/rules.ts), quindi le due strade dicono la stessa cosa.
+ */
+export function dailyPlayBackfillSql(): string {
+  const testo = "LOWER(title || ' ' || summary || ' ' || COALESCE(participation, ''))";
+  const frasi = DAILY_PLAY_PHRASES.map((frase) => `${testo} LIKE '%${frase}%'`).join(" OR ");
+  const instantWin = INSTANT_WIN_SPELLINGS.map((grafia) => `${testo} LIKE '%${grafia}%'`).join(" OR ");
+  return `UPDATE items SET tags = json_insert(tags, '$[#]', '${DAILY_PLAY_TAG}')
+    WHERE kind = 'contest'
+      AND NOT EXISTS (SELECT 1 FROM json_each(items.tags) WHERE value = '${DAILY_PLAY_TAG}')
+      AND ((${frasi})
+        OR (requires_purchase = 0 AND (${instantWin}) AND ${testo} NOT LIKE '%${WEEKLY_HINT}%'))`;
+}
 
 export interface UpgradeResult {
   /** Istruzioni dello schema eseguite (idempotenti: CREATE ... IF NOT EXISTS). */

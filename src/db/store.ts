@@ -6,6 +6,7 @@ import type {
   ItemStatus,
   NewItem,
   Prefs,
+  ReceiptRow,
   RefundRow,
   RefundTotals,
   RobotsRow,
@@ -156,6 +157,27 @@ export interface Store {
   listRefunds(chatId: number, limit?: number): Promise<RefundRow[]>;
   /** Il denaro in attesa e quello già recuperato, senza caricare le righe. */
   refundTotals(chatId: number): Promise<RefundTotals>;
+
+  // --- 🎯 il giro di oggi (per chat) ---
+  /**
+   * Segna o toglie "✅ Giocato" per quel concorso in quel giorno (italiano,
+   * YYYY-MM-DD). Restituisce lo stato DOPO il tocco: true = giocato.
+   */
+  togglePlay(chatId: number, itemId: number, day: string, at: string): Promise<boolean>;
+  /** I concorsi segnati giocati da questa chat in quel giorno. */
+  playedOn(chatId: number, day: string): Promise<number[]>;
+  /** I giorni (dal più recente) in cui questa chat ha giocato almeno una volta, da `sinceDay`. */
+  playDays(chatId: number, sinceDay: string): Promise<string[]>;
+
+  // --- 🧾 scontrini (per chat) ---
+  /** Conserva uno scontrino; la stessa foto due volte sullo stesso concorso non raddoppia. */
+  addReceipt(receipt: Omit<ReceiptRow, "id">): Promise<void>;
+  /** Gli scontrini di questa chat per un concorso, dal primo salvato. */
+  listReceipts(chatId: number, itemId: number): Promise<ReceiptRow[]>;
+  /** Toglie uno scontrino di questa chat. false se non c'era. */
+  deleteReceipt(chatId: number, receiptId: number): Promise<boolean>;
+  /** I concorsi per cui questa chat ha conservato almeno uno scontrino, dal più recente. */
+  receiptItems(chatId: number, limit?: number): Promise<ItemRow[]>;
 
   // --- interfaccia in chat ---
   /** Stato del messaggio unico della chat; null la prima volta. */

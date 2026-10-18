@@ -11,12 +11,16 @@
  *  - **italiano corretto**: la wiki è il posto dove un errore di lingua si nota
  *    di più, perché la si legge per capire.
  *
- * Aggiungere una pagina = aggiungere una voce a questo elenco: la schermata
- * d'aiuto è un INDICE di bottoni, uno per argomento, e si costruisce da questa
- * lista. Non ci sono frecce: con le frecce si poteva solo scorrere, e per
- * arrivare a "Impostazioni" servivano quindici tocchi e la memoria di dove
- * fosse. La sezione `aiuto:<id>` è accettata solo per gli id che esistono qui
- * (vedi isKnownSection in screens.ts): una pagina inventata non apre il vuoto.
+ * La wiki ha la stessa forma del menù: l'indice mostra le porte della prima
+ * schermata (HELP_INDEX), e le porte che ne raggruppano altre (🎁 Concorsi,
+ * ⭐ Le mie cose, ⚙️ Altro) hanno le loro pagine dentro, in `children`. Prima
+ * l'indice era un bottone per ognuna delle ventitré pagine: per trovarne una
+ * bisognava leggerle tutte.
+ *
+ * Aggiungere una pagina = aggiungere una voce a questo elenco e metterla nei
+ * `children` della sua porta. La sezione `aiuto:<id>` è accettata solo per gli id
+ * che esistono qui (vedi isKnownSection in screens.ts): una pagina inventata non
+ * apre il vuoto.
  */
 
 export interface HelpPage {
@@ -27,7 +31,12 @@ export interface HelpPage {
   title: string;
   /** Le righe del testo, già pronte: niente HTML, si aggiunge in resa. */
   lines: string[];
+  /** Le pagine raggruppate sotto questa (solo per le porte del menù). */
+  children?: string[];
 }
+
+/** L'indice della wiki: le porte del menù, nello stesso ordine. */
+export const HELP_INDEX = ["intro", "giro", "negozi", "g-concorsi", "coupon", "g-miei", "g-altro"];
 
 export const HELP_PAGES: HelpPage[] = [
   {
@@ -35,9 +44,71 @@ export const HELP_PAGES: HelpPage[] = [
     section: null,
     title: "Come funziona",
     lines: [
-      "Il bot legge ogni mezz'ora i siti che pubblicano concorsi, scarta quello che non è un concorso e tiene il resto in archivio.",
-      "Qui si tocca, non si scrive: c'è un solo messaggio, che cambia quando scegli una sezione.",
-      "I numeri sui bottoni dicono quanti concorsi ci sono dentro adesso. 🔄 Aggiorna rilegge tutto.",
+      "Il bot legge ogni mezz'ora i siti che pubblicano concorsi e coupon, scarta quello che non serve e tiene il resto in archivio.",
+      "Qui si tocca, non si scrive: c'è un solo messaggio, che cambia quando scegli una sezione. Quello che scrivi o mandi (una ricerca, una foto) viene cancellato appena l'ho letto.",
+      "La prima schermata ha poche porte: 🎯 il giro di oggi, 🛒 la spesa, 🎁 i concorsi, 💶 i coupon, ⭐ le tue cose e ⚙️ il resto. 🔄 Aggiorna rilegge tutto.",
+    ],
+    children: ["punteggio", "promemoria", "cerca"],
+  },
+  {
+    id: "giro",
+    section: "giro",
+    title: "🎯 Il giro di oggi",
+    lines: [
+      "I concorsi che si giocano ogni giorno: quelli che lo scrivono (\"ogni giorno\", \"una giocata al giorno\") e gli instant win gratuiti.",
+      "Un gioco che non ti interessa lo togli con 🚫 Non mi interessa: dal giro esce per sempre.",
+      "Apri il concorso, gioca sul sito con 🔗 Apri, poi tocca ✅ Giocato oggi: torni all'elenco e quello giocato scende in fondo.",
+      "A mezzanotte il giro riparte. 🔥 conta i giorni di fila in cui hai giocato almeno una volta.",
+      "⏰ Sotto l'elenco scegli se vuoi un promemoria al mattino, e a che ora. Di partenza è spento.",
+    ],
+  },
+  {
+    id: "negozi",
+    section: "negozi",
+    title: "🛒 Vado a fare la spesa",
+    lines: [
+      "Scegli il supermercato dove stai andando: ti mostro cosa vale lì, cioè le iniziative di quell'insegna.",
+      "🛒 Ovunque sono i concorsi con scontrino e le offerte di marca che non nominano nessuna insegna: valgono in qualunque supermercato.",
+      "Prima di comprare controlla nel bando se il punto vendita partecipa: alcuni lo scrivono solo nel regolamento.",
+    ],
+  },
+  {
+    id: "g-concorsi",
+    section: "concorsi",
+    title: "🎁 Concorsi",
+    lines: [
+      "Tutti i concorsi, divisi per domanda: cosa è arrivato, cosa scade, che premio cerchi, e gli articoli che ne parlano.",
+      "Scegli una voce qui sotto per sapere come funziona.",
+    ],
+    children: ["nuovi", "oggi", "settimana", "scadenze", "premi", "premio-certo", "omaggi", "news"],
+  },
+  {
+    id: "g-miei",
+    section: "miei",
+    title: "⭐ Le mie cose",
+    lines: [
+      "Quello che hai deciso tu: i concorsi salvati, gli scontrini, i rimborsi chiesti, lo storico e le marche che segui.",
+      "Sono di questa chat: l'altra persona non le vede.",
+    ],
+    children: ["salvati", "scontrini", "rimborsi", "storico", "numeri", "archivio", "preferiti"],
+  },
+  {
+    id: "g-altro",
+    section: "altro",
+    title: "⚙️ Altro",
+    lines: [
+      "Le cose che si regolano una volta: notifiche e orari, cosa vedi, e lo stato delle fonti.",
+    ],
+    children: ["impostazioni", "filtri", "fonti", "vantaggio"],
+  },
+  {
+    id: "scontrini",
+    section: "scontrini",
+    title: "🧾 Scontrini",
+    lines: [
+      "Apri un concorso e mandami la foto (o il PDF) dello scontrino: la conservo legata a quel concorso e la tua foto sparisce dalla chat.",
+      "Nella scheda tocca 🧾 Scontrini per rivederli; da lì puoi anche eliminarli.",
+      "Se vinci, l'originale di carta resta il più importante: di solito va spedito per la convalida, quindi non buttarlo.",
     ],
   },
   {
@@ -175,7 +246,9 @@ export const HELP_PAGES: HelpPage[] = [
       "Buoni sconto, rimborsi e cashback ancora spendibili.",
       "Non sono concorsi, non si vince niente e non mandano notifiche.",
       "Sotto l'elenco scegli la vista: 🗂 Tutti, 📋 Oggi, 📅 7 giorni, ⏳ In scadenza o ↩️ Rimborsi e cashback (spendi e riprendi). Quella attiva ha il • davanti.",
+      "Le richieste di rimborso che fai le ritrovi in ⭐ Le mie cose → 💰 Rimborsi.",
     ],
+    children: ["rimborsi"],
   },
   {
     id: "rimborsi",
@@ -250,13 +323,18 @@ export const HELP_PAGES: HelpPage[] = [
     section: "impostazioni",
     title: "⚙️ Impostazioni",
     lines: [
-      "Gli avvisi per punteggio, la fascia di silenzio e gli orari del digest: partono tutti spenti e si accendono qui.",
+      "Si apre da ⚙️ Altro → 🔔 Notifiche e orari: gli avvisi per punteggio, la fascia di silenzio e gli orari del digest. Partono tutti spenti e si accendono qui.",
       "Il digest è un riepilogo periodico: si accende scegliendo le ore, e si spegne svuotandole.",
       "La soglia non vale per le marche che segui: quelle avvisano comunque.",
       "Sono di questa chat: quello che cambi tu non cambia la chat dell'altra persona.",
     ],
   },
 ];
+
+/** La porta che contiene questa pagina, o null se la pagina sta nell'indice. */
+export function helpParentOf(pageId: string): HelpPage | null {
+  return HELP_PAGES.find((pagina) => pagina.children?.includes(pageId)) ?? null;
+}
 
 /** L'indice di una pagina, o null se non esiste. */
 export function helpIndexFor(pageId: string): number | null {
@@ -281,6 +359,8 @@ export function helpPageForSection(section: string): HelpPage | null {
   const diretta = HELP_PAGES.find((pagina) => pagina.section === section);
   if (diretta) return diretta;
   if (section.startsWith("coupon-")) return helpPageById("coupon");
+  if (section.startsWith("negozio:")) return helpPageById("negozi");
+  if (section.startsWith("scontrini:")) return helpPageById("scontrini");
   if (section.startsWith("archivio")) return helpPageById("archivio");
   if (section.startsWith("cerca:")) return helpPageById("cerca");
   if (section.startsWith("importo:")) return helpPageById("rimborsi");

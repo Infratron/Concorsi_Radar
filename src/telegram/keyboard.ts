@@ -1,6 +1,7 @@
 import type { ItemRow, Prefs, RefundRow } from "../types.ts";
 import { refundAmountFor, refundAmountLabel, refundDeclaredLabel, refundMenuLabel } from "../refunds.ts";
-import { brandLabel, type BrandChoice } from "../config/brands.ts";
+import { INSEGNE, brandLabel, type BrandChoice } from "../config/brands.ts";
+import { GIRO_HOURS } from "../giro.ts";
 import { truncate } from "../lib/text.ts";
 import {
   ARCHIVIO_KINDS,
@@ -16,7 +17,7 @@ import {
 import type { InlineKeyboardButton, InlineKeyboardMarkup } from "./api.ts";
 import { formatDate, itemDetailLine, sourceLabel } from "./format.ts";
 import { dutiesFor } from "../enrich/proof.ts";
-import type { HelpPage } from "./help.ts";
+import { HELP_INDEX, helpParentOf, type HelpPage } from "./help.ts";
 import { DIGEST_HOURS, hourLabel, hourShort, quietRange, shiftQuietRange, stepScore } from "./prefs-config.ts";
 
 /**
@@ -75,58 +76,175 @@ export function itemButtonLabel(item: ItemRow, now: Date): string {
   return dettaglio.length > 0 ? `${prima}\n${dettaglio}` : prima;
 }
 
-/** Il menù principale: tutte le sezioni, con i conteggi addosso. */
-export function menuKeyboard(counts: {
+/**
+ * Il menù principale: poche porte, una per domanda.
+ *
+ * Prima erano diciassette bottoni sulla stessa schermata, e ogni sezione nuova
+ * ne aggiungeva uno. Adesso la prima schermata risponde a "cosa faccio oggi?"
+ * (🎯 il giro, 🛒 la spesa) e a "cosa c'è?" (🎁 concorsi, 💶 coupon); il resto
+ * sta dietro tre porte — 🎁 Concorsi, ⭐ Le mie cose, ⚙️ Altro — dove le sezioni
+ * sono raggruppate come si usano.
+ */
+export interface MenuCounts {
+  nuovi: number;
+  /** Coupon e rimborsi in archivio, con i filtri della chat. */
+  coupon: number;
+  /** Concorsi del giro di oggi, e quanti di questi la chat ha già giocato. */
+  giroTotale: number;
+  giroFatti: number;
+}
+
+/** "🎯 Il giro di oggi · 5 da fare", oppure "· ✅ fatto" quando è finito. */
+export function giroButtonLabel(totale: number, fatti: number): string {
+  if (totale === 0) return "🎯 Il giro di oggi";
+  const restano = Math.max(0, totale - fatti);
+  return restano === 0 ? "🎯 Il giro di oggi · ✅ fatto" : `🎯 Il giro di oggi · ${restano} da fare`;
+}
+
+export function menuKeyboard(counts: MenuCounts): InlineKeyboardMarkup {
+  return {
+    inline_keyboard: [
+      [button(giroButtonLabel(counts.giroTotale, counts.giroFatti), "s:giro")],
+      [
+        button(
+          counts.nuovi === 0 ? "🎁 Concorsi" : `🎁 Concorsi · ${counts.nuovi} ${counts.nuovi === 1 ? "nuovo" : "nuovi"}`,
+          "s:concorsi",
+        ),
+        button(`💶 Coupon (${counts.coupon})`, "s:coupon"),
+      ],
+      [button("🛒 Vado a fare la spesa", "s:negozi")],
+      [button("⭐ Le mie cose", "s:miei"), button("🔍 Cerca", "s:cerca")],
+      [button("⚙️ Altro", "s:altro"), button("🔄 Aggiorna", "refresh"), button("❓ Aiuto", "s:aiuto")],
+    ],
+  };
+}
+
+/** 🎁 Concorsi: le sezioni dei concorsi, con i conteggi che prima stavano nel menù. */
+export function concorsiKeyboard(counts: {
   nuovi: number;
   oggi: number;
   settimana: number;
   scadenze: number;
-  salvati: number;
   news: number;
-  /** Coupon e rimborsi in archivio: è il numero sul bottone 💶. */
-  coupon: number;
-  /** Rimborsi richiesti e non ancora ricevuti: è il numero sul bottone 💰. */
-  rimborsi: number;
-  /** Denaro in attesa, in centesimi: l'etichetta del bottone lo dice a colpo d'occhio. */
-  rimborsiCents: number;
-  /** true se qualche attesa è un tetto: l'etichetta dice "fino a". */
-  rimborsiCap: boolean;
-  /**
-   * Quante marche segui. È il numero sul bottone, e conta le MARCHE, non i loro
-   * concorsi: la voce si chiama "Marche seguite" e un conteggio di concorsi lì
-   * sopra la farebbe sembrare un elenco ("seguo quattro marche, non quattro
-   * concorsi").
-   */
-  seguite: number;
-  /** Quanti filtri sono attivi: 0 = si vede tutto. */
-  filtri: number;
 }): InlineKeyboardMarkup {
   return {
     inline_keyboard: [
       [button(`🆕 Nuovi (${counts.nuovi})`, "s:nuovi"), button(`📋 Oggi (${counts.oggi})`, "s:oggi")],
       [button(`📅 7 giorni (${counts.settimana})`, "s:settimana"), button(`⏳ Scadenze (${counts.scadenze})`, "s:scadenze")],
-      // "Che premio cerchi?" è una domanda secca, e la porta che la pone è una
-      // sola: 🎁 Tipi di premio, che ha dentro anche 🆓 Gratis. Prima il menù
-      // aveva tutte e due le voci e la stessa cosa si apriva da due posti, con
-      // due conteggi da tenere allineati.
-      [button("🎁 Tipi di premio", "s:premi")],
-      [button(`⭐ Watchlist (${counts.salvati})`, "s:salvati"), button(`📰 News (${counts.news})`, "s:news")],
-      [button("🔍 Cerca", "s:cerca"), button("🗂 Storico", "s:storico")],
-      // Le offerte su una riga tutta loro: non sono concorsi e non stanno in
-      // mezzo ai concorsi, ma devono restare a un tocco dal menù.
-      [button(`💶 Coupon e rimborsi (${counts.coupon})`, "s:coupon")],
-      // 💰 Rimborsi sta sotto i coupon perché è il seguito naturale: prima trovi
-      // l'offerta, poi la richiedi e la segui qui. Il numero sono le richieste
-      // ancora in attesa, e quando c'è denaro da riavere l'importo è sul bottone:
-      // "quanto mi deve ancora tornare?" è la domanda per cui esiste la sezione.
-      [button(refundMenuLabel(counts.rimborsi, counts.rimborsiCents, counts.rimborsiCap), "s:rimborsi")],
-      [button(`🏷 Marche seguite (${counts.seguite})`, "s:preferiti"), button(filtriButtonLabel(counts.filtri), "s:filtri")],
-      [button("📡 Fonti", "s:fonti"), button("⚙️ Impostazioni", "s:impostazioni")],
-      // ❓ Aiuto sta accanto ad Aggiorna perché è l'altra cosa che si fa quando
-      // non si capisce: rileggere o chiedere come funziona.
-      [button("🔄 Aggiorna", "refresh"), button("❓ Aiuto", "s:aiuto")],
+      [button("🎁 Tipi di premio", "s:premi"), button(`📰 News (${counts.news})`, "s:news")],
+      navRow(),
     ],
   };
+}
+
+/**
+ * ⭐ Le mie cose: tutto quello che hai deciso tu — salvato, conservato,
+ * richiesto, vinto, seguito. È l'altra metà del bot: l'archivio è di tutti,
+ * queste sono di questa chat.
+ */
+export function mieiKeyboard(counts: {
+  salvati: number;
+  scontrini: number;
+  rimborsi: number;
+  rimborsiCents: number;
+  rimborsiCap: boolean;
+  seguite: number;
+}): InlineKeyboardMarkup {
+  return {
+    inline_keyboard: [
+      [button(`⭐ Watchlist (${counts.salvati})`, "s:salvati"), button(`🧾 Scontrini (${counts.scontrini})`, "s:scontrini")],
+      [button(refundMenuLabel(counts.rimborsi, counts.rimborsiCents, counts.rimborsiCap), "s:rimborsi")],
+      [button("🗂 Storico", "s:storico"), button(`🏷 Marche seguite (${counts.seguite})`, "s:preferiti")],
+      navRow(),
+    ],
+  };
+}
+
+/** ⚙️ Altro: le cose che si regolano una volta e poi si lasciano stare. */
+export function altroKeyboard(filtri: number): InlineKeyboardMarkup {
+  return {
+    inline_keyboard: [
+      [button("🔔 Notifiche e orari", "s:impostazioni")],
+      [button(filtriButtonLabel(filtri), "s:filtri"), button("📡 Fonti", "s:fonti")],
+      navRow(),
+    ],
+  };
+}
+
+/**
+ * 🎯 Il giro di oggi: un bottone per concorso, ⬜ da fare e ✅ già giocato (che
+ * scendono in fondo), più la riga del promemoria del mattino. ✅ si segna dalla
+ * scheda, dove c'è anche il link per giocare.
+ */
+export function giroKeyboard(
+  items: ItemRow[],
+  played: ReadonlySet<number>,
+  now: Date,
+  pagina: { index: number; total: number },
+  giroHour: number | null,
+): InlineKeyboardMarkup {
+  const rows: InlineKeyboardButton[][] = items.map((item) => {
+    const dettaglio = truncate(itemDetailLine(item, now), 46);
+    const prima = `${played.has(item.id) ? "✅" : "⬜"} ${truncate(item.title, 46)}`;
+    return [button(dettaglio.length > 0 ? `${prima}\n${dettaglio}` : prima, `open:${item.id}`)];
+  });
+  if (pagina.total > 1) rows.push(pagesRow(pagina.index, pagina.total, { prec: "⬅️ Prec", succ: "Succ ➡️" }));
+  rows.push([
+    button(giroHour === null ? "• 🔕 No" : "🔕 No", "cfg:giro:off"),
+    ...GIRO_HOURS.map((ora) => button(giroHour === ora ? `• ⏰ ${ora}:00` : `⏰ ${ora}:00`, `cfg:giro:${ora}`)),
+  ]);
+  rows.push(navRow());
+  return { inline_keyboard: rows };
+}
+
+/** 🛒 Vado a fare la spesa: un bottone per insegna, con quante iniziative ha lì. */
+export function negoziKeyboard(counts: Record<string, number>, ovunque: number): InlineKeyboardMarkup {
+  const bottoni = INSEGNE.map((id) => button(`${brandLabel(id)} (${counts[id] ?? 0})`, `s:negozio:${id}`));
+  const righe: InlineKeyboardButton[][] = [];
+  for (let index = 0; index < bottoni.length; index += 2) righe.push(bottoni.slice(index, index + 2));
+  righe.push([button(`🛒 In ogni supermercato (${ovunque})`, "s:negozio:ovunque")]);
+  righe.push(navRow());
+  return { inline_keyboard: righe };
+}
+
+/**
+ * Una insegna: le sue iniziative oppure quello che vale ovunque, con le due viste
+ * sulla stessa riga (quella attiva ha il •) come le viste dei coupon.
+ */
+export function negozioKeyboard(
+  items: ItemRow[],
+  now: Date,
+  pagina: { index: number; total: number },
+  info: { insegna: string | null; qui: number; ovunque: number },
+): InlineKeyboardMarkup {
+  const rows: InlineKeyboardButton[][] = items.map((item) => [button(itemButtonLabel(item, now), `open:${item.id}`)]);
+  if (pagina.total > 1) rows.push(pagesRow(pagina.index, pagina.total, { prec: "⬅️ Prec", succ: "Succ ➡️" }));
+  if (info.insegna !== null) {
+    rows.push([
+      button(`• 🏪 Solo ${brandLabel(info.insegna)} (${info.qui})`, "noop"),
+      button(`🛒 Ovunque (${info.ovunque})`, "s:negozio:ovunque"),
+    ]);
+  }
+  rows.push(navRow());
+  return { inline_keyboard: rows };
+}
+
+/**
+ * Lo scontrino aperto: le frecce fra gli scontrini dello stesso concorso, il
+ * cestino, e il ritorno alla scheda.
+ */
+export function receiptKeyboard(receiptId: number, pagina: { index: number; total: number }): InlineKeyboardMarkup {
+  const rows: InlineKeyboardButton[][] = [];
+  if (pagina.total > 1) {
+    rows.push([
+      pagina.index > 0 ? button("⬅️ Prec", `page:${pagina.index - 1}`) : done("⬅️"),
+      done(`${pagina.index + 1}/${pagina.total}`),
+      pagina.index < pagina.total - 1 ? button("Succ ➡️", `page:${pagina.index + 1}`) : done("➡️"),
+    ]);
+  }
+  rows.push([button("🗑 Elimina questo scontrino", `rc:del:${receiptId}`)]);
+  rows.push([button("⬅️ Torna al concorso", "back"), button("🏠 Menù", "home")]);
+  return { inline_keyboard: rows };
 }
 
 /**
@@ -147,12 +265,18 @@ export function filtriButtonLabel(quanti: number): string {
  */
 export function helpKeyboard(pages: HelpPage[], active: number | null): InlineKeyboardMarkup {
   const righe: InlineKeyboardButton[][] = [];
-  if (active === null) {
-    // L'indice: un bottone per argomento, due per riga. È una mappa, non un
-    // percorso — con le frecce si poteva solo scorrere, e chi cercava
-    // "Impostazioni" doveva toccare quindici volte e ricordarsi dov'era.
-    const bottoni = pages.map((pagina) => button(pagina.title, `s:aiuto:${pagina.id}`));
+  const perId = new Map(pages.map((pagina) => [pagina.id, pagina]));
+  const voci = (ids: readonly string[]): void => {
+    const bottoni = ids
+      .map((id) => perId.get(id))
+      .filter((pagina): pagina is HelpPage => pagina !== undefined)
+      .map((pagina) => button(pagina.title, `s:aiuto:${pagina.id}`));
     for (let index = 0; index < bottoni.length; index += 2) righe.push(bottoni.slice(index, index + 2));
+  };
+  if (active === null) {
+    // L'indice: le porte del menù, due per riga. Le pagine delle sezioni stanno
+    // dentro la loro porta, come nel menù.
+    voci(HELP_INDEX);
     righe.push([button("🏠 Menù", "home")]);
     return { inline_keyboard: righe };
   }
@@ -160,7 +284,12 @@ export function helpKeyboard(pages: HelpPage[], active: number | null): InlineKe
   // Dalla pagina si va DIRETTAMENTE alla sezione che spiega: è la cosa che si
   // vuole fare dopo aver letto "come funziona".
   if (pagina?.section) righe.push([button(`➡️ ${pagina.title}`, `s:${pagina.section}`)]);
-  righe.push([button("❓ Tutti gli argomenti", "s:aiuto"), button("🏠 Menù", "home")]);
+  if (pagina?.children) voci(pagina.children);
+  const porta = pagina ? helpParentOf(pagina.id) : null;
+  righe.push([
+    porta ? button(`⬅️ ${porta.title}`, `s:aiuto:${porta.id}`) : button("❓ Tutti gli argomenti", "s:aiuto"),
+    button("🏠 Menù", "home"),
+  ]);
   return { inline_keyboard: righe };
 }
 
@@ -587,6 +716,11 @@ export function cardKeyboard(
    * costruisce sa cosa ha scelto l'utente, e glielo dice.
    */
   brandMuted = false,
+  /**
+   * Le due cose che dipendono da questa chat e da oggi: se il concorso è nel
+   * 🎯 giro (e se è già giocato) e quanti scontrini ci sono legati.
+   */
+  extra: { daily?: { played: boolean }; receipts?: number } = {},
 ): InlineKeyboardMarkup {
   // Su un coupon 🏆 Vinto non vuol dire niente: un buono sconto non si vince, si
   // spende. Restano le due decisioni che hanno senso (tenerlo d'occhio, scartarlo)
@@ -636,8 +770,18 @@ export function cardKeyboard(
     { text: "🔗 Apri", url: item.url },
     { text: "📤 Condividi", url: shareUrlFor(item, shareBase) },
   ];
-  const righe: InlineKeyboardButton[][] = [decisioni];
+  // ✅ Giocato in testa: nel giro è la cosa che si fa a ogni scheda, ogni giorno.
+  const righe: InlineKeyboardButton[][] = [];
+  if (extra.daily) {
+    righe.push([
+      extra.daily.played
+        ? button("↩️ Non l'ho giocato oggi", `play:${item.id}`)
+        : button("✅ Giocato oggi", `play:${item.id}`),
+    ]);
+  }
+  righe.push(decisioni);
   if (rimborso.length > 0) righe.push(rimborso);
+  if ((extra.receipts ?? 0) > 0) righe.push([button(`🧾 Scontrini (${extra.receipts})`, `s:scontrini:${item.id}`)]);
   // 🔕 Mai più questa marca: la granularità che mancava fra "questo concorso"
   // e "questa fonte". È un interruttore e si vede: da spenta il bottone riaccende
   // (utile sulle schede della ⭐ Watchlist, che i filtri non li applicano).
@@ -928,6 +1072,9 @@ export function premiKeyboard(counts: Record<string, number>): InlineKeyboardMar
 /** Testo leggibile della sezione, per l'intestazione delle schermate. */
 export function sectionTitle(section: string): string {
   if (section.startsWith("cerca:")) return `Ricerca: ${section.slice("cerca:".length)}`;
+  if (section.startsWith("negozio:") && section !== "negozio:ovunque") {
+    return `Solo da ${brandLabel(section.slice("negozio:".length))}`;
+  }
   // Le sezioni per tipo di premio si intitolano come il loro bottone. 🆓 Gratis
   // non passa di qua: ha un titolo suo ("Solo gratis (senza acquisto)"), più
   // esplicito di un'emoji.
@@ -944,6 +1091,20 @@ export function sectionTitle(section: string): string {
   switch (section) {
     case "premi":
       return "Tipi di premio";
+    case "concorsi":
+      return "Concorsi";
+    case "miei":
+      return "Le mie cose";
+    case "altro":
+      return "Altro";
+    case "giro":
+      return "Il giro di oggi";
+    case "negozi":
+      return "Vado a fare la spesa";
+    case "negozio:ovunque":
+      return "In ogni supermercato";
+    case "scontrini":
+      return "I miei scontrini";
     case "nuovi":
       return "Nuovi dall'ultimo controllo";
     case "oggi":

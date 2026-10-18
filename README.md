@@ -515,17 +515,28 @@ scrivere `/start`.
 ```
 📡 Concorsi Radar
 
-[🆕 Nuovi (3)]        [📋 Oggi (12)]
-[📅 7 giorni (40)]    [⏳ Scadenze (2)]
-[🎁 Tipi di premio]
-[⭐ Watchlist (1)]    [📰 News (7)]
-[🔍 Cerca]            [🗂 Storico]
-[💶 Coupon e rimborsi (67)]
-[💰 Rimborsi (2) · 12,50 €]
-[🏷 Marche seguite (4)] [🎛 Cosa vedi]
-[📡 Fonti]            [⚙️ Impostazioni]
-[🔄 Aggiorna]         [❓ Aiuto]
+[🎯 Il giro di oggi · 5 da fare]
+[🎁 Concorsi · 3 nuovi] [💶 Coupon (54)]
+[🛒 Vado a fare la spesa]
+[⭐ Le mie cose]        [🔍 Cerca]
+[⚙️ Altro] [🔄 Aggiorna] [❓ Aiuto]
 ```
+
+**Nove bottoni, non diciassette.** La prima schermata risponde a due domande:
+"cosa faccio oggi?" (🎯 il giro, 🛒 la spesa) e "cosa c'è?" (🎁 concorsi, 💶
+coupon). Le altre sezioni stanno dietro tre porte, raggruppate come si usano, e
+ogni sezione di prima resta a **due tocchi** (un test lo verifica sezione per
+sezione):
+
+| Porta | Dentro |
+|---|---|
+| 🎁 Concorsi | 🆕 Nuovi, 📋 Oggi, 📅 7 giorni, ⏳ Scadenze, 🎁 Tipi di premio, 📰 News |
+| ⭐ Le mie cose | ⭐ Watchlist, 🧾 Scontrini, 💰 Rimborsi, 🗂 Storico, 🏷 Marche seguite |
+| ⚙️ Altro | 🔔 Notifiche e orari (le ⚙️ Impostazioni di prima), 🎛 Cosa vedi, 📡 Fonti |
+
+⬅️ Indietro, senza storia, torna alla porta della sezione e non al menù
+(`PARENT_SECTION` in [src/telegram/screens.ts](src/telegram/screens.ts)). I
+comandi scritti restano tutti, più `/giro`, `/negozi` e `/scontrini`.
 
 La testata dice due cose diverse: quanti concorsi, coupon e news ci sono in
 archivio, e **quando ha raccolto il bot** (`🔄 Ultima raccolta: 17/10 07:40`).
@@ -534,6 +545,9 @@ all'una e venticinque" quando il radar aveva raccolto mezz'ora prima.
 
 | Sezione | Cosa mostra |
 |---|---|
+| 🎯 Il giro di oggi | i concorsi che **si giocano ogni giorno**, con ✅ Giocato che riparte a mezzanotte, la serie di giorni di fila e un promemoria al mattino, spento di default (qui sotto) |
+| 🛒 Vado a fare la spesa | scegli il supermercato: le iniziative di quell'insegna, più quello che vale in ogni supermercato (qui sotto) |
+| 🧾 Scontrini | in ⭐ Le mie cose: i concorsi per cui hai mandato la foto dello scontrino, che resta legata al concorso (qui sotto) |
 | 🆕 Nuovi | quello che è arrivato **dall'ultimo controllo** (il numero è sulla voce del menù) |
 | 📋 Oggi / 📅 7 giorni | l'archivio recente, ordinato per punteggio. **Oggi è il giorno di calendario**: alle 01:00 contiene quello che è arrivato da mezzanotte, non la giornata di ieri (che resta in 📅 7 giorni) |
 | ⏳ Scadenze | chi chiude entro 7 giorni e **non è già chiuso** |
@@ -551,7 +565,7 @@ all'una e venticinque" quando il radar aveva raccolto mezz'ora prima.
 | 🏁 Vantaggio | `/vantaggio`: di quanto arriviamo prima degli aggregatori, e quanto spesso non arriviamo affatto |
 | ⚙️ Impostazioni | avvisi per punteggio (spenti di default), fascia di silenzio e orari dei digest, regolabili di fino, più la porta ai filtri |
 | 🔄 Aggiorna | rilegge tutto e dice se è arrivato qualcosa di nuovo |
-| ❓ Aiuto | la wiki nella chat: un indice di bottoni, uno per argomento, e una pagina breve per sezione (qui sotto) |
+| ❓ Aiuto | la wiki nella chat: lo stesso albero del menù — l'indice sono le porte, e dentro ogni porta le pagine delle sue sezioni (qui sotto) |
 
 `/vantaggio` (o `/anticipo`) apre la misura del **vantaggio di tempistica**: di
 quanto vediamo un concorso prima degli aggregatori. La schermata dichiara i suoi
@@ -716,6 +730,90 @@ Ogni elenco è **a pagine di sei**, con `⏮ Inizio` / `⬅️ Prec` / `Succ ➡
 numero di pagina in mezzo: la pagina che vedi la legge il database con
 LIMIT/OFFSET, quindi si sfoglia tutto l'archivio, non solo le prime righe. Da una
 pagina 5 di 6 si torna al principio con un tocco, non con quattro.
+
+### 🎯 Il giro di oggi: la routine, ogni mattina
+
+Una concorsista non apre il bot per leggere un catalogo: apre i concorsi che
+si giocano **ogni giorno** (gli instant win, "una giocata al giorno") e li fa uno
+dopo l'altro. È quello che il giro mette in cima alla prima schermata.
+
+- **Chi entra.** I concorsi attivi con il tag `giornaliero`, che la raccolta
+  assegna quando il bando usa una di quelle formule (`DAILY_PLAY_PHRASES` in
+  [src/enrich/rules.ts](src/enrich/rules.ts)): frasi intere ("ogni giorno",
+  "una giocata al giorno", "partecipazione giornaliera"), non parole sciolte,
+  perché "giorno" sta in ogni scadenza — più gli **instant win gratuiti**, che
+  si rigiocano a ogni visita anche quando il riassunto non lo scrive (con
+  scontrino no: lì si gioca una volta per scontrino; i "settimanali" nemmeno).
+  Misurato in produzione il 19/10/2026: con le sole frasi il giro aveva **3
+  concorsi**, con gli instant win gratuiti **14**. I concorsi già in archivio
+  prendono il tag dai passi `2026-10-19-tag-giornaliero*` di
+  [src/db/upgrade.ts](src/db/upgrade.ts), che generano le loro LIKE dalle stesse
+  liste della regola: le due strade non possono dire cose diverse.
+- **🚫 lo toglie.** Un gioco che non interessa — o un instant win che in realtà
+  si gioca una volta sola — si scarta dalla scheda, e dal giro esce.
+- **✅ Giocato.** Si tocca dalla scheda, dove c'è anche 🔗 Apri per giocare sul
+  sito. Il tocco riporta all'elenco, e il concorso fatto scende in fondo con ✅:
+  quello che resta è sempre in cima. Lo stesso bottone lo toglie. Le giocate
+  stanno in `plays`, con il **giorno italiano nella chiave**: a mezzanotte il
+  giro riparte senza cancellare niente.
+- **🔥 La serie.** I giorni di fila con almeno una giocata
+  ([src/giro.ts](src/giro.ts), `streakFrom`). Se oggi non hai ancora giocato, la
+  serie di ieri è ancora viva: si chiude a mezzanotte, non all'alba.
+- **⏰ Il promemoria.** Sotto l'elenco: `🔕 No · 7:00 · 8:00 · 9:00`. È
+  **spento di default**, come tutto il resto: parte solo se la chat sceglie
+  un'ora. Il tick dei 15 minuti manda un messaggio all'ora scelta, uno al giorno
+  (la consegna `giro:<giorno>`), mai in fascia di silenzio, mai se non c'è niente
+  da giocare o se è già tutto giocato.
+
+Il giro rispetta i filtri della chat (una fonte o una marca spenta resta spenta)
+ma non le stelle: è una routine da fare tutta, non una classifica da tagliare.
+
+### 🛒 Vado a fare la spesa: cosa conviene comprare lì
+
+Si sceglie il supermercato — Esselunga, Conad, Coop, Carrefour, Lidl, Eurospin,
+Penny, Bennet (`INSEGNE` in [src/config/brands.ts](src/config/brands.ts)) — e la
+schermata ha due viste:
+
+- **🏪 Solo qui**: le iniziative di quell'insegna, cioè la sua marca oppure il
+  testo che la nomina. "Kinder ti premia, nei punti vendita Conad" è di Ferrero
+  ma vale da Conad, e lì compare.
+- **🛒 Ovunque**: i concorsi **con acquisto** e le offerte di una marca di
+  prodotto che non nominano nessuna insegna — "compra Nutella e vinci" vale in
+  qualunque supermercato. Chi nomina un'altra insegna resta fuori, e un concorso
+  gratuito non è una cosa da mettere nel carrello.
+
+Le insegne si riconoscono come **parole intere** (`insegneNominate`): "una
+cooperativa" non è Coop. La schermata dice anche il limite: un bando che limita
+i punti vendita solo nel PDF non si vede dal testo, quindi prima di comprare
+conviene controllare il regolamento. La logica è pura e sta in
+[src/negozi.ts](src/negozi.ts); i filtri della chat valgono, tranne "solo senza
+acquisto" e le stelle, che svuoterebbero per costruzione una lista della spesa.
+
+### 🧾 Scontrini: la foto resta col concorso, la chat resta pulita
+
+Si apre un concorso (o un coupon) e si manda la foto dello scontrino, o un PDF.
+Il bot:
+
+1. tiene il `file_id` della foto più grande in `receipts`, legato a quel
+   concorso — il file resta sui server di Telegram: nessuno spazio, nessun costo;
+2. **cancella la foto dalla chat** e il messaggio di prima;
+3. manda la scheda del concorso con in testa `✅ Scontrino salvato con questo
+   concorso · 1 in tutto`, e il bottone `🧾 Scontrini (1)`.
+
+In chat resta un messaggio solo, come sempre. Senza un concorso aperto la foto
+non viene indovinata: sparisce lo stesso, e la schermata dice cosa fare ("apri
+prima il concorso, poi mandami la foto"). Un file che non è un'immagine né un
+PDF non si conserva, e la chat lo dice. La stessa foto mandata due volte non
+raddoppia (`file_unique_id`).
+
+🧾 Scontrini apre lo scontrino **al posto del messaggio**: per una volta il
+messaggio unico è una foto, con le frecce se sono più di uno, 🗑 Elimina e
+⬅️ Torna al concorso. Telegram non trasforma un testo in una foto né il
+contrario, quindi entrando e uscendo il bot sostituisce il messaggio (`paint` in
+[src/telegram/bot.ts](src/telegram/bot.ts)), e sfogliando ne cambia il file
+(`editMessageMedia`). Eliminato l'ultimo, si torna alla scheda. Nella scheda di
+un concorso con acquisto, finché non c'è uno scontrino, una riga ricorda che si
+può mandare.
 
 ### ⬅️ Indietro: il posto dove si era
 
@@ -939,10 +1037,13 @@ I comandi funzionano ancora ma sono scorciatoie, non il modo normale: `/start`
 
 La wiki è una sezione come le altre (una schermata sola, che si modifica), ma
 invece dell'archivio mostra **una pagina breve per sezione**: cosa vedi, cosa
-fare, e nient'altro. La prima schermata è un **indice di bottoni**, uno per
-argomento, due per riga: si arriva a ⚙️ Impostazioni in un tocco, non in
-dodici frecce. Non ci sono frecce: con quelle si poteva solo scorrere, e chi
-cercava un argomento doveva ricordarsi dove fosse.
+fare, e nient'altro. La prima schermata è un **indice di bottoni** con la stessa
+forma del menù: le sette porte della prima schermata (`HELP_INDEX`), e dentro le
+porte che ne raggruppano altre (🎁 Concorsi, ⭐ Le mie cose, ⚙️ Altro) le pagine
+delle loro sezioni (`children`). Prima l'indice era un bottone per ognuna delle
+ventitré pagine; adesso si cerca un argomento come si cerca la sezione, e la
+pagina di una sezione ha `⬅️` verso la sua porta. Non ci sono frecce: con quelle
+si poteva solo scorrere.
 
 Il bottone **❓ Aiuto** non sta solo nel menù: ogni sezione che ha una pagina se
 lo porta dietro, in fondo alla schermata e prima della coda di navigazione. Da
@@ -959,8 +1060,9 @@ dell'elenco `HELP_PAGES` per pagina.
 ] },
 ```
 
-Aggiungere una pagina = aggiungere una voce: la tastiera si costruisce
-dall'elenco e `s:aiuto:<id>` è accettato solo per gli id che esistono davvero
+Aggiungere una pagina = aggiungere una voce e metterne l'id nei `children` della
+sua porta (un test controlla che nessuna pagina resti irraggiungibile): la
+tastiera si costruisce dall'elenco e `s:aiuto:<id>` è accettato solo per gli id che esistono davvero
 (`isKnownSection` in [src/telegram/screens.ts](src/telegram/screens.ts)), quindi
 una pagina inventata non apre il vuoto. Le regole di scrittura stanno in testa al
 file: tre o quattro righe, cosa vedi prima e cosa fare dopo, niente gergo.
@@ -2069,7 +2171,7 @@ npm run checklist                                      # le quattro caselle di c
 npm run checklist -- --fonte <id>                      # ...e per una fonte sola, tipi compresi
 npm run tags                                           # tag di contenuto mancanti (elenco)
 npm run tags -- --apply                                # e li aggiunge (solo aggiunta)
-npm test                                               # 746 test
+npm test                                               # 764 test
 npm run typecheck
 ```
 
@@ -2252,6 +2354,8 @@ wrangler.toml              Worker, binding D1, Workers AI, tre cron
 src/
   index.ts                 entry point: webhook, /setup, /health, /bench, scheduled()
   schedule.ts              cron → digest oppure avvisi e pulizia, finestra digest
+  giro.ts                  🎯 il giro di oggi: query, ordine, serie di giorni
+  negozi.ts                🛒 la spesa: solo da un'insegna, oppure ovunque
   telegram/screens.ts      intenti e schermate del bot (funzioni pure)
   pipeline.ts              scelta delle fonti, deduplica, arricchimento, punteggio
   dedupe.ts                preparazione item e decisione di duplicato
@@ -2283,7 +2387,7 @@ scripts/
   dry-run.ts               prova generale senza inviare nulla
   bench-cpu.ts             stessa misura su Node, con le fonti vere
   seed-sources.ts          genera l'SQL di sincronizzazione delle fonti
-test/                      34 file, 746 test (vitest, nessuna rete tranne i finti); sqlite.ts è il D1 su SQLite condiviso
+test/                      34 file, 764 test (vitest, nessuna rete tranne i finti); sqlite.ts è il D1 su SQLite condiviso
 ```
 
 Il tratto che tiene insieme tutto: **una sola copia dell'SQL**. `src/db/d1.ts`

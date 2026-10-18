@@ -260,7 +260,50 @@ function participationFrom(haystack: NormalizedText): {
  * indipendenti sullo stesso testo. L'ordine dei gruppi non conta perché ogni
  * alternativa mappa su un tag esplicito.
  */
+/**
+ * Le formule con cui un bando dice "si gioca ogni giorno": sono i concorsi del
+ * 🎯 giro di oggi. Frasi intere e non parole sciolte ("giorno" da solo è in ogni
+ * scadenza), in ASCII minuscolo: la stessa lista diventa la regex della raccolta
+ * e le LIKE del riempimento dell'archivio (src/db/upgrade.ts), quindi le due
+ * strade non possono dire cose diverse.
+ *
+ * "In palio ogni giorno" entra di proposito: è l'instant win con un premio al
+ * giorno, che si gioca ogni giorno.
+ */
+export const DAILY_PLAY_PHRASES = [
+  "ogni giorno",
+  "tutti i giorni",
+  "giornalmente",
+  "quotidianamente",
+  "volta al giorno",
+  "volte al giorno",
+  "giocata al giorno",
+  "giocate al giorno",
+  "partecipazione al giorno",
+  "tentativo al giorno",
+  "tentativi al giorno",
+  "partecipazione giornaliera",
+  "giocata giornaliera",
+  "instant win giornaliero",
+  "instant win giornaliera",
+] as const;
+
+/**
+ * L'instant win GRATUITO è l'altro pezzo del giro, anche quando il riassunto non
+ * scrive "ogni giorno": è il gioco online che si rifà a ogni visita, e il limite
+ * (di solito una giocata al giorno) sta nel regolamento. Con acquisto no: lì si
+ * gioca una volta per scontrino. Restano fuori quelli che si dichiarano
+ * settimanali. Misurato il 19/10/2026: con le sole frasi il giro aveva 3
+ * concorsi, e mancavano Loacker, Kimbo, AIA, Cupper, Suzi Wan.
+ */
+export const INSTANT_WIN_SPELLINGS = ["instant win", "instant-win", "instantwin"] as const;
+export const WEEKLY_HINT = "settimanal";
+
+/** Il tag dei concorsi che si giocano ogni giorno. */
+export const DAILY_PLAY_TAG = "giornaliero";
+
 const TAG_MATCHERS: { tag: string; pattern: RegExp }[] = [
+  { tag: DAILY_PLAY_TAG, pattern: new RegExp(`\\b(?:${DAILY_PLAY_PHRASES.join("|")})\\b`) },
   // Premio certo: il premio è garantito a chi partecipa (non un'estrazione).
   // Misurato il 17/10/2026 sull'archivio: 25 item, 24 dei quali dalla fonte
   // dedicata di Scontrino Felice e uno da una sua scheda nei gratuiti. La
@@ -371,6 +414,14 @@ export function contentClassTags(input: ContentClassInput): string[] {
   const tags = new Set(input.tags);
   if (tags.has("premio_certo")) found.push("premio_certo");
   const text = input.haystack.lower;
+  if (
+    !input.requiresPurchase &&
+    !tags.has(DAILY_PLAY_TAG) &&
+    INSTANT_WIN_SPELLINGS.some((grafia) => text.includes(grafia)) &&
+    !text.includes(WEEKLY_HINT)
+  ) {
+    found.push(DAILY_PLAY_TAG);
+  }
   if (!input.requiresPurchase) return found;
   if (tags.has("coupon") || NOT_A_GIFT.test(text)) return found;
   const regalo = GIFT_WORDS.test(text) || GIFT_VERB_OBJECT.test(text) || tags.has("premio_certo");

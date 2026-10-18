@@ -117,6 +117,33 @@ describe("allineamento del database", () => {
     expect(riga).toMatchObject({ chat_id: 7, section: "settimana", page: 4, history: null });
   });
 
+  it("dà il tag del giro ai concorsi già in archivio che si giocano ogni giorno, una volta sola", async () => {
+    db.exec(SCHEMA);
+    const riga = (id: number, kind: string, title: string, summary: string, tags = "[]") =>
+      db.exec(`INSERT INTO items (id, source_id, kind, url, url_key, simhash, title, summary, first_seen_at, last_seen_at, tags)
+        VALUES (${id}, 'f', '${kind}', 'https://x.it/${id}', 'k${id}', '0', '${title}', '${summary}', '2026-10-01', '2026-10-01', '${tags}')`);
+    riga(1, "contest", "Instant win Lindt", "Gioca OGNI GIORNO e vinci");
+    riga(2, "contest", "Concorso Barilla", "Una giocata al giorno per tutto ottobre", '["food"]');
+    riga(3, "contest", "Concorso Ferrero", "Estrazione finale il 30 novembre");
+    riga(4, "coupon", "Buono sconto", "Valido tutti i giorni");
+    db.exec("INSERT INTO items (id, source_id, kind, url, url_key, simhash, title, summary, first_seen_at, last_seen_at, tags, requires_purchase) VALUES (5, 'f', 'contest', 'https://x.it/5', 'k5', '0', 'Concorso Loacker', 'Vinci subito con l''instant win', '2026-10-01', '2026-10-01', '[]', 0)");
+    db.exec("INSERT INTO items (id, source_id, kind, url, url_key, simhash, title, summary, first_seen_at, last_seen_at, tags, requires_purchase) VALUES (6, 'f', 'contest', 'https://x.it/6', 'k6', '0', 'Concorso Pattex', 'Carica lo scontrino: instant win', '2026-10-01', '2026-10-01', '[]', 1)");
+    db.exec("INSERT INTO items (id, source_id, kind, url, url_key, simhash, title, summary, first_seen_at, last_seen_at, tags, requires_purchase) VALUES (7, 'f', 'contest', 'https://x.it/7', 'k7', '0', 'Concorso Fini', 'Instant win settimanale', '2026-10-01', '2026-10-01', '[]', 0)");
+
+    await upgradeDatabase(binding, SCHEMA);
+    await upgradeDatabase(binding, SCHEMA);
+    const tags = (id: number) => (db.prepare(`SELECT tags FROM items WHERE id = ${id}`).get() as { tags: string }).tags;
+    expect(JSON.parse(tags(1))).toEqual(["giornaliero"]);
+    expect(JSON.parse(tags(2))).toEqual(["food", "giornaliero"]);
+    expect(JSON.parse(tags(3))).toEqual([]);
+    // Un coupon non si "gioca": resta fuori anche se scrive "tutti i giorni".
+    expect(JSON.parse(tags(4))).toEqual([]);
+    // L'instant win gratuito entra; con scontrino o settimanale no.
+    expect(JSON.parse(tags(5))).toEqual(["giornaliero"]);
+    expect(JSON.parse(tags(6))).toEqual([]);
+    expect(JSON.parse(tags(7))).toEqual([]);
+  });
+
   it("spegne una volta sola i digest ereditati dal vecchio default", async () => {
     // Il caso vero della produzione: righe nate con `digest_hours = '[8,19]'`,
     // che continuerebbero a ricevere due riepiloghi al giorno anche ora che il
@@ -131,7 +158,7 @@ describe("allineamento del database", () => {
 
     const primo = await upgradeDatabase(binding, SCHEMA);
     expect(primo.colonne).toContain("prefs.instant_alerts");
-    expect(primo.migrazioni).toEqual(["2026-10-17-notifiche-opt-in"]);
+    expect(primo.migrazioni).toContain("2026-10-17-notifiche-opt-in");
     const riga = db.prepare("SELECT digest_hours, instant_alerts FROM prefs WHERE chat_id = 7").get() as {
       digest_hours: string;
       instant_alerts: number;

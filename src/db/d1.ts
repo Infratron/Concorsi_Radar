@@ -9,6 +9,7 @@ import type {
   NavPoint,
   NewItem,
   Prefs,
+  ReceiptRow,
   RefundRow,
   RefundTotals,
   RobotsRow,
@@ -108,6 +109,30 @@ interface PrefsDbRow {
   instant_alerts?: number | null;
   /** JSON dei filtri della chat. Assente su un database antecedente alla colonna. */
   filters?: string | null;
+  /** Ora del promemoria del giro; assente o NULL = spento. */
+  giro_hour?: number | null;
+}
+
+interface ReceiptDbRow {
+  id: number;
+  chat_id: number;
+  item_id: number;
+  file_id: string;
+  file_unique_id: string;
+  media: string;
+  added_at: string;
+}
+
+function rowToReceipt(row: ReceiptDbRow): ReceiptRow {
+  return {
+    id: row.id,
+    chatId: row.chat_id,
+    itemId: row.item_id,
+    fileId: row.file_id,
+    fileUniqueId: row.file_unique_id,
+    media: row.media === "document" ? "document" : "photo",
+    addedAt: row.added_at,
+  };
 }
 
 interface SightingDbRow {
@@ -340,6 +365,7 @@ function rowToPrefs(row: PrefsDbRow): Prefs {
     // avviso a chi non l'ha mai acceso è l'errore che questa colonna evita).
     instantAlerts: row.instant_alerts === 1,
     filters: parseFilters(row.filters ?? null),
+    giroHour: typeof row.giro_hour === "number" ? row.giro_hour : null,
   };
 }
 
@@ -782,8 +808,8 @@ export function createD1Store(db: D1Like): Store {
     async upsertPrefs(prefs: Prefs): Promise<void> {
       await db
         .prepare(
-          `INSERT INTO prefs (chat_id, active, weights, min_score_instant, quiet_hours, digest_hours, instant_alerts, filters, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `INSERT INTO prefs (chat_id, active, weights, min_score_instant, quiet_hours, digest_hours, instant_alerts, filters, giro_hour, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(chat_id) DO UPDATE SET
              active = excluded.active,
              weights = excluded.weights,
@@ -792,6 +818,7 @@ export function createD1Store(db: D1Like): Store {
              digest_hours = excluded.digest_hours,
              instant_alerts = excluded.instant_alerts,
              filters = excluded.filters,
+             giro_hour = excluded.giro_hour,
              updated_at = excluded.updated_at`,
         )
         .bind(
@@ -803,6 +830,7 @@ export function createD1Store(db: D1Like): Store {
           JSON.stringify(prefs.digestHours),
           prefs.instantAlerts ? 1 : 0,
           JSON.stringify(prefs.filters),
+          prefs.giroHour ?? null,
           new Date().toISOString(),
         )
         .run();
@@ -987,6 +1015,75 @@ export function createD1Store(db: D1Like): Store {
           new Date().toISOString(),
         )
         .run();
+    },
+
+    async togglePlay(chatId: number, itemId: number, day: string, at: string): Promise<boolean> {
+      const tolto = await db
+        .prepare("DELETE FROM plays WHERE chat_id = ? AND day = ? AND item_id = ?")
+        .bind(chatId, day, itemId)
+        .run();
+      if ((tolto.meta?.changes ?? 0) > 0) return false;
+      await db
+        .prepare("INSERT INTO plays (chat_id, day, item_id, played_at) VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING")
+        .bind(chatId, day, itemId, at)
+        .run();
+      return true;
+    },
+
+    async playedOn(chatId: number, day: string): Promise<number[]> {
+      const result = await db
+        .prepare("SELECT item_id FROM plays WHERE chat_id = ? AND day = ?")
+        .bind(chatId, day)
+        .all<{ item_id: number }>();
+      return (result.results ?? []).map((row) => row.item_id);
+    },
+
+    async playDays(chatId: number, sinceDay: string): Promise<string[]> {
+      const result = await db
+        .prepare("SELECT DISTINCT day FROM plays WHERE chat_id = ? AND day >= ? ORDER BY day DESC")
+        .bind(chatId, sinceDay)
+        .all<{ day: string }>();
+      return (result.results ?? []).map((row) => row.day);
+    },
+
+    async addReceipt(receipt): Promise<void> {
+      await db
+        .prepare(
+          `INSERT INTO receipts (chat_id, item_id, file_id, file_unique_id, media, added_at)
+           VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING`,
+        )
+        .bind(receipt.chatId, receipt.itemId, receipt.fileId, receipt.fileUniqueId, receipt.media, receipt.addedAt)
+        .run();
+    },
+
+    async listReceipts(chatId: number, itemId: number): Promise<ReceiptRow[]> {
+      const result = await db
+        .prepare("SELECT * FROM receipts WHERE chat_id = ? AND item_id = ? ORDER BY added_at ASC, id ASC")
+        .bind(chatId, itemId)
+        .all<ReceiptDbRow>();
+      return (result.results ?? []).map(rowToReceipt);
+    },
+
+    async deleteReceipt(chatId: number, receiptId: number): Promise<boolean> {
+      const result = await db
+        .prepare("DELETE FROM receipts WHERE chat_id = ? AND id = ?")
+        .bind(chatId, receiptId)
+        .run();
+      return (result.meta?.changes ?? 0) > 0;
+    },
+
+    async receiptItems(chatId: number, limit = 200): Promise<ItemRow[]> {
+      const result = await db
+        .prepare(
+          `SELECT i.* FROM items i
+             JOIN (SELECT item_id, MAX(added_at) AS ultimo FROM receipts WHERE chat_id = ? GROUP BY item_id) r
+               ON r.item_id = i.id
+            ORDER BY r.ultimo DESC
+            LIMIT ?`,
+        )
+        .bind(chatId, Math.min(Math.max(Math.trunc(limit), 1), 500))
+        .all<ItemDbRow>();
+      return (result.results ?? []).map(rowToItem);
     },
 
     async getUiState(chatId: number): Promise<UiState | null> {

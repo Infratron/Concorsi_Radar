@@ -5,7 +5,7 @@ import { expireOldItems, resolveSource, runIngest, type IngestSummary } from "./
 import type { TelegramUpdate } from "./telegram/api.ts";
 import { TelegramClient } from "./telegram/api.ts";
 import { handleUpdate } from "./telegram/bot.ts";
-import { sendCollectionReminder, sendDigests, sendInstantAlerts, sendWatchlistReminders } from "./telegram/digest.ts";
+import { sendCollectionReminder, sendDigests, sendGiroReminders, sendInstantAlerts, sendWatchlistReminders } from "./telegram/digest.ts";
 import { ingestLog } from "./telegram/report.ts";
 import { COLLECTION_REMINDER_MARK, COLLECTION_REMINDER_SKIP, jobFor, shouldFallbackIngest } from "./schedule.ts";
 import { USER_AGENT } from "./config/sources.ts";
@@ -175,6 +175,8 @@ async function runCron(env: Env, cron: string, now: Date): Promise<void> {
   // trenta e a sette per le raccolte punti e i premi da richiedere, che "chiudono"
   // quando ormai è tardi per cominciare a mettere via gli scontrini.
   const reminders = skipInstant ? 0 : (await sendWatchlistReminders({ store, tg, now })).sent;
+  // Il promemoria del giro di oggi: solo per chi ha scelto un'ora.
+  const giro = (await sendGiroReminders({ store, tg, now })).sent;
   // Il promemoria non dipende dagli avvisi: se la raccolta è ferma lo dice anche
   // in un giro in cui non c'era niente da notificare (anzi, soprattutto in quello).
   const raccolta = await sendCollectionReminder({ store, tg, now, runs, adminChatId, fallback });
@@ -186,6 +188,7 @@ async function runCron(env: Env, cron: string, now: Date): Promise<void> {
   note.push(
     `avvisi: ${instant} istantanei`,
     `promemoria: ${reminders}`,
+    `giro: ${giro}`,
     // Il segno nella nota è il modo in cui il tick successivo sa di aver già
     // avvisato: per questo si scrive solo quando il messaggio è partito davvero.
     raccolta.sent > 0 ? COLLECTION_REMINDER_MARK : COLLECTION_REMINDER_SKIP,

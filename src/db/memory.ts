@@ -7,6 +7,7 @@ import type {
   ItemStatus,
   NewItem,
   Prefs,
+  ReceiptRow,
   RefundRow,
   RefundTotals,
   RobotsRow,
@@ -88,6 +89,10 @@ export function createMemoryStore(): MemoryStore {
   const prefs = new Map<number, Prefs>();
   const runs: RunRow[] = [];
   const updates = new Map<number, string>();
+  /** Le giocate del giro: "chat|giorno|item". */
+  const plays = new Map<string, string>();
+  const receipts: ReceiptRow[] = [];
+  let nextReceiptId = 1;
   const aiUsage = new Map<string, { calls: number; neurons: number }>();
   const robots = new Map<string, RobotsRow>();
   const ui = new Map<number, UiState>();
@@ -470,6 +475,62 @@ export function createMemoryStore(): MemoryStore {
         weights[tag] = clampWeight((weights[tag] ?? 0) + value);
       }
       prefs.set(chatId, { ...current, weights });
+    },
+
+    async togglePlay(chatId: number, itemId: number, day: string, at: string): Promise<boolean> {
+      const chiave = `${chatId}|${day}|${itemId}`;
+      if (plays.delete(chiave)) return false;
+      plays.set(chiave, at);
+      return true;
+    },
+
+    async playedOn(chatId: number, day: string): Promise<number[]> {
+      const prefisso = `${chatId}|${day}|`;
+      return [...plays.keys()].filter((chiave) => chiave.startsWith(prefisso)).map((chiave) => Number(chiave.slice(prefisso.length)));
+    },
+
+    async playDays(chatId: number, sinceDay: string): Promise<string[]> {
+      const giorni = new Set<string>();
+      for (const chiave of plays.keys()) {
+        const [chat, day] = chiave.split("|");
+        if (Number(chat) === chatId && day >= sinceDay) giorni.add(day);
+      }
+      return [...giorni].sort().reverse();
+    },
+
+    async addReceipt(receipt): Promise<void> {
+      const doppio = receipts.some(
+        (row) => row.chatId === receipt.chatId && row.itemId === receipt.itemId && row.fileUniqueId === receipt.fileUniqueId,
+      );
+      if (!doppio) receipts.push({ ...receipt, id: nextReceiptId++ });
+    },
+
+    async listReceipts(chatId: number, itemId: number): Promise<ReceiptRow[]> {
+      return receipts
+        .filter((row) => row.chatId === chatId && row.itemId === itemId)
+        .sort((a, b) => a.addedAt.localeCompare(b.addedAt) || a.id - b.id)
+        .map(clone);
+    },
+
+    async deleteReceipt(chatId: number, receiptId: number): Promise<boolean> {
+      const index = receipts.findIndex((row) => row.chatId === chatId && row.id === receiptId);
+      if (index < 0) return false;
+      receipts.splice(index, 1);
+      return true;
+    },
+
+    async receiptItems(chatId: number, limit = 200): Promise<ItemRow[]> {
+      const ultimo = new Map<number, string>();
+      for (const row of receipts) {
+        if (row.chatId !== chatId) continue;
+        if ((ultimo.get(row.itemId) ?? "") < row.addedAt) ultimo.set(row.itemId, row.addedAt);
+      }
+      return [...ultimo.entries()]
+        .sort((a, b) => b[1].localeCompare(a[1]))
+        .map(([id]) => items.find((item) => item.id === id))
+        .filter((item): item is ItemRow => item !== undefined)
+        .slice(0, limit)
+        .map(clone);
     },
 
     async getUiState(chatId: number): Promise<UiState | null> {

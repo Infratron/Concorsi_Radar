@@ -9,6 +9,8 @@ import { staleItemReason } from "../enrich/freshness.ts";
 import { isSamePage, regulationUrlFromText } from "../enrich/regulation.ts";
 import { filtersFor } from "../filters.ts";
 import { parseQuietRange } from "./prefs-config.ts";
+import { giroItems, streakFrom, streakWindowStart } from "../giro.ts";
+import { localDateString } from "./format.ts";
 
 /**
  * Digest programmati e avvisi istantanei.
@@ -457,5 +459,47 @@ export async function sendInstantAlerts(deps: NotifyDeps): Promise<{ sent: numbe
     }
   }
 
+  return { sent };
+}
+
+/**
+ * Il promemoria del 🎯 giro di oggi: un messaggio al mattino, all'ora che la chat
+ * ha scelto dalla schermata del giro (spento di default). Uno al giorno — la
+ * consegna `giro:<giorno>` sull'item 0 è il "già fatto" — e mai se oggi non c'è
+ * niente da giocare o se è tutto già giocato.
+ *
+ * Il tick gira ogni 15 minuti, quindi l'ora scelta copre quattro tick: il primo
+ * manda, gli altri trovano la consegna e tacciono.
+ */
+export async function sendGiroReminders(deps: NotifyDeps): Promise<{ sent: number }> {
+  const { store, tg, now } = deps;
+  const oggi = localDateString(now);
+  const segno = `giro:${oggi}`;
+  let sent = 0;
+  for (const chatId of await store.listChats()) {
+    const prefs = await store.getPrefs(chatId);
+    if (!prefs || !prefs.active) continue;
+    if (typeof prefs.giroHour !== "number" || localHour(now) !== prefs.giroHour) continue;
+    if (isQuietHour(prefs, now)) continue;
+    if (await store.isDelivered(chatId, 0, segno)) continue;
+
+    const giro = await giroItems(store, chatId, prefs.filters, now);
+    const giocati = new Set(await store.playedOn(chatId, oggi));
+    const daFare = giro.filter((item) => !giocati.has(item.id)).length;
+    if (daFare === 0) continue;
+
+    const serie = streakFrom(await store.playDays(chatId, streakWindowStart(oggi)), oggi);
+    const righe = [
+      `☀️ <b>Buongiorno!</b> Nel 🎯 giro di oggi ci sono <b>${daFare}</b> ${daFare === 1 ? "concorso" : "concorsi"} da giocare.`,
+    ];
+    if (serie > 0) righe.push(`🔥 Sei a <b>${serie}</b> ${serie === 1 ? "giorno" : "giorni"} di fila: non spezzare la serie.`);
+    const result = await tg.sendMessage(chatId, righe.join("\n"), {
+      keyboard: { inline_keyboard: [[{ text: "🎯 Apri il giro", callback_data: "s:giro" }]] },
+      disablePreview: true,
+    });
+    if (!result.ok) continue;
+    await store.recordDelivery(chatId, 0, segno, now.toISOString());
+    sent++;
+  }
   return { sent };
 }

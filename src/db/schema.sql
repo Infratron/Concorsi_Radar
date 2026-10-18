@@ -193,6 +193,8 @@ CREATE INDEX IF NOT EXISTS idx_refunds_chat ON refunds (chat_id, received_at, cl
 -- Su un database già creato la colonna va aggiunta a mano PRIMA di pubblicare il
 -- codice che la legge:
 --   ALTER TABLE prefs ADD COLUMN instant_alerts INTEGER NOT NULL DEFAULT 0;
+-- `giro_hour` è l'ora del promemoria del 🎯 giro di oggi: NULL = spento, che è
+-- il default. Si accende dalla schermata del giro.
 CREATE TABLE IF NOT EXISTS prefs (
   chat_id           INTEGER PRIMARY KEY,
   active            INTEGER NOT NULL DEFAULT 1,
@@ -202,8 +204,36 @@ CREATE TABLE IF NOT EXISTS prefs (
   digest_hours      TEXT NOT NULL DEFAULT '[]',
   instant_alerts    INTEGER NOT NULL DEFAULT 0,
   filters           TEXT NOT NULL DEFAULT '{}',
+  giro_hour         INTEGER,
   updated_at        TEXT NOT NULL
 );
+
+-- `plays`: i concorsi del 🎯 giro di oggi segnati ✅ Giocato. Una riga per chat,
+-- giorno (italiano, YYYY-MM-DD) e concorso: il giorno nella chiave è quello che
+-- fa ripartire il giro a mezzanotte senza cancellare niente, e la serie di
+-- giorni di fila si legge da qui.
+CREATE TABLE IF NOT EXISTS plays (
+  chat_id   INTEGER NOT NULL,
+  day       TEXT NOT NULL,
+  item_id   INTEGER NOT NULL,
+  played_at TEXT NOT NULL,
+  PRIMARY KEY (chat_id, day, item_id)
+);
+
+-- `receipts`: gli scontrini mandati in chat, legati al concorso. Il file resta
+-- su Telegram (`file_id`); `file_unique_id` impedisce di salvare due volte la
+-- stessa foto per lo stesso concorso.
+CREATE TABLE IF NOT EXISTS receipts (
+  id             INTEGER PRIMARY KEY AUTOINCREMENT,
+  chat_id        INTEGER NOT NULL,
+  item_id        INTEGER NOT NULL,
+  file_id        TEXT NOT NULL,
+  file_unique_id TEXT NOT NULL,
+  media          TEXT NOT NULL DEFAULT 'photo',
+  added_at       TEXT NOT NULL,
+  UNIQUE (chat_id, item_id, file_unique_id)
+);
+CREATE INDEX IF NOT EXISTS idx_receipts_chat ON receipts (chat_id, added_at DESC);
 
 CREATE TABLE IF NOT EXISTS runs (
   id           INTEGER PRIMARY KEY AUTOINCREMENT,

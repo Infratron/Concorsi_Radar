@@ -1,4 +1,4 @@
-import type { ChatFilters, ItemKind, ItemQuery, ItemRow, Prefs, SourceRow, UiState } from "../types.ts";
+import type { ChatFilters, ItemKind, ItemQuery, ItemRow, Prefs, ReceiptRow, SourceRow, UiState } from "../types.ts";
 import { truncate } from "../lib/text.ts";
 import {
   CATEGORY_ORDER,
@@ -14,13 +14,16 @@ import {
   withFilterChange,
   type FilterChange,
 } from "../filters.ts";
-import { brandChoices, brandLabel, isBrandId } from "../config/brands.ts";
+import { INSEGNE, brandChoices, brandLabel, isBrandId } from "../config/brands.ts";
+import { DAILY_PLAY_TAG } from "../enrich/rules.ts";
+import { giroItems, giroOrder, isGiroHour, streakFrom, streakWindowStart } from "../giro.ts";
+import { contaPerInsegna, ovunque, soloQui } from "../negozi.ts";
 import { diagnosiFonti, riepilogoDiagnosi } from "../sources-health.ts";
 import { rescoreRow } from "../enrich/score.ts";
 import { mergedBrands, mergedWeights } from "../pipeline.ts";
 import { EXTERNAL_TRIGGERS } from "../schedule.ts";
 import { HELP_PAGES } from "./help.ts";
-import type { TelegramUpdate } from "./api.ts";
+import type { TelegramMessage, TelegramUpdate } from "./api.ts";
 import type { NotifyDeps } from "./digest.ts";
 import { regolamentoUrl } from "./digest.ts";
 import { localDateString, sourceLabel, startOfLocalDay } from "./format.ts";
@@ -177,6 +180,13 @@ function intentForCommand(command: string, args: string): Intent | null {
     case "/start":
     case "/menu":
       return { kind: "home" };
+    case "/giro":
+      return { kind: "section", section: "giro" };
+    case "/supermercato":
+    case "/negozi":
+      return { kind: "section", section: "negozi" };
+    case "/scontrini":
+      return { kind: "section", section: "scontrini" };
     case "/nuovi":
       return { kind: "section", section: "nuovi" };
     case "/oggi":
@@ -346,6 +356,12 @@ function withConfig(prefs: Prefs, key: ConfigKey, value: string): Prefs {
     }
     case "notify":
       return { ...prefs, active: value === "on" };
+    // L'ora del promemoria del giro: solo quelle offerte dai bottoni, o spento.
+    case "giro": {
+      if (value === "off") return { ...prefs, giroHour: null };
+      const ora = Number.parseInt(value, 10);
+      return isGiroHour(ora) ? { ...prefs, giroHour: ora } : prefs;
+    }
     default:
       return prefs;
   }
@@ -378,6 +394,8 @@ function toastFor(intent: Intent, prefs: Prefs): string | null {
             : "💰 Rimborso registrato";
     case "refundAmount":
       return intent.cents === null ? "Scrivi un importo, es. 7,50" : "💰 Rimborso registrato";
+    case "receiptDelete":
+      return "🗑 Scontrino eliminato";
     case "mutedBrand":
       if (!isBrandId(intent.value)) return null;
       return filterChangeLabel(prefs.filters, { kind: intent.muted ? "muteBrand" : "unmuteBrand", value: intent.value }, brandLabel);
@@ -391,6 +409,9 @@ function toastFor(intent: Intent, prefs: Prefs): string | null {
       }
       if (intent.key === "digest") {
         return prefs.digestHours.length > 0 ? `📬 Digest alle ${prefs.digestHours.join(" e ")}` : "📬 Digest spenti";
+      }
+      if (intent.key === "giro") {
+        return typeof prefs.giroHour === "number" ? `⏰ Promemoria alle ${prefs.giroHour}:00` : "🔕 Promemoria del giro spento";
       }
       if (intent.key === "hour") {
         const hour = Number.parseInt(intent.value, 10);
@@ -625,6 +646,7 @@ function isListSection(section: string): boolean {
     section === "vinti" ||
     section === "ignorati" ||
     section === "preferiti-lista" ||
+    section === "scontrini" ||
     section === "coupon" ||
     section.startsWith("coupon-") ||
     section === "gratis" ||
@@ -674,6 +696,22 @@ async function loadScreenData(
   const scaduti = sectionQuery("scaduti", now, null, filters);
   // La watchlist è ordinata per scadenza: è la sua ragione d'essere.
   const salvati = sortByDeadline(await store.listDeliveredItems(chatId, "saved", 200));
+  const oggi = localDateString(now);
+  // 🎯 Il giro: il numero sta sul bottone della prima schermata, l'elenco nella
+  // sua sezione, e la scheda di un concorso del giro ha ✅. Una ventina di righe.
+  const servoGiro = state.section === "menu" || state.section === "giro" || state.openItemId !== null;
+  const giro = servoGiro ? await giroItems(store, chatId, filters, now) : [];
+  const giocati = servoGiro ? new Set(await store.playedOn(chatId, oggi)) : new Set<number>();
+  const giroFatti = giro.filter((item) => giocati.has(item.id)).length;
+  // 🧾 I concorsi con uno scontrino: il numero di ⭐ Le mie cose e il suo elenco.
+  const conScontrino =
+    state.section === "miei" || state.section === "scontrini" ? await store.receiptItems(chatId) : [];
+  // 🛒 La spesa: concorsi attivi e coupon spendibili, una volta sola, poi divisi per
+  // insegna in memoria — chi nomina un'insegna nel testo non si trova con una query.
+  const sezioneNegozi = state.section === "negozi" || state.section.startsWith("negozio:");
+  const perLaSpesa = sezioneNegozi ? await negozioCandidates(deps, filters, now) : [];
+  const negozi = sezioneNegozi ? contaPerInsegna(perLaSpesa, INSEGNE) : {};
+  const tuttoOvunque = sezioneNegozi ? ovunque(perLaSpesa) : [];
   // Gli elenchi dello storico si leggono solo quando servono: nel menù di tutti i
   // giorni sarebbero due query in più per niente.
   // 📊 I tuoi numeri conta le stesse decisioni dello storico, quindi le legge
@@ -682,11 +720,11 @@ async function loadScreenData(
     state.section === "storico" || state.section === "numeri" || SEZIONI_CONSEGNA.has(state.section);
   const vinti = storico ? await store.listDeliveredItems(chatId, "won", 200) : [];
   const ignorati = storico ? await store.listDeliveredItems(chatId, "ignored", 200) : [];
-  // 💰 Rimborsi: i totali servono al menù (il numero sul bottone) e alla sua
-  // schermata; la lista si carica solo aprendola. Una scheda di coupon porta la
-  // SUA richiesta, per mostrare se il denaro è tornato.
+  // 💰 Rimborsi: i totali servono a ⭐ Le mie cose (il numero sul bottone) e alla
+  // sua schermata; la lista si carica solo aprendola. Una scheda di coupon porta
+  // la SUA richiesta, per mostrare se il denaro è tornato.
   const rimborsiNecessari =
-    state.section === "menu" || state.section === "rimborsi" ||
+    state.section === "miei" || state.section === "rimborsi" ||
     state.section === "numeri" || state.openItemId !== null;
   const refundTotals = rimborsiNecessari
     ? await store.refundTotals(chatId)
@@ -701,7 +739,7 @@ async function loadScreenData(
   // senza filtri si contano solo per poter dire "vedi 12 di 40".
   const [
     archiveTotal, contest, news, coupon, contestTotal, newsTotal, couponTotal,
-    nuovi, oggi, settimana, scadenze, quantiScaduti,
+    nuovi, quantiOggi, settimana, scadenze, quantiScaduti,
   ] = await Promise.all([
       store.countItems({}),
       store.countItems(filtersFor(filters, { kinds: CONCORSI })),
@@ -740,7 +778,10 @@ async function loadScreenData(
       : 0;
 
   const counts: ScreenCounts = {
-    nuovi, oggi, settimana, scadenze, news, contest, coupon, contestTotal, newsTotal, couponTotal,
+    giroTotale: giro.length,
+    giroFatti,
+    scontrini: conScontrino.length,
+    nuovi, oggi: quantiOggi, settimana, scadenze, news, contest, coupon, contestTotal, newsTotal, couponTotal,
     seguite: filters.favoriteBrands.length,
     concorsiMarche,
     premi,
@@ -761,13 +802,15 @@ async function loadScreenData(
     // Le sezioni basate sulle consegne (watchlist, vinti, ignorati) sono liste
     // corte e già in memoria; le altre si pagano con LIMIT/OFFSET, quindi anche
     // un archivio grande si sfoglia tutto invece di fermarsi al primo carico.
-    const daConsegne = SEZIONI_CONSEGNA.has(state.section)
-      ? state.section === "salvati"
-        ? salvati
-        : state.section === "vinti"
-          ? vinti
-          : ignorati
-      : null;
+    const daConsegne = state.section === "scontrini"
+      ? conScontrino
+      : SEZIONI_CONSEGNA.has(state.section)
+        ? state.section === "salvati"
+          ? salvati
+          : state.section === "vinti"
+            ? vinti
+            : ignorati
+        : null;
     const query = sectionQuery(state.section, now, state.lastCheckAt, filters);
     // ↩️ Rimborsi su spesa: la convenienza è un RAPPORTO fra due cifre lette dal
     // testo, non una colonna del database. Si carica tutto il mazzetto (i coupon
@@ -795,6 +838,20 @@ async function loadScreenData(
     }
   }
 
+  // 🎯 Il giro e 🛒 la spesa si ordinano in memoria (da fare prima, solo qui o
+  // ovunque) e si ritagliano dopo, come i rimborsi su spesa.
+  const ritaglia = (elenco: ItemRow[]): void => {
+    total = elenco.length;
+    const pagine = Math.max(1, Math.ceil(total / PAGE_SIZE));
+    const pagina = Math.min(Math.max(state.page, 0), pagine - 1);
+    items = elenco.slice(pagina * PAGE_SIZE, pagina * PAGE_SIZE + PAGE_SIZE);
+  };
+  if (state.openItemId === null && state.section === "giro") ritaglia(giroOrder(giro, giocati));
+  if (state.openItemId === null && state.section.startsWith("negozio:")) {
+    const insegna = state.section.slice("negozio:".length);
+    ritaglia(insegna === "ovunque" ? tuttoOvunque : soloQui(perLaSpesa, insegna));
+  }
+
   // 💰 Rimborsi non è un elenco di item: il totale da paginare è quello delle
   // richieste, e la pagina si ritaglia in fondo (dopo che è stata riportata
   // dentro l'intervallo valido).
@@ -802,9 +859,11 @@ async function loadScreenData(
 
   // La domanda sull'importo (`importo:<id>`) non apre la scheda, ma ha bisogno
   // del titolo dell'offerta: l'item si legge lo stesso, una volta sola.
+  // Lo scontrino che si guarda (`scontrini:<id>`) porta il titolo del suo concorso.
   const idAperto =
     state.openItemId ??
-    (state.section.startsWith("importo:") ? Number.parseInt(state.section.slice("importo:".length), 10) : null);
+    (state.section.startsWith("importo:") ? Number.parseInt(state.section.slice("importo:".length), 10) : null) ??
+    (state.section.startsWith("scontrini:") ? Number.parseInt(state.section.slice("scontrini:".length), 10) : null);
   const openItem = idAperto !== null && Number.isFinite(idAperto) ? await store.getItem(idAperto) : null;
   // La richiesta di rimborso si legge solo sulla scheda di un coupon: sugli altri
   // item non esiste, e una query per niente a ogni scheda sarebbe lavoro sprecato.
@@ -813,6 +872,20 @@ async function loadScreenData(
       ? await store.getRefund(chatId, state.openItemId)
       : null;
   const decision = state.openItemId !== null ? await decisionFor(deps, chatId, state.openItemId) : null;
+  // Gli scontrini: sulla scheda (quanti sono) e nella schermata dello scontrino.
+  const receipts: ReceiptRow[] =
+    openItem !== null && (state.openItemId !== null || state.section.startsWith("scontrini:"))
+      ? await store.listReceipts(chatId, openItem.id)
+      : [];
+  const dailyOpen =
+    state.openItemId !== null && openItem !== null && openItem.kind === "contest" && openItem.tags.includes(DAILY_PLAY_TAG)
+      ? { played: giocati.has(openItem.id) }
+      : null;
+  // La serie di giorni si legge solo nella schermata del giro.
+  const streak =
+    state.section === "giro" && state.openItemId === null
+      ? streakFrom(await store.playDays(chatId, streakWindowStart(oggi)), oggi)
+      : 0;
   // Il vantaggio di tempistica si legge solo dove serve: una query sulle viste a
   // ogni menù sarebbe sprecata. La scheda invece porta l'anticipo del SUO
   // concorso — è il "per ogni concorso" della misura.
@@ -854,10 +927,12 @@ async function loadScreenData(
   // schermata — e il conto deve usare lo stesso passo della tastiera: se il passo
   // fosse quello degli elenchi (6), due log farebbero UNA pagina e la freccia
   // «Più vecchio» riporterebbe alla stessa raccolta.
-  const passo =
-    state.section === "log" || state.section === "aiuto" ? 1 : state.section === "preferiti" ? BRANDS_PAGE_SIZE : PAGE_SIZE;
+  const unoAllaVolta = state.section === "log" || state.section === "aiuto" || state.section.startsWith("scontrini:");
+  const passo = unoAllaVolta ? 1 : state.section === "preferiti" ? BRANDS_PAGE_SIZE : PAGE_SIZE;
   const totalePagine =
-    state.section === "filtri-fonti"
+    state.section.startsWith("scontrini:")
+      ? receipts.length
+      : state.section === "filtri-fonti"
       ? tutteLeFonti.length
       : state.section === "preferiti"
         ? marche.length
@@ -912,7 +987,53 @@ async function loadScreenData(
     brandChoices: marche.slice(page * BRANDS_PAGE_SIZE, page * BRANDS_PAGE_SIZE + BRANDS_PAGE_SIZE),
     brandChoicesTotal: marche.length,
     shareBase: deps.shareBase ?? SHARE_BASE_DEFAULT,
+    giroPlayed: [...giocati],
+    streak,
+    negozi,
+    negoziOvunque: tuttoOvunque.length,
+    receipts,
+    dailyOpen,
+    avviso: null,
   };
+}
+
+/**
+ * Quello che si può comprare adesso: concorsi attivi e coupon ancora spendibili,
+ * con i filtri della chat (fonti e marche spente restano spente). Due filtri non
+ * valgono qui, come in 💸 Con acquisto: "solo senza acquisto" svuoterebbe per
+ * costruzione la lista della spesa, e le stelle tagliano una classifica, non una
+ * lista di cose da comprare.
+ */
+async function negozioCandidates(deps: BotDeps, filters: ChatFilters, now: Date): Promise<ItemRow[]> {
+  const larghi = { ...filters, freeOnly: false, minScore: 0 };
+  const tutti: ItemRow[] = [];
+  const query = [
+    filtersFor(larghi, { kinds: CONCORSI, statuses: ATTIVI, deadlineNotBefore: localDateString(now), orderBy: "score" }),
+    filtersFor(larghi, { kinds: COUPON, statuses: ATTIVI, deadlineNotBefore: localDateString(now), orderBy: "score" }),
+  ];
+  for (const base of query) {
+    // ponytail: pagine da 200 fino a 1000 righe; oltre servirebbe una colonna per insegna.
+    for (let offset = 0; offset < 1000; offset += 200) {
+      const pagina = await deps.store.queryItems({ ...base, limit: 200, offset });
+      tutti.push(...pagina);
+      if (pagina.length < 200) break;
+    }
+  }
+  return tutti;
+}
+
+/**
+ * Il file di un messaggio, se è uno scontrino possibile: la foto più grande, o un
+ * documento immagine/PDF. Un altro documento risponde null (non lo conservo).
+ */
+function receiptMediaOf(message: TelegramMessage): { type: "photo" | "document"; fileId: string; fileUniqueId: string } | null {
+  const foto = message.photo?.[message.photo.length - 1];
+  if (foto) return { type: "photo", fileId: foto.file_id, fileUniqueId: foto.file_unique_id };
+  const documento = message.document;
+  if (documento && /^(image\/|application\/pdf$)/.test(documento.mime_type ?? "")) {
+    return { type: "document", fileId: documento.file_id, fileUniqueId: documento.file_unique_id };
+  }
+  return null;
 }
 
 /**
@@ -972,6 +1093,18 @@ async function paint(
   screen: Screen,
   fresh: boolean,
 ): Promise<UiState> {
+  // Lo scontrino è un messaggio con un file: si sfoglia cambiando il file, e si
+  // apre (o si lascia) sostituendo il messaggio, perché Telegram non trasforma un
+  // testo in una foto né il contrario.
+  if (screen.media) {
+    if (!fresh && state.messageId !== null) {
+      const edited = await deps.tg.editMessageMedia(chatId, state.messageId, screen.media, screen.text, { keyboard: screen.keyboard });
+      if (edited.ok) return state;
+    }
+    if (state.messageId !== null) await deps.tg.deleteMessage(chatId, state.messageId);
+    const inviato = await deps.tg.sendMedia(chatId, screen.media, screen.text, { keyboard: screen.keyboard });
+    return inviato.ok ? { ...state, messageId: inviato.messageId } : state;
+  }
   if (!fresh && state.messageId !== null) {
     const edited = await deps.tg.editMessageText(chatId, state.messageId, screen.text, { keyboard: screen.keyboard });
     if (edited.ok) return state;
@@ -996,7 +1129,9 @@ export async function handleUpdate(update: TelegramUpdate, deps: BotDeps): Promi
   const message = update.message;
   const chatId = callback?.message?.chat.id ?? message?.chat.id;
   if (chatId === undefined) return { handled: false };
-  if (!callback && message?.text === undefined) return { handled: false };
+  const media = message ? receiptMediaOf(message) : null;
+  const conFile = message?.photo !== undefined || message?.document !== undefined;
+  if (!callback && message?.text === undefined && !conFile) return { handled: false };
 
   // Il cancello viene PRIMA di ogni scrittura: un estraneo che scrive al bot non
   // deve poter riempire `updates` di righe, né consumare le scritture di D1.
@@ -1035,6 +1170,9 @@ export async function handleUpdate(update: TelegramUpdate, deps: BotDeps): Promi
   const fresh = !callback;
   if (callback) {
     intent = parseCallback(conserva ? datiCallback.slice(2) : datiCallback);
+  } else if (conFile) {
+    // Una foto (o un PDF) è uno scontrino: lo prende il concorso aperto.
+    intent = { kind: "receiptAdd", media };
   } else {
     const text = (message?.text ?? "").trim();
     const [rawCommand, ...rest] = text.split(/\s+/);
@@ -1108,6 +1246,56 @@ export async function handleUpdate(update: TelegramUpdate, deps: BotDeps): Promi
     }
   }
 
+  let avviso: string | null = null;
+  let toast: string | null = null;
+
+  if (intent.kind === "play") {
+    const item = await store.getItem(intent.itemId);
+    if (item) {
+      const giocato = await store.togglePlay(chatId, item.id, localDateString(now), nowIso);
+      toast = giocato ? "✅ Giocato oggi" : "↩️ Tolto dai giocati di oggi";
+    }
+  }
+
+  if (intent.kind === "receiptAdd") {
+    // Lo scontrino va al concorso aperto: la scheda, oppure lo scontrino che si
+    // sta guardando. Senza un concorso davanti non si indovina a quale vada.
+    const daSezione = state.section.startsWith("scontrini:")
+      ? Number.parseInt(state.section.slice("scontrini:".length), 10)
+      : null;
+    const itemId = state.openItemId ?? (daSezione !== null && Number.isFinite(daSezione) ? daSezione : null);
+    const item = itemId !== null ? await store.getItem(itemId) : null;
+    if (intent.media === null) {
+      avviso = "🧾 Questo file non lo posso conservare come scontrino: mandami una foto o un PDF.";
+    } else if (item === null) {
+      avviso = "🧾 Per conservare uno scontrino apri prima il concorso (o il coupon), poi mandami la foto qui.";
+    } else {
+      await store.addReceipt({
+        chatId,
+        itemId: item.id,
+        fileId: intent.media.fileId,
+        fileUniqueId: intent.media.fileUniqueId,
+        media: intent.media.type,
+        addedAt: nowIso,
+      });
+      const quanti = (await store.listReceipts(chatId, item.id)).length;
+      avviso = `✅ <b>Scontrino salvato</b> con questo concorso · ${quanti} in tutto`;
+    }
+  }
+
+  if (intent.kind === "receiptDelete") {
+    await store.deleteReceipt(chatId, intent.receiptId);
+    // Tolto l'ultimo, la schermata dello scontrino non ha più niente da mostrare:
+    // si torna alla scheda del concorso.
+    if (state.section.startsWith("scontrini:")) {
+      const itemId = Number.parseInt(state.section.slice("scontrini:".length), 10);
+      if (Number.isFinite(itemId) && (await store.listReceipts(chatId, itemId)).length === 0) {
+        intent = { kind: "back" };
+        toast = "🗑 Scontrino eliminato";
+      }
+    }
+  }
+
   if (intent.kind === "mutedBrand") {
     // Un id fuori registro non spegne niente: un bottone vecchio non deve poter
     // nascondere mezzo archivio con una marca che non esiste.
@@ -1154,7 +1342,7 @@ export async function handleUpdate(update: TelegramUpdate, deps: BotDeps): Promi
   const next = visto ? { ...applied, lastCheckAt: nowIso } : applied;
   // I dati si leggono con il lastCheckAt VECCHIO: è quello che rende possibile
   // mostrare i nuovi arrivati. Solo dopo averli mostrati il contatore riparte.
-  const data = await loadScreenData(deps, chatId, next, prefs, now);
+  const data = { ...(await loadScreenData(deps, chatId, next, prefs, now)), avviso };
   // La pagina salvata è quella davvero mostrata: così anche uno stato vecchio
   // (per esempio dopo una pulizia dell'archivio) resta coerente.
   const normalized = { ...next, page: data.page };
@@ -1177,6 +1365,6 @@ export async function handleUpdate(update: TelegramUpdate, deps: BotDeps): Promi
   });
 
   if (notificationId !== null) await tg.deleteMessage(chatId, notificationId);
-  if (callback) await tg.answerCallbackQuery(callback.id, toastFor(intent, prefs) ?? undefined);
+  if (callback) await tg.answerCallbackQuery(callback.id, toast ?? toastFor(intent, prefs) ?? undefined);
   return { handled: true };
 }

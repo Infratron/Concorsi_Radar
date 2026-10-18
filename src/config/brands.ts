@@ -98,6 +98,32 @@ const WORD_INDEX: { id: string; tokens: string[] }[] = BRANDS.flatMap((brand) =>
     .map((gruppo) => ({ id: brand.id, tokens: gruppo })),
 );
 
+/**
+ * Le insegne dove si fa la spesa: le porte di 🛒 Vado a fare la spesa. Sono un
+ * sottoinsieme del registro delle marche, e solo i supermercati: chi apre questa
+ * schermata ha in mano la lista della spesa, non il sito di un'elettronica.
+ */
+export const INSEGNE: readonly string[] = ["esselunga", "conad", "coop", "carrefour", "lidl", "eurospin", "penny", "bennet"];
+
+export function isInsegna(value: string): boolean {
+  return INSEGNE.includes(value);
+}
+
+/**
+ * Le insegne NOMINATE nel testo, anche quando la marca del concorso è un'altra:
+ * "Ferrero ti regala... da Esselunga" è di Ferrero ma vale solo da Esselunga.
+ * `brandFor` restituisce una marca sola (la prima che trova), quindi qui si
+ * guardano tutte.
+ */
+export function insegneNominate(text: string): string[] {
+  const presenti = new Set(tokens(text));
+  const trovate = new Set<string>();
+  for (const entry of WORD_INDEX) {
+    if (isInsegna(entry.id) && entry.tokens.every((token) => presenti.has(token))) trovate.add(entry.id);
+  }
+  return [...trovate];
+}
+
 /** true se lo slug è una marca del registro: è la validazione del callback_data. */
 export function isBrandId(value: string): boolean {
   return BY_ID.has(value);

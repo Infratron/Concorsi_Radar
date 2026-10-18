@@ -383,6 +383,29 @@ export interface Prefs {
    * filtro è globale (vedi src/filters.ts).
    */
   filters: ChatFilters;
+  /**
+   * L'ora (italiana) del promemoria del 🎯 giro di oggi; null o assente = spento,
+   * che è il default. È una scelta fatta dalla schermata del giro, non un orologio
+   * che parte da solo.
+   */
+  giroHour?: number | null;
+}
+
+/**
+ * Uno scontrino conservato: la foto (o il PDF) resta sui server di Telegram, qui
+ * c'è solo il suo `file_id` legato al concorso. Nessun file da gestire, nessun
+ * costo, e il bot può rimandarlo quando serve.
+ */
+export interface ReceiptRow {
+  id: number;
+  chatId: number;
+  itemId: number;
+  fileId: string;
+  /** Lo stesso file mandato due volte ha lo stesso id unico: non si duplica. */
+  fileUniqueId: string;
+  /** "photo" o "document": decide come Telegram lo rimanda. */
+  media: "photo" | "document";
+  addedAt: string;
 }
 
 /**

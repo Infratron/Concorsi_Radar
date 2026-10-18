@@ -1,6 +1,6 @@
-import type { ItemRow, NavPoint, Prefs, RefundRow, RefundTotals, RunRow, SourceRow, UiState } from "../types.ts";
+import type { ItemRow, NavPoint, Prefs, ReceiptRow, RefundRow, RefundTotals, RunRow, SourceRow, UiState } from "../types.ts";
 import { formatEuro, refundAmountLabel } from "../refunds.ts";
-import { brandLabel, type BrandChoice } from "../config/brands.ts";
+import { brandLabel, isInsegna, type BrandChoice } from "../config/brands.ts";
 import { GRUPPI_DIAGNOSI, type Diagnosi, type RiepilogoDiagnosi } from "../sources-health.ts";
 import {
   CATEGORY_LABELS,
@@ -15,7 +15,7 @@ import {
 import type { LeadStats } from "../enrich/lead.ts";
 import { explainScore, insightFromRow } from "../enrich/score.ts";
 import { HELP_PAGES, helpIndexFor, helpPageForSection } from "./help.ts";
-import { MAX_MESSAGE_CHARS, type InlineKeyboardMarkup } from "./api.ts";
+import { MAX_MESSAGE_CHARS, type InlineKeyboardMarkup, type ScreenMedia } from "./api.ts";
 import {
   escapeHtml,
   formatItemCard,
@@ -29,7 +29,14 @@ import { runOrigin } from "../schedule.ts";
 import {
   BRANDS_PAGE_SIZE,
   PAGE_SIZE,
+  altroKeyboard,
   archivioKeyboard,
+  concorsiKeyboard,
+  giroKeyboard,
+  mieiKeyboard,
+  negoziKeyboard,
+  negozioKeyboard,
+  receiptKeyboard,
   backKeyboard,
   cardKeyboard,
   couponViewsRows,
@@ -69,6 +76,12 @@ import { hourLabel, parseQuietRange } from "./prefs-config.ts";
 export interface Screen {
   text: string;
   keyboard: InlineKeyboardMarkup;
+  /**
+   * Un file al posto del testo (lo scontrino): il messaggio diventa una foto o un
+   * documento e `text` è la didascalia. Resta UN messaggio: tornando a una
+   * schermata di testo il bot lo sostituisce (vedi paint in bot.ts).
+   */
+  media?: ScreenMedia;
 }
 
 /**
@@ -93,10 +106,13 @@ export type ConfigKey =
   | "brand"
   /** Il filtro "solo le marche che seguo" (on/off) e lo svuotamento dell'elenco (reset). */
   | "brands"
-  | "reset";
+  | "reset"
+  /** L'ora del promemoria del 🎯 giro ("7", "8", "9") oppure "off". */
+  | "giro";
 
 const CONFIG_KEYS: readonly ConfigKey[] = [
   "score", "alerts", "quiet", "digest", "hour", "notify", "cat", "tag", "src", "free", "star", "brand", "brands", "reset",
+  "giro",
 ];
 
 /** Cosa vuole fare l'utente: i bottoni e i comandi si traducono tutti qui. */
@@ -124,6 +140,15 @@ export type Intent =
    */
   | { kind: "mutedBrand"; value: string; muted: boolean }
   | { kind: "config"; key: ConfigKey; value: string }
+  /** ✅ Giocato oggi (o il suo contrario): un tocco sulla scheda di un concorso del giro. */
+  | { kind: "play"; itemId: number }
+  /** 🗑 Elimina lo scontrino che stai guardando. */
+  | { kind: "receiptDelete"; receiptId: number }
+  /**
+   * Una foto o un documento mandati in chat: lo scontrino della scheda aperta.
+   * `media` è null quando il file non è un'immagine né un PDF.
+   */
+  | { kind: "receiptAdd"; media: { type: "photo" | "document"; fileId: string; fileUniqueId: string } | null }
   | { kind: "none" };
 
 /** Sezioni che si aprono dal menù (una pagina di elenco, non una scheda). */
@@ -162,11 +187,25 @@ export const SECTIONS = [
   "diagnostica",
   "log",
   "aiuto",
+  // Le porte della prima schermata e le tre sezioni nate con loro.
+  "concorsi",
+  "miei",
+  "altro",
+  "giro",
+  "negozi",
+  "scontrini",
 ] as const;
 
 export function isKnownSection(section: string): boolean {
   if ((SECTIONS as readonly string[]).includes(section)) return true;
   if (section.startsWith("cerca:")) return true;
+  // `negozio:<insegna>` solo per le insegne del registro, più la vista di tutti.
+  if (section.startsWith("negozio:")) {
+    const insegna = section.slice("negozio:".length);
+    return insegna === "ovunque" || isInsegna(insegna);
+  }
+  // `scontrini:<id>` è lo scontrino di un concorso: l'id è un numero, e basta.
+  if (section.startsWith("scontrini:")) return /^\d+$/.test(section.slice("scontrini:".length));
   // `archivio:<tipo>` si accetta solo per i tre tipi veri: una sezione inventata
   // non leggerebbe niente, mentre un tipo sbagliato letto come "tutto" darebbe
   // l'elenco completo credendo di averne chiesto una fetta (vedi archivioKindFor).
@@ -236,6 +275,15 @@ export function parseCallback(data: string | undefined): Intent {
       }
       return { kind: "none" };
     }
+    case "play": {
+      const itemId = Number.parseInt(first, 10);
+      return Number.isFinite(itemId) ? { kind: "play", itemId } : { kind: "none" };
+    }
+    case "rc": {
+      // `rc:del:<id>`: l'unica azione su uno scontrino salvato.
+      const receiptId = Number.parseInt(rest[1] ?? "", 10);
+      return first === "del" && Number.isFinite(receiptId) ? { kind: "receiptDelete", receiptId } : { kind: "none" };
+    }
     case "mb":
     case "um": {
       // `mb:<id>` = mai più questa marca, `um:<id>` = torna a mostrarla. L'id è
@@ -262,16 +310,27 @@ export function parseCallback(data: string | undefined): Intent {
  * senza uscita, che era il reclamo. La storia vera, quando c'è, ha la precedenza.
  */
 const PARENT_SECTION: Record<string, string> = {
+  // Le sezioni stanno dietro le porte della prima schermata: indietro, senza
+  // storia, si torna alla porta e non al menù.
+  nuovi: "concorsi",
+  oggi: "concorsi",
+  settimana: "concorsi",
+  scadenze: "concorsi",
+  premi: "concorsi",
+  news: "concorsi",
+  salvati: "miei",
+  scontrini: "miei",
   "filtri-fonti": "filtri",
   "filtri-marche": "filtri",
-  preferiti: "filtri",
+  preferiti: "miei",
   "preferiti-lista": "preferiti",
-  impostazioni: "menu",
-  fonti: "menu",
+  impostazioni: "altro",
+  filtri: "altro",
+  fonti: "altro",
   diagnostica: "fonti",
   vantaggio: "fonti",
   log: "fonti",
-  storico: "menu",
+  storico: "miei",
   numeri: "storico",
   vinti: "storico",
   scaduti: "storico",
@@ -282,7 +341,7 @@ const PARENT_SECTION: Record<string, string> = {
   "archivio:news": "archivio",
   aiuto: "menu",
   cerca: "menu",
-  rimborsi: "coupon",
+  rimborsi: "miei",
   // Le viste dei coupon tornano alla sezione intera, non al menù: da ⏳ In
   // scadenza "indietro" vuol dire "fammi vedere tutti i coupon".
   "coupon-oggi": "coupon",
@@ -297,6 +356,8 @@ export function parentSection(section: string): string {
   // La domanda sull'importo è una tappa del rimborso: indietro porta a 💰
   // Rimborsi, non al menù, anche quando la storia non c'è più.
   if (section.startsWith("importo:")) return "rimborsi";
+  if (section.startsWith("negozio:")) return "negozi";
+  if (section.startsWith("scontrini:")) return "scontrini";
   return PARENT_SECTION[section] ?? "menu";
 }
 
@@ -353,6 +414,18 @@ export function applyIntent(state: UiState, intent: Intent, now: Date): UiState 
       if (state.openItemId !== null) return { ...state, openItemId: null };
       const storia = state.history ?? [];
       const precedente = storia[storia.length - 1];
+      // Dallo scontrino si torna alla SCHEDA del concorso, sopra l'elenco da cui
+      // la si era aperta: la storia ricorda l'elenco, l'id sta nella sezione.
+      if (state.section.startsWith("scontrini:")) {
+        const itemId = Number.parseInt(state.section.slice("scontrini:".length), 10);
+        return {
+          ...state,
+          section: precedente?.section ?? "scontrini",
+          page: precedente?.page ?? 0,
+          openItemId: Number.isFinite(itemId) ? itemId : null,
+          history: storia.slice(0, -1),
+        };
+      }
       if (precedente) {
         return {
           ...state,
@@ -388,6 +461,11 @@ export function applyIntent(state: UiState, intent: Intent, now: Date): UiState 
             openItemId: null,
             history: pushHistory(state.history, { section: state.section, page: state.page }),
           };
+    case "play":
+      // Nel giro ✅ chiude la scheda e riporta all'elenco, con il concorso
+      // giocato sceso in fondo: è il gesto che si ripete, uno dopo l'altro.
+      // Altrove la scheda resta aperta: chi l'ha aperta da 📋 Oggi la sta leggendo.
+      return state.section === "giro" && state.openItemId !== null ? { ...state, openItemId: null } : state;
     case "mutedBrand":
       // 🔕 toglie di mezzo il concorso che stai guardando (e tutta la sua
       // insegna): si torna all'elenco, che ora non lo contiene più. 🔔 invece
@@ -399,6 +477,11 @@ export function applyIntent(state: UiState, intent: Intent, now: Date): UiState 
 }
 
 export interface ScreenCounts {
+  /** Concorsi del 🎯 giro di oggi, e quanti la chat ne ha già giocati. */
+  giroTotale: number;
+  giroFatti: number;
+  /** Concorsi con almeno uno scontrino conservato da questa chat. */
+  scontrini: number;
   nuovi: number;
   oggi: number;
   settimana: number;
@@ -507,6 +590,23 @@ export interface ScreenData {
    * (`/share`, src/share.ts). Arriva dalla richiesta, non da una costante.
    */
   shareBase: string;
+  /** I concorsi del giro giocati OGGI da questa chat. */
+  giroPlayed: number[];
+  /** Giorni di fila con almeno una giocata (solo nella schermata del giro). */
+  streak: number;
+  /** 🛒 Iniziative "solo qui" per insegna, e quelle che valgono ovunque. */
+  negozi: Record<string, number>;
+  negoziOvunque: number;
+  /** Gli scontrini di questa chat per il concorso aperto (o per lo scontrino che si guarda). */
+  receipts: ReceiptRow[];
+  /** Il concorso aperto è nel giro di oggi? null = no; altrimenti se è già giocato. */
+  dailyOpen: { played: boolean } | null;
+  /**
+   * La riga che dice cosa è appena successo a un messaggio scritto o a una foto
+   * (che il bot ha già cancellato): "✅ Scontrino salvato". Un tocco ha il toast,
+   * un messaggio no — senza questa riga la foto sparirebbe in silenzio.
+   */
+  avviso: string | null;
 }
 
 /**
@@ -588,6 +688,7 @@ function listScreen(state: UiState, data: ScreenData, now: Date): Screen {
     archivio: ["item", "item"],
     news: ["articolo", "articoli"],
     salvati: ["concorso in watchlist", "concorsi in watchlist"],
+    scontrini: ["concorso con lo scontrino", "concorsi con lo scontrino"],
     vinti: ["concorso vinto", "concorsi vinti"],
     scaduti: ["concorso chiuso", "concorsi chiusi"],
     ignorati: ["concorso scartato", "concorsi scartati"],
@@ -598,6 +699,8 @@ function listScreen(state: UiState, data: ScreenData, now: Date): Screen {
   if (data.items.length === 0) {
     const vuoti: Record<string, string> = {
       salvati: "La watchlist è vuota: apri un concorso e tocca ⭐ Watchlist per non perderlo di vista.",
+      scontrini:
+        "Nessuno scontrino conservato. Apri un concorso (o un coupon) e mandami la foto dello scontrino: la tengo io, legata a quel concorso, e la tua foto sparisce dalla chat.",
       news: "Nessun articolo qui: le news arrivano dalle fonti di cronaca, appena le trovano.",
       vinti: "Nessuna vittoria registrata: quando ne vinci uno, apri la scheda e tocca 🏆 Vinto.",
       scaduti: "Nessun concorso chiuso in archivio: qui finiscono quelli la cui scadenza è passata.",
@@ -688,6 +791,8 @@ function listScreen(state: UiState, data: ScreenData, now: Date): Screen {
         ? "Solo regali che si ricevono comprando: il premio è tuo, non si vince. È una porta, non un filtro."
         : state.section.startsWith("premi:")
         ? "Solo concorsi con questo premio. È una porta, non un filtro: i tuoi filtri restano come sono."
+        : state.section === "scontrini"
+        ? "I concorsi per cui hai conservato lo scontrino, dall'ultimo salvato. Apri un concorso e tocca 🧾 Scontrini per rivederli."
         : state.section === "salvati"
         ? "Chi chiude prima sta in cima. Ti avviso 3 giorni e 1 giorno prima; per le raccolte punti molto prima."
         : state.section === "preferiti-lista"
@@ -877,6 +982,21 @@ function cardScreen(state: UiState, data: ScreenData, now: Date): Screen {
     );
   }
   fondo.push(`🆔 <code>${item.id}</code>`);
+  // Il giro e gli scontrini: due righe di QUESTA chat, sopra il piede.
+  const miei: string[] = [];
+  if (data.dailyOpen !== null) {
+    miei.push(
+      data.dailyOpen.played
+        ? "🎯 <b>Nel giro di oggi</b> · ✅ giocato"
+        : "🎯 <b>Nel giro di oggi</b> · si gioca ogni giorno: tocca ✅ quando hai giocato",
+    );
+  }
+  if (data.receipts.length > 0) {
+    miei.push(`🧾 <b>Scontrini conservati</b> · ${data.receipts.length}`);
+  } else if (item.kind === "coupon" || item.requiresPurchase) {
+    miei.push("🧾 Mandami qui la foto dello scontrino: la conservo con questo concorso.");
+  }
+  if (miei.length > 0) righe.push("", miei.join("\n"));
   righe.push("", fondo.join("\n"));
   return {
     text: righe.join("\n"),
@@ -888,6 +1008,7 @@ function cardScreen(state: UiState, data: ScreenData, now: Date): Screen {
       data.refund,
       now,
       typeof item.brand === "string" && data.prefs.filters.mutedBrands.includes(item.brand),
+      { daily: data.dailyOpen ?? undefined, receipts: data.receipts.length },
     ),
   };
 }
@@ -1249,7 +1370,7 @@ function helpScreen(data: ScreenData): Screen {
         "",
         "Scegli un argomento: ogni bottone apre una pagina breve, tre o quattro righe, su una parte della chat.",
         "",
-        `<i>${HELP_PAGES.length} argomenti · ogni pagina ha il bottone per andare alla sezione che spiega.</i>`,
+        "<i>Gli argomenti seguono il menù: dentro ogni porta trovi le sue sezioni, e ogni pagina ha il bottone per andarci.</i>",
       ].join("\n"),
       keyboard: helpKeyboard(HELP_PAGES, null),
     };
@@ -1376,9 +1497,151 @@ function importoPromptScreen(data: ScreenData): Screen {
   };
 }
 
+/** 🎁 Concorsi: la porta delle sezioni dei concorsi. */
+function concorsiScreen(data: ScreenData): Screen {
+  const c = data.counts;
+  return {
+    text: [
+      "🎁 <b>Concorsi</b>",
+      "",
+      `🆕 <b>${c.nuovi}</b> nuovi dall'ultimo controllo · ⏳ <b>${c.scadenze}</b> chiudono entro 7 giorni`,
+      "",
+      "Scegli da dove guardare: le novità, le scadenze o il tipo di premio che cerchi.",
+    ].join("\n"),
+    keyboard: concorsiKeyboard(c),
+  };
+}
+
+/** ⭐ Le mie cose: tutto quello che ha deciso questa chat. */
+function mieiScreen(data: ScreenData): Screen {
+  const c = data.counts;
+  return {
+    text: [
+      "⭐ <b>Le mie cose</b>",
+      "",
+      `⭐ <b>${c.salvati}</b> in watchlist · 🧾 <b>${c.scontrini}</b> con lo scontrino · 💰 <b>${c.rimborsi}</b> rimborsi in attesa`,
+      "",
+      "Quello che hai salvato, conservato e richiesto tu. È di questa chat: l'altra persona non lo vede.",
+    ].join("\n"),
+    keyboard: mieiKeyboard(c),
+  };
+}
+
+/**
+ * 🎯 Il giro di oggi: l'elenco della routine. In testa quanti ne hai fatti e la
+ * serie di giorni; sotto, i concorsi da fare prima di quelli fatti.
+ */
+function giroScreen(data: ScreenData, now: Date): Screen {
+  const c = data.counts;
+  const giocati = new Set(data.giroPlayed);
+  const pagine = Math.max(1, Math.ceil(data.total / PAGE_SIZE));
+  const page = Math.min(Math.max(data.page, 0), pagine - 1);
+  const ora = typeof data.prefs.giroHour === "number" ? data.prefs.giroHour : null;
+  const promemoria =
+    ora === null
+      ? "⏰ Promemoria del mattino: spento. Sceglilo qui sotto."
+      : `⏰ Promemoria del mattino: alle <b>${ora}:00</b>, se c'è qualcosa da giocare.`;
+  if (c.giroTotale === 0) {
+    return {
+      text: [
+        "🎯 <b>Il giro di oggi</b>",
+        "",
+        "Oggi nessun concorso dell'archivio si gioca ogni giorno. Li riconosco dal bando (\"ogni giorno\", \"una giocata al giorno\") e dagli instant win gratuiti: appena ne arriva uno, lo trovi qui.",
+        "",
+        promemoria,
+      ].join("\n"),
+      keyboard: giroKeyboard([], giocati, now, { index: 0, total: 1 }, ora),
+    };
+  }
+  const restano = Math.max(0, c.giroTotale - c.giroFatti);
+  const righe = [
+    `🎯 <b>Il giro di oggi</b> · ${c.giroFatti} su ${c.giroTotale} fatti${pagine > 1 ? ` · pagina ${page + 1}/${pagine}` : ""}`,
+  ];
+  if (data.streak > 0) righe.push(`🔥 <b>${data.streak}</b> ${data.streak === 1 ? "giorno" : "giorni"} di fila`);
+  righe.push(
+    "",
+    restano === 0
+      ? "✅ Giro finito per oggi. Domani riparte da capo."
+      : "Apri un concorso, gioca con 🔗 Apri, poi tocca ✅ Giocato oggi: quello fatto scende in fondo.",
+    "",
+    promemoria,
+  );
+  return {
+    text: righe.join("\n"),
+    keyboard: giroKeyboard(data.items, giocati, now, { index: page, total: pagine }, ora),
+  };
+}
+
+/** 🛒 Vado a fare la spesa: la scelta del supermercato. */
+function negoziScreen(data: ScreenData): Screen {
+  return {
+    text: [
+      "🛒 <b>Vado a fare la spesa</b>",
+      "",
+      "Dove vai? Ti mostro cosa vale lì: concorsi con scontrino, rimborsi e coupon di quell'insegna.",
+      `🛒 <b>In ogni supermercato</b> ce ne sono <b>${data.negoziOvunque}</b>: i concorsi e le offerte di marca che non nominano un'insegna.`,
+      "",
+      "<i>Il numero accanto all'insegna sono le sue iniziative.</i>",
+    ].join("\n"),
+    keyboard: negoziKeyboard(data.negozi, data.negoziOvunque),
+  };
+}
+
+/** Una insegna (`negozio:<id>`) oppure quello che vale ovunque (`negozio:ovunque`). */
+function negozioScreen(state: UiState, data: ScreenData, now: Date): Screen {
+  const id = state.section.slice("negozio:".length);
+  const insegna = id === "ovunque" ? null : id;
+  const pagine = Math.max(1, Math.ceil(data.total / PAGE_SIZE));
+  const page = Math.min(Math.max(data.page, 0), pagine - 1);
+  const qui = insegna === null ? 0 : (data.negozi[insegna] ?? 0);
+  const titolo = insegna === null ? "🛒 <b>In ogni supermercato</b>" : `🏪 <b>${escapeHtml(brandLabel(insegna))}</b>`;
+  const spiegazione =
+    insegna === null
+      ? "Concorsi con scontrino e offerte di marca che non nominano nessuna insegna: si comprano dove vuoi. Prima di comprare, controlla nel bando che il punto vendita partecipi."
+      : `Le iniziative di ${escapeHtml(brandLabel(insegna))}: le sue promozioni e i concorsi che la nominano. Quello che vale in ogni supermercato è in 🛒 Ovunque.`;
+  const vuoto =
+    insegna === null
+      ? "Adesso non c'è niente che valga in ogni supermercato."
+      : `Adesso non ci sono iniziative di ${escapeHtml(brandLabel(insegna))} in archivio: guarda 🛒 Ovunque, che vale anche lì.`;
+  return {
+    text: [
+      `${titolo} · ${data.total}${pagine > 1 ? ` · pagina ${page + 1}/${pagine}` : ""}`,
+      "",
+      data.total === 0 ? vuoto : spiegazione,
+    ].join("\n"),
+    keyboard: negozioKeyboard(data.items, now, { index: page, total: pagine }, {
+      insegna,
+      qui,
+      ovunque: data.negoziOvunque,
+    }),
+  };
+}
+
+/** Lo scontrino conservato, come foto (o documento) con la sua didascalia. */
+function receiptScreen(state: UiState, data: ScreenData): Screen {
+  const totale = data.receipts.length;
+  if (totale === 0) {
+    return {
+      text: "🧾 <b>Nessuno scontrino</b>\n\nPer questo concorso non ho niente di conservato. Apri il concorso e mandami la foto.",
+      keyboard: backKeyboard(),
+    };
+  }
+  const index = Math.min(Math.max(state.page, 0), totale - 1);
+  const scontrino = data.receipts[index];
+  const titolo = data.openItem ? escapeHtml(truncate(data.openItem.title, 80)) : "";
+  return {
+    text: [`🧾 <b>Scontrino ${index + 1} di ${totale}</b>`, titolo, `Salvato il ${giornoItaliano(scontrino.addedAt)}`]
+      .filter((riga) => riga.length > 0)
+      .join("\n"),
+    keyboard: receiptKeyboard(scontrino.id, { index, total: totale }),
+    media: { type: scontrino.media, fileId: scontrino.fileId },
+  };
+}
+
 /** Compone la schermata corrispondente allo stato della chat. */
 export function renderScreen(state: UiState, data: ScreenData, now: Date): Screen {
-  const schermata = renderBaseScreen(state, data, now);
+  const base = renderBaseScreen(state, data, now);
+  const schermata = data.avviso === null ? base : { ...base, text: `${data.avviso}\n\n${base.text}` };
   // Ogni sezione che ha una pagina di wiki porta il bottone per aprirla. Prima
   // c'era solo negli elenchi: da ⚙️ Impostazioni o da 🎛 Cosa vedi bisognava
   // tornare al menù e cercare l'argomento, che è esattamente il giro che il
@@ -1406,12 +1669,34 @@ function renderBaseScreen(state: UiState, data: ScreenData, now: Date): Screen {
   // `importo:<id>` e l'offerta è caricata per il titolo, non per essere aperta.
   if (state.section.startsWith("importo:")) return importoPromptScreen(data);
   if (state.openItemId !== null) return cardScreen(state, data, now);
+  if (state.section.startsWith("scontrini:")) return receiptScreen(state, data);
+  if (state.section.startsWith("negozio:")) return negozioScreen(state, data, now);
 
   switch (state.section) {
     case "menu": {
       const righe = ["📡 <b>Concorsi Radar</b>", "", ...headerLines(state, data, now)];
       return { text: righe.join("\n"), keyboard: menuKeyboard(data.counts) };
     }
+    case "concorsi":
+      return concorsiScreen(data);
+    case "miei":
+      return mieiScreen(data);
+    case "altro":
+      return {
+        text: [
+          "⚙️ <b>Altro</b>",
+          "",
+          "Le cose che si regolano una volta e poi si lasciano stare:",
+          "🔔 <b>Notifiche e orari</b> · avvisi, silenzio, digest",
+          "🎛 <b>Cosa vedi</b> · i tuoi filtri",
+          "📡 <b>Fonti</b> · chi risponde e chi no",
+        ].join("\n"),
+        keyboard: altroKeyboard(data.counts.filtri),
+      };
+    case "giro":
+      return giroScreen(data, now);
+    case "negozi":
+      return negoziScreen(data);
     case "storico":
       return {
         text: [

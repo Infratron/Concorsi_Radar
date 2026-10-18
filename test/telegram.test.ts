@@ -21,6 +21,10 @@ import {
   itemButtonLabel,
   listKeyboard,
   menuKeyboard,
+  altroKeyboard,
+  concorsiKeyboard,
+  giroButtonLabel,
+  mieiKeyboard,
   settingsKeyboard,
   shareUrlFor,
   sourceToggleLabel,
@@ -28,7 +32,7 @@ import {
 import { SCORE_WEIGHTS } from "../src/enrich/score.ts";
 import { activeFilterCount, defaultFilters, filterableSources, parseFilters, withFilterChange } from "../src/filters.ts";
 import { applyIntent, parseCallback } from "../src/telegram/screens.ts";
-import { HELP_PAGES } from "../src/telegram/help.ts";
+import { HELP_INDEX, HELP_PAGES } from "../src/telegram/help.ts";
 import { channelOf } from "../src/enrich/lead.ts";
 import { STALE_CHAT_MS, defaultPrefs, handleUpdate, isStaleChat } from "../src/telegram/bot.ts";
 import {
@@ -37,10 +41,15 @@ import {
   reminderDaysFor,
   sendCollectionReminder,
   sendDigests,
+  sendGiroReminders,
   sendInstantAlerts,
   sendWatchlistReminders,
 } from "../src/telegram/digest.ts";
 import { COLLECTION_REMINDER_MARK, NOTIFY_CRON } from "../src/schedule.ts";
+import { streakFrom } from "../src/giro.ts";
+import { enrichWithRules } from "../src/enrich/rules.ts";
+import { isOvunque } from "../src/negozi.ts";
+import { insegneNominate } from "../src/config/brands.ts";
 
 /**
  * Test dell'interfaccia: menù a pulsanti su UN solo messaggio.
@@ -76,6 +85,7 @@ function makeTg() {
   // Messaggi che Telegram accetta ancora di modificare ma che l'utente NON vede
   // più: è il caso della chat svuotata con "Elimina conversazione".
   const invisibili = new Set<number>();
+  const conFile = new Set<number>();
   let nextMessageId = 100;
 
   const fetcher: FetchLike = async (input, init) => {
@@ -88,8 +98,21 @@ function makeTg() {
       testi.set(id, String(payload.text));
       return jsonResponse({ ok: true, result: { message_id: id } });
     }
+    // Foto e documenti: un messaggio con un file, che si cambia solo con
+    // editMessageMedia (come l'API vera, che rifiuta il testo su una foto).
+    if (method === "sendPhoto" || method === "sendDocument") {
+      const id = nextMessageId++;
+      conFile.add(id);
+      return jsonResponse({ ok: true, result: { message_id: id } });
+    }
+    if (method === "editMessageMedia") {
+      const id = Number(payload.message_id);
+      if (!conFile.has(id)) return jsonResponse({ ok: false, description: "Bad Request: there is no media in the message to edit" }, 400);
+      return jsonResponse({ ok: true, result: { message_id: id } });
+    }
     if (method === "editMessageText") {
       const id = Number(payload.message_id);
+      if (conFile.has(id)) return jsonResponse({ ok: false, description: "Bad Request: there is no text in the message to edit" }, 400);
       // Come l'API vera: un messaggio che non esiste più non si può modificare.
       if (!testi.has(id)) return jsonResponse({ ok: false, description: "Bad Request: message to edit not found" }, 400);
       // Chat svuotata: la modifica riesce (e il contenuto cambia davvero lato
@@ -352,32 +375,50 @@ describe("format", () => {
 });
 
 describe("bottoni · costruzione delle tastiere", () => {
-  it("il menù porta a tutte le sezioni, con i conteggi", () => {
-    const keyboard = menuKeyboard({
-      nuovi: 3, oggi: 12, settimana: 40, scadenze: 2, salvati: 1, news: 7, coupon: 5,
-      rimborsi: 2, rimborsiCents: 1250, rimborsiCap: false, seguite: 4, filtri: 0,
-    });
-    const bottoni = keyboard.inline_keyboard.flat();
-    expect(bottoni.map((b) => b.callback_data)).toEqual([
-      "s:nuovi", "s:oggi", "s:settimana", "s:scadenze", "s:premi", "s:salvati", "s:news",
-      "s:cerca", "s:storico", "s:coupon", "s:rimborsi", "s:preferiti", "s:filtri", "s:fonti", "s:impostazioni",
-      "refresh", "s:aiuto",
+  it("la prima schermata ha poche porte, e dietro di loro c'è ogni sezione di prima", () => {
+    const home = menuKeyboard({ nuovi: 3, coupon: 5, giroTotale: 9, giroFatti: 4 });
+    const porte = home.inline_keyboard.flat();
+    // Nove bottoni invece di diciassette: il giro in cima, una riga per domanda.
+    expect(porte.length).toBe(9);
+    expect(porte[0]?.text).toBe("🎯 Il giro di oggi · 5 da fare");
+    expect(porte.map((b) => b.callback_data)).toEqual([
+      "s:giro", "s:concorsi", "s:coupon", "s:negozi", "s:miei", "s:cerca", "s:altro", "refresh", "s:aiuto",
     ]);
-    expect(bottoni[0]?.text).toBe("🆕 Nuovi (3)");
-    // La porta ai tipi di premio non porta un numero: i conteggi sono dentro, e
-    // 🆓 Gratis vive lì — nel menù sarebbe la stessa cosa da due posti.
-    expect(bottoni[4]?.text).toBe("🎁 Tipi di premio");
-    expect(bottoni.some((b) => (b.text ?? "").includes("🆓"))).toBe(false);
-    expect(bottoni[5]?.text).toBe("⭐ Watchlist (1)");
-    expect(bottoni[6]?.text).toBe("📰 News (7)");
-    expect(bottoni[9]?.text).toBe("💶 Coupon e rimborsi (5)");
-    // 💰 Rimborsi: il numero sono le richieste in attesa, e l'importo dice
-    // subito quanto denaro deve ancora tornare (qui 12,50 €).
-    expect(bottoni[10]?.text).toBe("💰 Rimborsi (2) · 12,50 €");
-    // Il numero qui sono le MARCHE seguite, non i loro concorsi: è quello che il
-    // nome della voce promette.
-    expect(bottoni[11]?.text).toBe("🏷 Marche seguite (4)");
-    expect(bottoni[16]?.text).toBe("❓ Aiuto");
+    expect(porte.find((b) => b.callback_data === "s:concorsi")?.text).toBe("🎁 Concorsi · 3 nuovi");
+    expect(porte.find((b) => b.callback_data === "s:coupon")?.text).toBe("💶 Coupon (5)");
+
+    const concorsi = concorsiKeyboard({ nuovi: 3, oggi: 12, settimana: 40, scadenze: 2, news: 7 }).inline_keyboard.flat();
+    expect(concorsi[0]?.text).toBe("🆕 Nuovi (3)");
+    expect(concorsi.find((b) => b.callback_data === "s:news")?.text).toBe("📰 News (7)");
+    // La porta ai tipi di premio non porta un numero: i conteggi sono dentro.
+    expect(concorsi.find((b) => b.callback_data === "s:premi")?.text).toBe("🎁 Tipi di premio");
+    const miei = mieiKeyboard({
+      salvati: 1, scontrini: 2, rimborsi: 2, rimborsiCents: 1250, rimborsiCap: false, seguite: 4,
+    }).inline_keyboard.flat();
+    expect(miei.find((b) => b.callback_data === "s:salvati")?.text).toBe("⭐ Watchlist (1)");
+    expect(miei.find((b) => b.callback_data === "s:scontrini")?.text).toBe("🧾 Scontrini (2)");
+    // 💰 Rimborsi: le richieste in attesa e il denaro che deve ancora tornare.
+    expect(miei.find((b) => b.callback_data === "s:rimborsi")?.text).toBe("💰 Rimborsi (2) · 12,50 €");
+    // Il numero qui sono le MARCHE seguite, non i loro concorsi.
+    expect(miei.find((b) => b.callback_data === "s:preferiti")?.text).toBe("🏷 Marche seguite (4)");
+    const altro = altroKeyboard(0).inline_keyboard.flat();
+
+    // Nessuna sezione persa: tutte quelle che il vecchio menù apriva stanno a due
+    // tocchi, dietro una porta.
+    const raggiungibili = new Set([...porte, ...concorsi, ...miei, ...altro].map((b) => b.callback_data));
+    for (const sezione of [
+      "s:nuovi", "s:oggi", "s:settimana", "s:scadenze", "s:premi", "s:salvati", "s:news", "s:cerca", "s:storico",
+      "s:coupon", "s:rimborsi", "s:preferiti", "s:filtri", "s:fonti", "s:impostazioni", "refresh", "s:aiuto",
+    ]) {
+      expect(raggiungibili.has(sezione), sezione).toBe(true);
+    }
+    expect(porte.some((b) => (b.text ?? "").includes("🆓"))).toBe(false);
+  });
+
+  it("il bottone del giro dice quanti ne restano, e quando è finito", () => {
+    expect(giroButtonLabel(0, 0)).toBe("🎯 Il giro di oggi");
+    expect(giroButtonLabel(9, 4)).toBe("🎯 Il giro di oggi · 5 da fare");
+    expect(giroButtonLabel(9, 9)).toBe("🎯 Il giro di oggi · ✅ fatto");
   });
 
   it("un coupon si riconosce dal bottone: 💶 e senza punteggio", () => {
@@ -756,7 +797,7 @@ describe("interfaccia · un solo messaggio per chat", () => {
     const inviato = lastWith(calls, "sendMessage");
     expect(inviato?.payload.text).toContain("Concorsi Radar");
     const keyboard = inviato?.payload.reply_markup as { inline_keyboard: { callback_data?: string }[][] };
-    expect(keyboard.inline_keyboard.flat().map((b) => b.callback_data)).toContain("s:oggi");
+    expect(keyboard.inline_keyboard.flat().map((b) => b.callback_data)).toContain("s:concorsi");
 
     const stato = await store.getUiState(CHAT);
     expect(stato?.messageId).toBe(100);
@@ -1182,7 +1223,13 @@ describe("interfaccia · un solo messaggio per chat", () => {
     const menu = lastWith(calls, "editMessageText")?.payload.reply_markup as {
       inline_keyboard: { text: string; callback_data?: string }[][];
     };
-    expect(menu.inline_keyboard.flat().find((b) => b.callback_data === "s:nuovi")?.text).toBe("🆕 Nuovi (1)");
+    // La prima schermata dice che c'è una novità, la porta 🎁 Concorsi quale.
+    expect(menu.inline_keyboard.flat().find((b) => b.callback_data === "s:concorsi")?.text).toBe("🎁 Concorsi · 1 nuovo");
+    await handleUpdate(tap(20, "s:concorsi", 100), deps(store2, tg));
+    const porta = lastWith(calls, "editMessageText")?.payload.reply_markup as {
+      inline_keyboard: { text: string; callback_data?: string }[][];
+    };
+    expect(porta.inline_keyboard.flat().find((b) => b.callback_data === "s:nuovi")?.text).toBe("🆕 Nuovi (1)");
 
     await handleUpdate(tap(3, "s:nuovi", 100), deps(store2, tg));
     const elenco = lastWith(calls, "editMessageText")?.payload.text ?? "";
@@ -1212,7 +1259,12 @@ describe("interfaccia · un solo messaggio per chat", () => {
     const menuDopo = lastWith(calls, "editMessageText")?.payload.reply_markup as {
       inline_keyboard: { text: string; callback_data?: string }[][];
     };
-    expect(menuDopo.inline_keyboard.flat().find((b) => b.callback_data === "s:nuovi")?.text).toBe("🆕 Nuovi (0)");
+    expect(menuDopo.inline_keyboard.flat().find((b) => b.callback_data === "s:concorsi")?.text).toBe("🎁 Concorsi");
+    await handleUpdate(tap(7, "s:concorsi", 100), deps(store2, tg));
+    const portaDopo = lastWith(calls, "editMessageText")?.payload.reply_markup as {
+      inline_keyboard: { text: string; callback_data?: string }[][];
+    };
+    expect(portaDopo.inline_keyboard.flat().find((b) => b.callback_data === "s:nuovi")?.text).toBe("🆕 Nuovi (0)");
   });
 
   it("la sezione scadenze mostra solo chi deve ancora chiudere", async () => {
@@ -1390,10 +1442,8 @@ describe("interfaccia · un solo messaggio per chat", () => {
     ]);
     const { tg, calls } = makeTg();
     await handleUpdate(command(1, "/start"), deps(store2, tg));
-    // /start manda un messaggio nuovo: per rivedere il menù si tocca Aggiorna.
-    await handleUpdate(tap(2, "refresh", 100), deps(store2, tg));
-
-    // Il menù conta le due cose separatamente.
+    // Le due cose si contano separatamente, nella porta 🎁 Concorsi.
+    await handleUpdate(tap(2, "s:concorsi", 100), deps(store2, tg));
     const menu = lastWith(calls, "editMessageText")?.payload.reply_markup as {
       inline_keyboard: { text: string; callback_data?: string }[][];
     };
@@ -1669,7 +1719,8 @@ describe("filtri personali · due chat, due feed", () => {
       (await store.queryItems({ limit: 10 })).find((item) => item.brand === "ferrero")?.score ?? -1;
 
     await handleUpdate(cmd(CHAT, 1, "/start"), entrambe(store, tg));
-    // Il menù ha la voce, e prima di seguire qualcosa conta zero.
+    // ⭐ Le mie cose ha la voce, e prima di seguire qualcosa conta zero.
+    await handleUpdate(tapIn(CHAT, 50, "s:miei", 100), entrambe(store, tg));
     expect(voci().find((b) => b.callback_data === "s:preferiti")?.text).toBe("🏷 Marche seguite (0)");
 
     await handleUpdate(tapIn(CHAT, 2, "s:preferiti", 100), entrambe(store, tg));
@@ -1704,7 +1755,7 @@ describe("filtri personali · due chat, due feed", () => {
     expect(elenco.join("\n")).not.toContain("Conad");
     expect(schermata(calls, CHAT)).toContain("1 concorso");
 
-    await handleUpdate(tapIn(CHAT, 7, "home", 100), entrambe(store, tg));
+    await handleUpdate(tapIn(CHAT, 7, "s:miei", 100), entrambe(store, tg));
     expect(voci().find((b) => b.callback_data === "s:preferiti")?.text).toBe("🏷 Marche seguite (1)");
 
     // Il filtro vero: "solo le marche che seguo" toglie il resto dagli elenchi.
@@ -2707,7 +2758,7 @@ describe("coupon e rimborsi · la sezione", () => {
     await handleUpdate(command(1, "/start"), deps(store, tg));
 
     const bottoni = lastKeyboard(calls)?.inline_keyboard.flat() ?? [];
-    expect(bottoni.some((bottone) => bottone.text === "💶 Coupon e rimborsi (2)")).toBe(true);
+    expect(bottoni.some((bottone) => bottone.text === "💶 Coupon (2)")).toBe(true);
     const testo = String(lastWith(calls, "sendMessage")?.payload.text ?? "");
     expect(testo).toContain("1</b> concorsi");
     expect(testo).toContain("2</b> coupon");
@@ -2898,6 +2949,7 @@ describe("rimborsi · quanto è tornato e quanto manca", () => {
     const { tg, calls } = makeTg();
 
     await handleUpdate(command(1, "/start"), deps(store, tg));
+    await handleUpdate(tap(2, "s:miei", 100), deps(store, tg));
 
     const bottoni = lastKeyboard(calls)?.inline_keyboard.flat() ?? [];
     // Due richieste aperte, ma solo una ha una cifra: il bottone dice 10 € e
@@ -3142,6 +3194,7 @@ describe("tipi di premio · le porte dal menù", () => {
     const { tg, calls } = makeTg();
 
     await handleUpdate(command(1, "/start"), deps(store, tg));
+    await handleUpdate(tap(20, "s:concorsi", 100), deps(store, tg));
     const menu = lastKeyboard(calls)?.inline_keyboard.flat() ?? [];
     expect(menu.find((b) => b.callback_data === "s:premi")?.text).toBe("🎁 Tipi di premio");
 
@@ -4017,11 +4070,19 @@ describe("❓ Aiuto · la wiki", () => {
     expect(indice).not.toContain("Pagina 1 di");
     const bottoni = lastKeyboard(calls)?.inline_keyboard.flat() ?? [];
     expect(bottoni.some((b) => b.callback_data?.startsWith("page:"))).toBe(false);
-    // Un bottone per OGNI argomento, con il suo titolo: è la mappa della chat.
+    // Le porte del menù, una per bottone: la wiki ha la stessa forma della chat.
     const argomenti = bottoni.filter((b) => b.callback_data?.startsWith("s:aiuto:"));
-    expect(argomenti).toHaveLength(HELP_PAGES.length);
+    expect(argomenti.map((b) => b.callback_data)).toEqual(HELP_INDEX.map((id) => `s:aiuto:${id}`));
     expect(argomenti.find((b) => b.callback_data === "s:aiuto:coupon")?.text).toBe("💶 Coupon e rimborsi");
-    expect(argomenti.find((b) => b.callback_data === "s:aiuto:numeri")?.text).toBe("📊 I tuoi numeri");
+    // Le pagine delle sezioni stanno dentro la loro porta.
+    await handleUpdate(tap(30, "s:aiuto:g-miei", 100), deps(store, tg));
+    const porta = lastKeyboard(calls)?.inline_keyboard.flat() ?? [];
+    expect(porta.find((b) => b.callback_data === "s:aiuto:numeri")?.text).toBe("📊 I tuoi numeri");
+    expect(porta.find((b) => b.callback_data === "s:aiuto:scontrini")?.text).toBe("🧾 Scontrini");
+    expect(porta.find((b) => b.callback_data === "s:miei")?.text).toBe("➡️ ⭐ Le mie cose");
+    // Ogni pagina è raggiungibile: dall'indice o dalla sua porta.
+    const raggiungibili = new Set([...HELP_INDEX, ...HELP_PAGES.flatMap((pagina) => pagina.children ?? [])]);
+    for (const pagina of HELP_PAGES) expect(raggiungibili.has(pagina.id), pagina.id).toBe(true);
 
     // La pagina si apre dal suo bottone e porta il rimando alla sezione.
     await handleUpdate(tap(3, "s:aiuto:coupon", 100), deps(store, tg));
@@ -4090,5 +4151,349 @@ describe("❓ Aiuto · la wiki", () => {
     // Il callback non è una sezione nota: nessuna pagina di aiuto si apre.
     const testo = String((lastWith(calls, "editMessageText") ?? lastWith(calls, "sendMessage"))?.payload.text ?? "");
     expect(testo).not.toContain("❓ <b>Aiuto");
+  });
+});
+
+/** Un messaggio con una foto, come lo manda Telegram: più misure, l'ultima è la più grande. */
+function foto(updateId: number, uniqueId = "unico-1"): TelegramUpdate {
+  return {
+    update_id: updateId,
+    message: {
+      message_id: updateId,
+      chat: { id: CHAT },
+      from: { id: CHAT },
+      photo: [
+        { file_id: `piccola-${uniqueId}`, file_unique_id: `${uniqueId}-s`, width: 90, height: 90 },
+        { file_id: `grande-${uniqueId}`, file_unique_id: uniqueId, width: 1280, height: 1280 },
+      ],
+    },
+  };
+}
+
+function documento(updateId: number, mime: string): TelegramUpdate {
+  return {
+    update_id: updateId,
+    message: {
+      message_id: updateId,
+      chat: { id: CHAT },
+      from: { id: CHAT },
+      document: { file_id: `doc-${updateId}`, file_unique_id: `doc-u-${updateId}`, mime_type: mime },
+    },
+  };
+}
+
+/** Il testo e la tastiera dell'ultima schermata, qualunque sia il modo in cui è arrivata. */
+function ultima(calls: Call[]): Call | undefined {
+  return [...calls].reverse().find((call) =>
+    ["sendMessage", "editMessageText", "sendPhoto", "sendDocument", "editMessageMedia"].includes(call.method),
+  );
+}
+
+function testoUltima(calls: Call[]): string {
+  const call = ultima(calls);
+  const media = call?.payload.media as { caption?: string } | undefined;
+  return String(call?.payload.text ?? call?.payload.caption ?? media?.caption ?? "");
+}
+
+function bottoniUltima(calls: Call[]): { text: string; callback_data?: string; url?: string }[] {
+  const call = ultima(calls);
+  return ((call?.payload.reply_markup as InlineKeyboardMarkup | undefined)?.inline_keyboard.flat() ?? []) as {
+    text: string;
+    callback_data?: string;
+    url?: string;
+  }[];
+}
+
+describe("🎯 il giro di oggi", () => {
+  async function conGiro(): Promise<{ store: MemoryStore; ids: number[] }> {
+    const store = createMemoryStore();
+    await store.upsertPrefs(prefs());
+    const ids = await seed(store, [
+      { title: "Instant win Lindt", tags: ["giornaliero"], score: 70 },
+      { title: "Gioca con Kinder", tags: ["giornaliero"], score: 60 },
+      { title: "Concorso Barilla estrazione finale", tags: [], score: 90 },
+    ]);
+    return { store, ids };
+  }
+
+  it("la prima schermata dice quanti ne restano, e il giro elenca solo quelli che si giocano ogni giorno", async () => {
+    const { store } = await conGiro();
+    const { tg, calls } = makeTg();
+    await handleUpdate(command(1, "/start"), deps(store, tg));
+    expect(bottoniUltima(calls).find((b) => b.callback_data === "s:giro")?.text).toBe("🎯 Il giro di oggi · 2 da fare");
+
+    await handleUpdate(tap(2, "s:giro", 100), deps(store, tg));
+    expect(testoUltima(calls)).toContain("0 su 2 fatti");
+    const voci = bottoniUltima(calls).filter((b) => b.callback_data?.startsWith("open:")).map((b) => b.text);
+    expect(voci).toHaveLength(2);
+    expect(voci.every((voce) => voce.startsWith("⬜"))).toBe(true);
+    expect(voci.join("\n")).not.toContain("Barilla");
+    // Il promemoria parte spento, e la riga per accenderlo c'è.
+    expect(testoUltima(calls)).toContain("Promemoria del mattino: spento");
+    expect(bottoniUltima(calls).some((b) => b.callback_data === "cfg:giro:8")).toBe(true);
+  });
+
+  it("✅ Giocato dalla scheda riporta all'elenco, con il concorso fatto in fondo", async () => {
+    const { store, ids } = await conGiro();
+    const { tg, calls } = makeTg();
+    await handleUpdate(command(1, "/giro"), deps(store, tg));
+    await handleUpdate(tap(2, `open:${ids[0]}`, 100), deps(store, tg));
+    expect(testoUltima(calls)).toContain("Nel giro di oggi");
+    expect(bottoniUltima(calls)[0]).toMatchObject({ text: "✅ Giocato oggi", callback_data: `play:${ids[0]}` });
+
+    await handleUpdate(tap(3, `play:${ids[0]}`, 100), deps(store, tg));
+    expect(lastWith(calls, "answerCallbackQuery")?.payload.text).toBe("✅ Giocato oggi");
+    expect((await store.getUiState(CHAT))?.openItemId).toBeNull();
+    expect(testoUltima(calls)).toContain("1 su 2 fatti");
+    const voci = bottoniUltima(calls).filter((b) => b.callback_data?.startsWith("open:")).map((b) => b.text);
+    expect(voci[0]).toContain("⬜ Gioca con Kinder");
+    expect(voci[1]).toContain("✅ Instant win Lindt");
+
+    // Lo stesso tocco lo toglie: un errore di dito si disfa.
+    await handleUpdate(tap(4, `open:${ids[0]}`, 100), deps(store, tg));
+    expect(bottoniUltima(calls)[0]?.text).toBe("↩️ Non l'ho giocato oggi");
+    await handleUpdate(tap(5, `play:${ids[0]}`, 100), deps(store, tg));
+    expect(await store.playedOn(CHAT, "2026-11-20")).toEqual([]);
+  });
+
+  it("a mezzanotte riparte da capo, e la serie di giorni resta", async () => {
+    const { store, ids } = await conGiro();
+    await store.togglePlay(CHAT, ids[0], "2026-11-19", "2026-11-19T09:00:00.000Z");
+    await store.togglePlay(CHAT, ids[1], "2026-11-18", "2026-11-18T09:00:00.000Z");
+    const { tg, calls } = makeTg();
+    await handleUpdate(command(1, "/giro"), deps(store, tg));
+    // Oggi niente è ancora giocato, ma la serie di ieri e l'altro ieri è viva.
+    expect(testoUltima(calls)).toContain("0 su 2 fatti");
+    expect(testoUltima(calls)).toContain("🔥 <b>2</b> giorni di fila");
+  });
+
+  it("la serie conta i giorni consecutivi, e oggi non ancora giocato non la spezza", () => {
+    expect(streakFrom([], "2026-11-20")).toBe(0);
+    expect(streakFrom(["2026-11-20"], "2026-11-20")).toBe(1);
+    expect(streakFrom(["2026-11-19", "2026-11-18"], "2026-11-20")).toBe(2);
+    expect(streakFrom(["2026-11-20", "2026-11-19", "2026-11-17"], "2026-11-20")).toBe(2);
+    expect(streakFrom(["2026-11-18"], "2026-11-20")).toBe(0);
+    // A cavallo di un mese: le date sono di calendario.
+    expect(streakFrom(["2026-12-01", "2026-11-30"], "2026-12-01")).toBe(2);
+  });
+
+  it("il promemoria del mattino parte solo all'ora scelta, una volta sola", async () => {
+    const { store } = await conGiro();
+    const { tg, calls } = makeTg();
+    await handleUpdate(command(1, "/giro"), deps(store, tg));
+    await handleUpdate(tap(2, "cfg:giro:8", 100), deps(store, tg));
+    expect((await store.getPrefs(CHAT))?.giroHour).toBe(8);
+    expect(lastWith(calls, "answerCallbackQuery")?.payload.text).toBe("⏰ Promemoria alle 8:00");
+
+    // 08:15 a Roma (ora solare): è l'ora scelta.
+    const otto = new Date("2026-11-20T07:15:00.000Z");
+    calls.length = 0;
+    expect((await sendGiroReminders({ store, tg, now: otto })).sent).toBe(1);
+    const messaggio = lastWith(calls, "sendMessage");
+    expect(String(messaggio?.payload.text)).toContain("<b>2</b> concorsi da giocare");
+    expect(JSON.stringify(messaggio?.payload.reply_markup)).toContain("s:giro");
+    // Il tick dopo, stessa ora: già mandato.
+    expect((await sendGiroReminders({ store, tg, now: new Date("2026-11-20T07:30:00.000Z") })).sent).toBe(0);
+    // Un'altra ora: niente.
+    expect((await sendGiroReminders({ store, tg, now: new Date("2026-11-21T09:15:00.000Z") })).sent).toBe(0);
+
+    // Spento: niente, nemmeno all'ora giusta del giorno dopo.
+    await handleUpdate(tap(3, "cfg:giro:off", 100), deps(store, tg));
+    expect((await sendGiroReminders({ store, tg, now: new Date("2026-11-21T07:15:00.000Z") })).sent).toBe(0);
+  });
+
+  it("un concorso scartato con 🚫 esce dal giro", async () => {
+    const { store, ids } = await conGiro();
+    const { tg, calls } = makeTg();
+    await handleUpdate(command(1, "/giro"), deps(store, tg));
+    await handleUpdate(tap(2, `open:${ids[0]}`, 100), deps(store, tg));
+    await handleUpdate(tap(3, `ign:${ids[0]}`, 100), deps(store, tg));
+    await handleUpdate(tap(4, "back", 100), deps(store, tg));
+    expect(testoUltima(calls)).toContain("0 su 1 fatti");
+    expect(bottoniUltima(calls).some((b) => b.callback_data === `open:${ids[0]}`)).toBe(false);
+  });
+
+  it("un instant win gratuito è del giro; con scontrino o settimanale no", () => {
+    const giro = (summary: string): boolean =>
+      enrichWithRules({ sourceId: "x", url: "https://x.it", title: "Concorso", summary, publishedAt: null, guid: null }, { tags: [] }, NOW)
+        .tags.includes("giornaliero");
+    expect(giro("Gioca gratis all'instant win e vinci una gift card")).toBe(true);
+    expect(giro("Acquista i prodotti e carica lo scontrino: instant win")).toBe(false);
+    expect(giro("Gratis, instant win settimanale")).toBe(false);
+    expect(giro("Partecipa all'Instant Win giornaliero con lo scontrino")).toBe(true);
+  });
+
+  it("un'ora che non è fra quelle offerte non si salva", async () => {
+    const { store } = await conGiro();
+    const { tg } = makeTg();
+    await handleUpdate(command(1, "/giro"), deps(store, tg));
+    await handleUpdate(tap(2, "cfg:giro:3", 100), deps(store, tg));
+    expect((await store.getPrefs(CHAT))?.giroHour ?? null).toBeNull();
+  });
+});
+
+describe("🛒 vado a fare la spesa", () => {
+  async function perLaSpesa(): Promise<MemoryStore> {
+    const store = createMemoryStore();
+    await store.upsertPrefs(prefs());
+    await seed(store, [
+      { title: "Concorso Esselunga: vinci la spesa", brand: "esselunga", requiresPurchase: true, score: 80 },
+      { title: "Compra Nutella e vinci", brand: "ferrero", requiresPurchase: true, score: 70 },
+      { title: "Kinder ti premia", summary: "Solo nei punti vendita Conad", brand: "ferrero", requiresPurchase: true, score: 75 },
+      { title: "Buono sconto Barilla", kind: "coupon", brand: "barilla", score: 10 },
+      { title: "Concorso gratuito online", requiresPurchase: false, brand: null, score: 90 },
+    ]);
+    return store;
+  }
+
+  it("ogni insegna mostra le sue iniziative, e 🛒 Ovunque quello che vale in ogni supermercato", async () => {
+    const store = await perLaSpesa();
+    const { tg, calls } = makeTg();
+    await handleUpdate(command(1, "/negozi"), deps(store, tg));
+    const insegne = bottoniUltima(calls);
+    expect(insegne.find((b) => b.callback_data === "s:negozio:esselunga")?.text).toBe("Esselunga (1)");
+    // Kinder nomina Conad: vale lì, anche se la marca è Ferrero.
+    expect(insegne.find((b) => b.callback_data === "s:negozio:conad")?.text).toBe("Conad (1)");
+    expect(insegne.find((b) => b.callback_data === "s:negozio:lidl")?.text).toBe("Lidl (0)");
+    expect(insegne.find((b) => b.callback_data === "s:negozio:ovunque")?.text).toBe("🛒 In ogni supermercato (2)");
+
+    await handleUpdate(tap(2, "s:negozio:esselunga", 100), deps(store, tg));
+    const qui = bottoniUltima(calls).filter((b) => b.callback_data?.startsWith("open:")).map((b) => b.text).join("\n");
+    expect(qui).toContain("Concorso Esselunga");
+    expect(qui).not.toContain("Nutella");
+    expect(bottoniUltima(calls).some((b) => b.callback_data === "s:negozio:ovunque")).toBe(true);
+
+    await handleUpdate(tap(3, "s:negozio:ovunque", 100), deps(store, tg));
+    const ovunque = bottoniUltima(calls).filter((b) => b.callback_data?.startsWith("open:")).map((b) => b.text).join("\n");
+    expect(ovunque).toContain("Compra Nutella");
+    expect(ovunque).toContain("Buono sconto Barilla");
+    // Chi nomina un'altra insegna non vale "ovunque", e chi non chiede di comprare
+    // non è una cosa da mettere nel carrello.
+    expect(ovunque).not.toContain("Kinder");
+    expect(ovunque).not.toContain("gratuito");
+    // Indietro torna all'insegna di prima.
+    await handleUpdate(tap(4, "back", 100), deps(store, tg));
+    expect((await store.getUiState(CHAT))?.section).toBe("negozio:esselunga");
+  });
+
+  it("un'insegna inventata non apre niente", () => {
+    expect(parseCallback("s:negozio:inventata")).toEqual({ kind: "none" });
+    expect(parseCallback("s:negozio:coop")).toEqual({ kind: "section", section: "negozio:coop" });
+  });
+
+  it("riconosce le insegne nominate nel testo, come parole intere", () => {
+    expect(insegneNominate("Valido nei punti vendita Conad e Coop")).toEqual(["conad", "coop"]);
+    // "cooperativa" non è Coop.
+    expect(insegneNominate("Una cooperativa sociale premia")).toEqual([]);
+    expect(isOvunque(row({ brand: "esselunga", requiresPurchase: true }))).toBe(false);
+    expect(isOvunque(row({ brand: "ferrero", requiresPurchase: true, title: "Compra Nutella", summary: "" }))).toBe(true);
+  });
+});
+
+describe("🧾 scontrini", () => {
+  async function conConcorso(): Promise<{ store: MemoryStore; id: number }> {
+    const store = createMemoryStore();
+    await store.upsertPrefs(prefs());
+    const [id] = await seed(store, [{ title: "Concorso Mulino Bianco con scontrino", requiresPurchase: true }]);
+    return { store, id: id! };
+  }
+
+  it("senza un concorso aperto la foto non si perde in silenzio: la chat spiega cosa fare", async () => {
+    const { store } = await conConcorso();
+    const { tg, calls } = makeTg();
+    await handleUpdate(command(1, "/start"), deps(store, tg));
+    await handleUpdate(foto(2), deps(store, tg));
+    // La foto sparisce comunque dalla chat, e la schermata dice perché non è salvata.
+    expect(calls.some((call) => call.method === "deleteMessage" && call.payload.message_id === 2)).toBe(true);
+    expect(testoUltima(calls)).toContain("apri prima il concorso");
+    expect(await store.receiptItems(CHAT)).toEqual([]);
+  });
+
+  it("con la scheda aperta la foto diventa lo scontrino del concorso, e la chat resta pulita", async () => {
+    const { store, id } = await conConcorso();
+    const { tg, calls } = makeTg();
+    await handleUpdate(command(1, "/start"), deps(store, tg));
+    await handleUpdate(tap(2, `open:${id}`, 100), deps(store, tg));
+    expect(testoUltima(calls)).toContain("Mandami qui la foto dello scontrino");
+
+    await handleUpdate(foto(77), deps(store, tg));
+    // La foto dell'utente è cancellata, il vecchio messaggio pure: in chat ne resta uno.
+    expect(calls.some((call) => call.method === "deleteMessage" && call.payload.message_id === 77)).toBe(true);
+    expect(calls.some((call) => call.method === "deleteMessage" && call.payload.message_id === 100)).toBe(true);
+    expect(testoUltima(calls)).toContain("✅ <b>Scontrino salvato</b> con questo concorso · 1 in tutto");
+    expect(testoUltima(calls)).toContain("Concorso Mulino Bianco");
+    expect(bottoniUltima(calls).find((b) => b.callback_data === `s:scontrini:${id}`)?.text).toBe("🧾 Scontrini (1)");
+    const salvati = await store.listReceipts(CHAT, id);
+    // Si conserva la misura più grande.
+    expect(salvati.map((r) => r.fileId)).toEqual(["grande-unico-1"]);
+
+    // La stessa foto due volte non raddoppia.
+    await handleUpdate(foto(78), deps(store, tg));
+    expect(await store.listReceipts(CHAT, id)).toHaveLength(1);
+  });
+
+  it("lo scontrino si rivede come foto, si sfoglia, si elimina e si torna alla scheda", async () => {
+    const { store, id } = await conConcorso();
+    const { tg, calls } = makeTg();
+    await handleUpdate(command(1, "/start"), deps(store, tg));
+    await handleUpdate(tap(2, "s:oggi", 100), deps(store, tg));
+    await handleUpdate(tap(3, `open:${id}`, 100), deps(store, tg));
+    await handleUpdate(foto(4, "primo"), deps(store, tg));
+    await handleUpdate(foto(5, "secondo"), deps(store, tg));
+    const scheda = (await store.getUiState(CHAT))?.messageId ?? 0;
+
+    await handleUpdate(tap(6, `s:scontrini:${id}`, scheda), deps(store, tg));
+    // Un testo non diventa una foto: il messaggio si sostituisce, e resta uno solo.
+    const inviata = lastWith(calls, "sendPhoto");
+    expect(inviata?.payload.photo).toBe("grande-primo");
+    expect(String(inviata?.payload.caption)).toContain("Scontrino 1 di 2");
+    expect(calls.some((call) => call.method === "deleteMessage" && call.payload.message_id === scheda)).toBe(true);
+    const fotoId = (await store.getUiState(CHAT))?.messageId ?? 0;
+
+    // Sfogliare cambia il file dello stesso messaggio.
+    await handleUpdate(tap(7, "page:1", fotoId), deps(store, tg));
+    const media = lastWith(calls, "editMessageMedia")?.payload.media as { media: string; caption: string };
+    expect(media.media).toBe("grande-secondo");
+    expect(media.caption).toContain("Scontrino 2 di 2");
+
+    // Indietro: di nuovo la scheda, sopra l'elenco da cui la si era aperta.
+    await handleUpdate(tap(8, "back", fotoId), deps(store, tg));
+    const stato = await store.getUiState(CHAT);
+    expect(stato?.openItemId).toBe(id);
+    expect(stato?.section).toBe("oggi");
+    expect(testoUltima(calls)).toContain("Concorso Mulino Bianco");
+
+    // Eliminati tutti e due, si torna alla scheda.
+    const [primo, secondo] = await store.listReceipts(CHAT, id);
+    await handleUpdate(tap(9, `s:scontrini:${id}`, stato?.messageId ?? 0), deps(store, tg));
+    await handleUpdate(tap(10, `rc:del:${primo!.id}`, (await store.getUiState(CHAT))?.messageId ?? 0), deps(store, tg));
+    expect((await store.getUiState(CHAT))?.section).toBe(`scontrini:${id}`);
+    await handleUpdate(tap(11, `rc:del:${secondo!.id}`, (await store.getUiState(CHAT))?.messageId ?? 0), deps(store, tg));
+    expect(lastWith(calls, "answerCallbackQuery")?.payload.text).toBe("🗑 Scontrino eliminato");
+    expect((await store.getUiState(CHAT))?.openItemId).toBe(id);
+    expect(await store.listReceipts(CHAT, id)).toEqual([]);
+  });
+
+  it("⭐ Le mie cose conta i concorsi con lo scontrino, e la loro sezione li elenca", async () => {
+    const { store, id } = await conConcorso();
+    await store.addReceipt({ chatId: CHAT, itemId: id, fileId: "f", fileUniqueId: "u", media: "photo", addedAt: NOW.toISOString() });
+    const { tg, calls } = makeTg();
+    await handleUpdate(command(1, "/start"), deps(store, tg));
+    await handleUpdate(tap(2, "s:miei", 100), deps(store, tg));
+    expect(bottoniUltima(calls).find((b) => b.callback_data === "s:scontrini")?.text).toBe("🧾 Scontrini (1)");
+    await handleUpdate(tap(3, "s:scontrini", 100), deps(store, tg));
+    expect(bottoniUltima(calls).some((b) => b.callback_data === `open:${id}`)).toBe(true);
+  });
+
+  it("un PDF va bene, un altro file no", async () => {
+    const { store, id } = await conConcorso();
+    const { tg, calls } = makeTg();
+    await handleUpdate(command(1, "/start"), deps(store, tg));
+    await handleUpdate(tap(2, `open:${id}`, 100), deps(store, tg));
+    await handleUpdate(documento(3, "application/pdf"), deps(store, tg));
+    expect((await store.listReceipts(CHAT, id)).map((r) => r.media)).toEqual(["document"]);
+    await handleUpdate(documento(4, "application/zip"), deps(store, tg));
+    expect(testoUltima(calls)).toContain("mandami una foto o un PDF");
+    expect(await store.listReceipts(CHAT, id)).toHaveLength(1);
   });
 });

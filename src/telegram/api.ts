@@ -26,11 +26,35 @@ export interface TelegramChat {
   id: number;
 }
 
+export interface TelegramPhotoSize {
+  file_id: string;
+  file_unique_id: string;
+  width?: number;
+  height?: number;
+}
+
+export interface TelegramDocument {
+  file_id: string;
+  file_unique_id: string;
+  mime_type?: string;
+  file_name?: string;
+}
+
 export interface TelegramMessage {
   message_id: number;
   chat: TelegramChat;
   text?: string;
   from?: TelegramUser;
+  /** Una foto arriva in più misure, dalla più piccola alla più grande. */
+  photo?: TelegramPhotoSize[];
+  document?: TelegramDocument;
+  caption?: string;
+}
+
+/** Un file da mostrare al posto del testo: lo scontrino salvato. */
+export interface ScreenMedia {
+  type: "photo" | "document";
+  fileId: string;
 }
 
 export interface TelegramCallbackQuery {
@@ -55,6 +79,8 @@ export interface SendResult {
 
 /** Limite tecnico Telegram 4096: teniamo un margine per sicurezza. */
 export const MAX_MESSAGE_CHARS = 3800;
+/** Limite Telegram per la didascalia di una foto o di un documento. */
+export const MAX_CAPTION_CHARS = 1024;
 
 export interface SendMessageOptions {
   keyboard?: InlineKeyboardMarkup;
@@ -127,6 +153,51 @@ export class TelegramClient {
       if (!last.ok) return last;
     }
     return last;
+  }
+
+  /**
+   * Manda una foto o un documento già sui server di Telegram (per `file_id`),
+   * con didascalia e bottoni: è la schermata dello scontrino.
+   */
+  async sendMedia(
+    chatId: number,
+    media: ScreenMedia,
+    caption: string,
+    opts: { keyboard?: InlineKeyboardMarkup } = {},
+  ): Promise<SendResult> {
+    const payload: Record<string, unknown> = {
+      chat_id: chatId,
+      [media.type]: media.fileId,
+      caption: caption.slice(0, MAX_CAPTION_CHARS),
+      parse_mode: "HTML",
+    };
+    if (opts.keyboard) payload.reply_markup = opts.keyboard;
+    return toSendResult(await this.call(media.type === "photo" ? "sendPhoto" : "sendDocument", payload));
+  }
+
+  /**
+   * Cambia il file di un messaggio che ne ha già uno: sfogliare gli scontrini
+   * resta un messaggio solo. Su un messaggio di solo testo Telegram rifiuta, e chi
+   * chiama ripiega su "cancella e manda" (vedi paint in bot.ts).
+   */
+  async editMessageMedia(
+    chatId: number,
+    messageId: number,
+    media: ScreenMedia,
+    caption: string,
+    opts: { keyboard?: InlineKeyboardMarkup } = {},
+  ): Promise<SendResult> {
+    const payload: Record<string, unknown> = {
+      chat_id: chatId,
+      message_id: messageId,
+      media: { type: media.type, media: media.fileId, caption: caption.slice(0, MAX_CAPTION_CHARS), parse_mode: "HTML" },
+    };
+    if (opts.keyboard) payload.reply_markup = opts.keyboard;
+    const result = toSendResult(await this.call("editMessageMedia", payload));
+    if (!result.ok && result.error !== null && /not modified/i.test(result.error)) {
+      return { ...result, ok: true, error: null };
+    }
+    return result;
   }
 
   async editMessageText(
