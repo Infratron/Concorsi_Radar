@@ -220,6 +220,21 @@ CREATE TABLE IF NOT EXISTS plays (
   PRIMARY KEY (chat_id, day, item_id)
 );
 
+-- `flyers`: il volantino in corso di ogni insegna della provincia di Lecce, una
+-- riga per catena (src/volantini.ts). Link e date li scrive la raccolta su
+-- GitHub, che rilegge le pagine ogni dodici ore; `changed_at` è quando link o
+-- date sono cambiati, cioè il "nuovo volantino".
+CREATE TABLE IF NOT EXISTS flyers (
+  chain       TEXT PRIMARY KEY,
+  url         TEXT NOT NULL,
+  valid_from  TEXT,
+  valid_to    TEXT,
+  cover_url   TEXT,
+  checked_at  TEXT NOT NULL,
+  changed_at  TEXT,
+  status      INTEGER
+);
+
 -- `receipts`: gli scontrini mandati in chat, legati al concorso. Il file resta
 -- su Telegram (`file_id`); `file_unique_id` impedisce di salvare due volte la
 -- stessa foto per lo stesso concorso.

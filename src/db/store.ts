@@ -15,6 +15,7 @@ import type {
   SourceRow,
   UiState,
 } from "../types.ts";
+import type { Flyer } from "../volantini.ts";
 
 /**
  * Quanto ha reso UNA fonte all'archivio. È il dato della diagnostica delle fonti
@@ -178,6 +179,12 @@ export interface Store {
   deleteReceipt(chatId: number, receiptId: number): Promise<boolean>;
   /** I concorsi per cui questa chat ha conservato almeno uno scontrino, dal più recente. */
   receiptItems(chatId: number, limit?: number): Promise<ItemRow[]>;
+
+  // --- 📰 volantini delle insegne ---
+  /** Il volantino salvato di ogni insegna (una riga per catena). */
+  listFlyers(): Promise<Flyer[]>;
+  /** Scrive (o sostituisce) il volantino di una catena. */
+  saveFlyer(flyer: Flyer): Promise<void>;
 
   // --- interfaccia in chat ---
   /** Stato del messaggio unico della chat; null la prima volta. */

@@ -1,4 +1,6 @@
 import type { ItemRow, NavPoint, Prefs, ReceiptRow, RefundRow, RefundTotals, RunRow, SourceRow, UiState } from "../types.ts";
+import type { Accoppiata } from "../negozi.ts";
+import { FLYER_SOURCES, flyerValidity, type Flyer } from "../volantini.ts";
 import { formatEuro, refundAmountLabel } from "../refunds.ts";
 import { brandLabel, isInsegna, type BrandChoice } from "../config/brands.ts";
 import { GRUPPI_DIAGNOSI, type Diagnosi, type RiepilogoDiagnosi } from "../sources-health.ts";
@@ -34,8 +36,12 @@ import {
   concorsiKeyboard,
   giroKeyboard,
   mieiKeyboard,
+  ACCOPPIATE_PAGE_SIZE,
+  accoppiateKeyboard,
+  flyerDatesLabel,
   negoziKeyboard,
   negozioKeyboard,
+  volantiniKeyboard,
   receiptKeyboard,
   backKeyboard,
   cardKeyboard,
@@ -194,6 +200,7 @@ export const SECTIONS = [
   "giro",
   "negozi",
   "scontrini",
+  "volantini",
 ] as const;
 
 export function isKnownSection(section: string): boolean {
@@ -201,7 +208,7 @@ export function isKnownSection(section: string): boolean {
   if (section.startsWith("cerca:")) return true;
   // `negozio:<insegna>` solo per le insegne del registro, più la vista di tutti.
   if (section.startsWith("negozio:")) {
-    const insegna = section.slice("negozio:".length);
+    const insegna = section.slice("negozio:".length).replace(/:coppie$/, "");
     return insegna === "ovunque" || isInsegna(insegna);
   }
   // `scontrini:<id>` è lo scontrino di un concorso: l'id è un numero, e basta.
@@ -597,6 +604,11 @@ export interface ScreenData {
   /** 🛒 Iniziative "solo qui" per insegna, e quelle che valgono ovunque. */
   negozi: Record<string, number>;
   negoziOvunque: number;
+  /** 📰 I volantini salvati (uno per catena), dove servono. */
+  flyers: Flyer[];
+  /** 🤝 Le accoppiate della pagina, e quante sono in tutto per quell'insegna. */
+  accoppiate: Accoppiata[];
+  accoppiateTotal: number;
   /** Gli scontrini di questa chat per il concorso aperto (o per lo scontrino che si guarda). */
   receipts: ReceiptRow[];
   /** Il concorso aperto è nel giro di oggi? null = no; altrimenti se è già giocato. */
@@ -1573,17 +1585,77 @@ function giroScreen(data: ScreenData, now: Date): Screen {
 }
 
 /** 🛒 Vado a fare la spesa: la scelta del supermercato. */
-function negoziScreen(data: ScreenData): Screen {
+function negoziScreen(data: ScreenData, now: Date): Screen {
   return {
     text: [
-      "🛒 <b>Vado a fare la spesa</b>",
+      "🛒 <b>Vado a fare la spesa</b> · provincia di Lecce",
       "",
-      "Dove vai? Ti mostro cosa vale lì: concorsi con scontrino, rimborsi e coupon di quell'insegna.",
+      "Dove vai? Ti mostro il volantino dell'insegna e cosa vale lì: concorsi con scontrino, rimborsi e coupon.",
       `🛒 <b>In ogni supermercato</b> ce ne sono <b>${data.negoziOvunque}</b>: i concorsi e le offerte di marca che non nominano un'insegna.`,
       "",
-      "<i>Il numero accanto all'insegna sono le sue iniziative.</i>",
+      "<i>Il numero accanto all'insegna sono le sue iniziative; 🆕 vuol dire volantino nuovo.</i>",
     ].join("\n"),
-    keyboard: negoziKeyboard(data.negozi, data.negoziOvunque),
+    keyboard: negoziKeyboard(data.negozi, data.negoziOvunque, data.flyers, now),
+  };
+}
+
+/** La riga del volantino nella schermata di un'insegna. */
+function flyerLine(flyer: Flyer | null, now: Date): string | null {
+  if (flyer === null) return null;
+  const fonte = FLYER_SOURCES.find((source) => source.id === flyer.chain);
+  const date = flyerDatesLabel(flyer);
+  switch (flyerValidity(flyer, now)) {
+    case "in-corso":
+      return `📰 <b>Volantino in corso</b> · ${date}`;
+    case "in-arrivo":
+      return `📰 <b>Volantino in arrivo</b> · ${date}`;
+    case "scaduto":
+      // La pagina della catena riporta ancora il volantino vecchio (il nuovo si
+      // carica dopo, nel browser): "scaduto" sarebbe una conclusione sbagliata.
+      return `📰 <b>Volantino</b> · la pagina riporta ancora quello ${date}: aprila per vedere se c'è già il nuovo`;
+    default:
+      return fonte?.scelta === "negozio"
+        ? "📰 <b>Volantino</b> · cambia da negozio a negozio: sul sito scegli il tuo"
+        : "📰 <b>Volantino</b> · le date sono sul sito";
+  }
+}
+
+/** 📰 Tutti i volantini: un link per insegna, con le date dove la catena le scrive. */
+function volantiniScreen(data: ScreenData, now: Date): Screen {
+  if (data.flyers.length === 0) {
+    return {
+      text: "📰 <b>Volantini</b>\n\nNon li ho ancora letti: la raccolta li controlla ogni dodici ore, e dopo il prossimo giro li trovi qui.",
+      keyboard: volantiniKeyboard([], now),
+    };
+  }
+  const ultimo = data.flyers.map((flyer) => flyer.checkedAt).sort().at(-1) ?? null;
+  return {
+    text: [
+      "📰 <b>Volantini</b> · provincia di Lecce",
+      "",
+      "Il volantino ufficiale di ogni insegna: tocca per sfogliarlo sul sito. Le date ci sono quando la catena le scrive nella pagina; 🆕 vuol dire cambiato da meno di tre giorni.",
+      "I prezzi e i 2x1 si leggono sul volantino: sono immagini, e il bot non li legge.",
+      "",
+      `<i>Controllati il ${giornoItaliano(ultimo)}.</i>`,
+    ].join("\n"),
+    keyboard: volantiniKeyboard(data.flyers, now),
+  };
+}
+
+/** 🤝 Le accoppiate di un'insegna (o di tutto quello che vale ovunque). */
+function accoppiateScreen(state: UiState, data: ScreenData, now: Date): Screen {
+  const id = state.section.slice("negozio:".length).replace(/:coppie$/, "");
+  const dove = id === "ovunque" ? "in ogni supermercato" : `da ${escapeHtml(brandLabel(id))}`;
+  const pagine = Math.max(1, Math.ceil(data.accoppiateTotal / ACCOPPIATE_PAGE_SIZE));
+  const page = Math.min(Math.max(data.page, 0), pagine - 1);
+  const testa = `🤝 <b>Accoppiate ${dove}</b> · ${data.accoppiateTotal}${pagine > 1 ? ` · pagina ${page + 1}/${pagine}` : ""}`;
+  const spiegazione =
+    data.accoppiateTotal === 0
+      ? "Adesso nessuna marca ha insieme un'offerta e un concorso con acquisto. Si riempie da sola quando arrivano: nasce dallo stesso archivio dei coupon e dei concorsi."
+      : "Stessa marca, stessa spesa: un rimborso o un buono, e un concorso che chiede lo stesso acquisto. Lo scontrino può valere due volte, ma solo se i due bandi lo permettono: molti cashback escludono altre promozioni, quindi controlla prima di contarci.";
+  return {
+    text: [testa, "", spiegazione].join("\n"),
+    keyboard: accoppiateKeyboard(data.accoppiate, now, { index: page, total: pagine }),
   };
 }
 
@@ -1603,9 +1675,11 @@ function negozioScreen(state: UiState, data: ScreenData, now: Date): Screen {
     insegna === null
       ? "Adesso non c'è niente che valga in ogni supermercato."
       : `Adesso non ci sono iniziative di ${escapeHtml(brandLabel(insegna))} in archivio: guarda 🛒 Ovunque, che vale anche lì.`;
+  const volantino = flyerLine(insegna === null ? null : (data.flyers.find((flyer) => flyer.chain === insegna) ?? null), now);
   return {
     text: [
       `${titolo} · ${data.total}${pagine > 1 ? ` · pagina ${page + 1}/${pagine}` : ""}`,
+      ...(volantino === null ? [] : ["", volantino]),
       "",
       data.total === 0 ? vuoto : spiegazione,
     ].join("\n"),
@@ -1613,6 +1687,8 @@ function negozioScreen(state: UiState, data: ScreenData, now: Date): Screen {
       insegna,
       qui,
       ovunque: data.negoziOvunque,
+      coppie: data.accoppiateTotal,
+      flyer: insegna === null ? null : (data.flyers.find((flyer) => flyer.chain === insegna) ?? null),
     }),
   };
 }
@@ -1670,6 +1746,7 @@ function renderBaseScreen(state: UiState, data: ScreenData, now: Date): Screen {
   if (state.section.startsWith("importo:")) return importoPromptScreen(data);
   if (state.openItemId !== null) return cardScreen(state, data, now);
   if (state.section.startsWith("scontrini:")) return receiptScreen(state, data);
+  if (state.section.startsWith("negozio:") && state.section.endsWith(":coppie")) return accoppiateScreen(state, data, now);
   if (state.section.startsWith("negozio:")) return negozioScreen(state, data, now);
 
   switch (state.section) {
@@ -1696,7 +1773,9 @@ function renderBaseScreen(state: UiState, data: ScreenData, now: Date): Screen {
     case "giro":
       return giroScreen(data, now);
     case "negozi":
-      return negoziScreen(data);
+      return negoziScreen(data, now);
+    case "volantini":
+      return volantiniScreen(data, now);
     case "storico":
       return {
         text: [

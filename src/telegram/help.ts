@@ -67,9 +67,30 @@ export const HELP_PAGES: HelpPage[] = [
     section: "negozi",
     title: "🛒 Vado a fare la spesa",
     lines: [
-      "Scegli il supermercato dove stai andando: ti mostro cosa vale lì, cioè le iniziative di quell'insegna.",
+      "Le insegne della provincia di Lecce: scegli dove vai e trovi il suo volantino e le sue iniziative.",
       "🛒 Ovunque sono i concorsi con scontrino e le offerte di marca che non nominano nessuna insegna: valgono in qualunque supermercato.",
       "Prima di comprare controlla nel bando se il punto vendita partecipa: alcuni lo scrivono solo nel regolamento.",
+    ],
+    children: ["volantini", "accoppiate"],
+  },
+  {
+    id: "volantini",
+    section: "volantini",
+    title: "📰 Volantini",
+    lines: [
+      "Il volantino ufficiale di ogni insegna di Lecce: tocca e lo sfogli sul sito della catena. Lo ricontrollo ogni dodici ore.",
+      "Le date ci sono quando la catena le scrive nella pagina; Conad, Crai e Carrefour cambiano da negozio a negozio, e il negozio si sceglie sul sito.",
+      "🆕 vuol dire che il volantino è cambiato da meno di tre giorni. I prezzi e i 2x1 si leggono sul volantino: sono immagini, e il bot non li legge.",
+    ],
+  },
+  {
+    id: "accoppiate",
+    section: null,
+    title: "🤝 Accoppiate",
+    lines: [
+      "La stessa marca con un'offerta (rimborso, cashback, buono) e un concorso con acquisto: compri una volta, e lo scontrino può valere due volte.",
+      "Prima di contarci controlla nei due bandi che si possano cumulare: molti cashback escludono altre promozioni.",
+      "Le trovi in ogni insegna di 🛒 Vado a fare la spesa, con il bottone 🤝 Accoppiate.",
     ],
   },
   {
@@ -359,6 +380,7 @@ export function helpPageForSection(section: string): HelpPage | null {
   const diretta = HELP_PAGES.find((pagina) => pagina.section === section);
   if (diretta) return diretta;
   if (section.startsWith("coupon-")) return helpPageById("coupon");
+  if (section.endsWith(":coppie")) return helpPageById("accoppiate");
   if (section.startsWith("negozio:")) return helpPageById("negozi");
   if (section.startsWith("scontrini:")) return helpPageById("scontrini");
   if (section.startsWith("archivio")) return helpPageById("archivio");

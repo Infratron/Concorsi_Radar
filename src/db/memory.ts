@@ -16,6 +16,7 @@ import type {
   SourceRow,
   UiState,
 } from "../types.ts";
+import type { Flyer } from "../volantini.ts";
 import { DUP_WINDOW_MAX_ROWS, nearestBySimhash } from "../lib/text.ts";
 import { defaultFilters } from "../filters.ts";
 import { totalsOfRefunds } from "../refunds.ts";
@@ -92,6 +93,7 @@ export function createMemoryStore(): MemoryStore {
   /** Le giocate del giro: "chat|giorno|item". */
   const plays = new Map<string, string>();
   const receipts: ReceiptRow[] = [];
+  const flyers = new Map<string, Flyer>();
   let nextReceiptId = 1;
   const aiUsage = new Map<string, { calls: number; neurons: number }>();
   const robots = new Map<string, RobotsRow>();
@@ -475,6 +477,14 @@ export function createMemoryStore(): MemoryStore {
         weights[tag] = clampWeight((weights[tag] ?? 0) + value);
       }
       prefs.set(chatId, { ...current, weights });
+    },
+
+    async listFlyers(): Promise<Flyer[]> {
+      return [...flyers.values()].sort((a, b) => a.chain.localeCompare(b.chain)).map(clone);
+    },
+
+    async saveFlyer(flyer: Flyer): Promise<void> {
+      flyers.set(flyer.chain, clone(flyer));
     },
 
     async togglePlay(chatId: number, itemId: number, day: string, at: string): Promise<boolean> {

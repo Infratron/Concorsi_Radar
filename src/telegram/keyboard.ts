@@ -2,6 +2,8 @@ import type { ItemRow, Prefs, RefundRow } from "../types.ts";
 import { refundAmountFor, refundAmountLabel, refundDeclaredLabel, refundMenuLabel } from "../refunds.ts";
 import { INSEGNE, brandLabel, type BrandChoice } from "../config/brands.ts";
 import { GIRO_HOURS } from "../giro.ts";
+import type { Accoppiata } from "../negozi.ts";
+import { flyerValidity, isNewFlyer, type Flyer } from "../volantini.ts";
 import { truncate } from "../lib/text.ts";
 import {
   ARCHIVIO_KINDS,
@@ -197,14 +199,74 @@ export function giroKeyboard(
   return { inline_keyboard: rows };
 }
 
-/** 🛒 Vado a fare la spesa: un bottone per insegna, con quante iniziative ha lì. */
-export function negoziKeyboard(counts: Record<string, number>, ovunque: number): InlineKeyboardMarkup {
-  const bottoni = INSEGNE.map((id) => button(`${brandLabel(id)} (${counts[id] ?? 0})`, `s:negozio:${id}`));
-  const righe: InlineKeyboardButton[][] = [];
+/**
+ * 🛒 Vado a fare la spesa: un bottone per insegna, con quante iniziative ha lì
+ * (e 🆕 quando il suo volantino è appena cambiato), più la porta a tutti i
+ * volantini e a quello che vale ovunque.
+ */
+export function negoziKeyboard(
+  counts: Record<string, number>,
+  ovunque: number,
+  flyers: Flyer[] = [],
+  now: Date | null = null,
+): InlineKeyboardMarkup {
+  const nuovi = new Set(now === null ? [] : flyers.filter((flyer) => isNewFlyer(flyer, now)).map((flyer) => flyer.chain));
+  const bottoni = INSEGNE.map((id) =>
+    button(`${brandLabel(id)} (${counts[id] ?? 0})${nuovi.has(id) ? " 🆕" : ""}`, `s:negozio:${id}`),
+  );
+  const righe: InlineKeyboardButton[][] = [[button("📰 Tutti i volantini", "s:volantini")]];
   for (let index = 0; index < bottoni.length; index += 2) righe.push(bottoni.slice(index, index + 2));
   righe.push([button(`🛒 In ogni supermercato (${ovunque})`, "s:negozio:ovunque")]);
   righe.push(navRow());
   return { inline_keyboard: righe };
+}
+
+/** "dal 22/10 al 01/11": le date del volantino come si leggono su un bottone. */
+export function flyerDatesLabel(flyer: Pick<Flyer, "validFrom" | "validTo">): string {
+  const giorno = (iso: string): string => `${iso.slice(8, 10)}/${iso.slice(5, 7)}`;
+  if (flyer.validTo === null) return "";
+  return flyer.validFrom === null ? `fino al ${giorno(flyer.validTo)}` : `dal ${giorno(flyer.validFrom)} al ${giorno(flyer.validTo)}`;
+}
+
+/** Il bottone di un volantino: apre la pagina ufficiale della catena. */
+export function flyerButton(flyer: Flyer, now: Date, prefisso = "📰"): InlineKeyboardButton {
+  const stato = flyerValidity(flyer, now);
+  const date = flyerDatesLabel(flyer);
+  const coda =
+    stato === "in-corso" ? ` · ${date}` : stato === "in-arrivo" ? ` · dal ${date.split(" ")[1] ?? ""}` : "";
+  return { text: `${prefisso} ${brandLabel(flyer.chain)}${coda}${isNewFlyer(flyer, now) ? " 🆕" : ""}`, url: flyer.url };
+}
+
+/** 📰 Tutti i volantini: un link per insegna, nell'ordine dei negozi in provincia. */
+export function volantiniKeyboard(flyers: Flyer[], now: Date): InlineKeyboardMarkup {
+  const perCatena = new Map(flyers.map((flyer) => [flyer.chain, flyer]));
+  const righe: InlineKeyboardButton[][] = INSEGNE.map((id) => perCatena.get(id))
+    .filter((flyer): flyer is Flyer => flyer !== undefined)
+    .map((flyer) => [flyerButton(flyer, now)]);
+  righe.push(navRow());
+  return { inline_keyboard: righe };
+}
+
+/** Quante accoppiate per pagina: ognuna sono tre o quattro bottoni. */
+export const ACCOPPIATE_PAGE_SIZE = 3;
+
+/**
+ * 🤝 Le accoppiate: per ogni marca un'intestazione (non si tocca) e sotto le sue
+ * offerte e i suoi concorsi, ognuno con il suo bottone per aprirlo.
+ */
+export function accoppiateKeyboard(
+  gruppi: Accoppiata[],
+  now: Date,
+  pagina: { index: number; total: number },
+): InlineKeyboardMarkup {
+  const rows: InlineKeyboardButton[][] = [];
+  for (const gruppo of gruppi) {
+    rows.push([done(`🤝 ${gruppo.marca} · ${gruppo.offerte.length} ${gruppo.offerte.length === 1 ? "offerta" : "offerte"} + ${gruppo.concorsi.length} ${gruppo.concorsi.length === 1 ? "concorso" : "concorsi"}`)]);
+    for (const item of [...gruppo.offerte, ...gruppo.concorsi]) rows.push([button(itemButtonLabel(item, now), `open:${item.id}`)]);
+  }
+  if (pagina.total > 1) rows.push(pagesRow(pagina.index, pagina.total, { prec: "⬅️ Prec", succ: "Succ ➡️" }));
+  rows.push(navRow());
+  return { inline_keyboard: rows };
 }
 
 /**
@@ -215,16 +277,21 @@ export function negozioKeyboard(
   items: ItemRow[],
   now: Date,
   pagina: { index: number; total: number },
-  info: { insegna: string | null; qui: number; ovunque: number },
+  info: { insegna: string | null; qui: number; ovunque: number; coppie: number; flyer: Flyer | null },
 ): InlineKeyboardMarkup {
-  const rows: InlineKeyboardButton[][] = items.map((item) => [button(itemButtonLabel(item, now), `open:${item.id}`)]);
+  const rows: InlineKeyboardButton[][] = [];
+  // Il volantino in cima: è la prima cosa che si guarda prima di uscire di casa.
+  if (info.flyer !== null) rows.push([flyerButton(info.flyer, now, "📰 Sfoglia il volantino")]);
+  for (const item of items) rows.push([button(itemButtonLabel(item, now), `open:${item.id}`)]);
   if (pagina.total > 1) rows.push(pagesRow(pagina.index, pagina.total, { prec: "⬅️ Prec", succ: "Succ ➡️" }));
+  const qui = info.insegna ?? "ovunque";
   if (info.insegna !== null) {
     rows.push([
       button(`• 🏪 Solo ${brandLabel(info.insegna)} (${info.qui})`, "noop"),
       button(`🛒 Ovunque (${info.ovunque})`, "s:negozio:ovunque"),
     ]);
   }
+  rows.push([button(`🤝 Accoppiate (${info.coppie})`, `s:negozio:${qui}:coppie`)]);
   rows.push(navRow());
   return { inline_keyboard: rows };
 }
@@ -1072,6 +1139,7 @@ export function premiKeyboard(counts: Record<string, number>): InlineKeyboardMar
 /** Testo leggibile della sezione, per l'intestazione delle schermate. */
 export function sectionTitle(section: string): string {
   if (section.startsWith("cerca:")) return `Ricerca: ${section.slice("cerca:".length)}`;
+  if (section.endsWith(":coppie")) return "Accoppiate";
   if (section.startsWith("negozio:") && section !== "negozio:ovunque") {
     return `Solo da ${brandLabel(section.slice("negozio:".length))}`;
   }
@@ -1103,6 +1171,8 @@ export function sectionTitle(section: string): string {
       return "Vado a fare la spesa";
     case "negozio:ovunque":
       return "In ogni supermercato";
+    case "volantini":
+      return "Volantini";
     case "scontrini":
       return "I miei scontrini";
     case "nuovi":

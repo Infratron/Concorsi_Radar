@@ -18,6 +18,7 @@ import type {
   SourceRow,
   UiState,
 } from "../types.ts";
+import type { Flyer } from "../volantini.ts";
 import { DUP_WINDOW_MAX_ROWS, nearestBySimhash } from "../lib/text.ts";
 import { defaultFilters, parseFilters } from "../filters.ts";
 
@@ -111,6 +112,17 @@ interface PrefsDbRow {
   filters?: string | null;
   /** Ora del promemoria del giro; assente o NULL = spento. */
   giro_hour?: number | null;
+}
+
+interface FlyerDbRow {
+  chain: string;
+  url: string;
+  valid_from: string | null;
+  valid_to: string | null;
+  cover_url: string | null;
+  checked_at: string;
+  changed_at: string | null;
+  status: number | null;
 }
 
 interface ReceiptDbRow {
@@ -1014,6 +1026,34 @@ export function createD1Store(db: D1Like): Store {
           JSON.stringify(current.filters),
           new Date().toISOString(),
         )
+        .run();
+    },
+
+    async listFlyers(): Promise<Flyer[]> {
+      const result = await db.prepare("SELECT * FROM flyers ORDER BY chain").all<FlyerDbRow>();
+      return (result.results ?? []).map((row) => ({
+        chain: row.chain,
+        url: row.url,
+        validFrom: row.valid_from,
+        validTo: row.valid_to,
+        coverUrl: row.cover_url,
+        checkedAt: row.checked_at,
+        changedAt: row.changed_at,
+        status: row.status,
+      }));
+    },
+
+    async saveFlyer(flyer: Flyer): Promise<void> {
+      await db
+        .prepare(
+          `INSERT INTO flyers (chain, url, valid_from, valid_to, cover_url, checked_at, changed_at, status)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(chain) DO UPDATE SET
+             url = excluded.url, valid_from = excluded.valid_from, valid_to = excluded.valid_to,
+             cover_url = excluded.cover_url, checked_at = excluded.checked_at,
+             changed_at = excluded.changed_at, status = excluded.status`,
+        )
+        .bind(flyer.chain, flyer.url, flyer.validFrom, flyer.validTo, flyer.coverUrl, flyer.checkedAt, flyer.changedAt, flyer.status)
         .run();
     },
 

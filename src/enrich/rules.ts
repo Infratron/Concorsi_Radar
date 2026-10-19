@@ -14,7 +14,7 @@ import { decodeEntities, stripBoilerplate, stripHtml, truncate } from "../lib/te
 /** Oltre questa soglia il testo non serve più: le informazioni utili stanno in testa. */
 export const MAX_EXTRACTION_CHARS = 900;
 
-const MONTHS: Record<string, number> = {
+export const MONTHS: Record<string, number> = {
   gennaio: 1, febbraio: 2, marzo: 3, aprile: 4, maggio: 5, giugno: 6,
   luglio: 7, agosto: 8, settembre: 9, ottobre: 10, novembre: 11, dicembre: 12,
   gen: 1, feb: 2, mar: 3, apr: 4, mag: 5, giu: 6, lug: 7, ago: 8, set: 9, ott: 10, nov: 11, dic: 12,

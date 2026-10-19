@@ -75,6 +75,17 @@ export const BRANDS: Brand[] = [
   { id: "pampers", label: "Pampers", words: ["pampers"] },
   { id: "nivea", label: "Nivea", words: ["nivea"] },
   { id: "pizzahut", label: "Pizza Hut", words: ["pizza hut"] },
+  // Le insegne della provincia di Lecce che il registro non aveva (misura su
+  // OpenStreetMap del 19/10/2026). "md" da solo è troppo corto per essere una
+  // parola (il tokenizzatore lo scarta): MD si riconosce dal dominio. "acqua
+  // sapone" chiede tutte e due le parole, come "coca cola".
+  { id: "md", label: "MD", words: ["mdspa"] },
+  { id: "dok", label: "Dok", words: ["supermercati dok", "supermercatidok"] },
+  { id: "despar", label: "Despar", words: ["despar", "interspar", "eurospar"] },
+  { id: "crai", label: "Crai", words: ["crai"] },
+  { id: "todis", label: "Todis", words: ["todis"] },
+  { id: "acquaesapone", label: "Acqua & Sapone", words: ["acquaesapone", "acqua sapone"] },
+  { id: "tigota", label: "Tigotà", words: ["tigota"] },
 ];
 
 const BY_ID = new Map<string, Brand>(BRANDS.map((brand) => [brand.id, brand]));
@@ -99,18 +110,35 @@ const WORD_INDEX: { id: string; tokens: string[] }[] = BRANDS.flatMap((brand) =>
 );
 
 /**
- * Le insegne dove si fa la spesa: le porte di 🛒 Vado a fare la spesa. Sono un
- * sottoinsieme del registro delle marche, e solo i supermercati: chi apre questa
- * schermata ha in mano la lista della spesa, non il sito di un'elettronica.
+ * Le insegne dove si fa la spesa IN PROVINCIA DI LECCE: le porte di 🛒 Vado a
+ * fare la spesa, nell'ordine dei punti vendita contati su OpenStreetMap il
+ * 19/10/2026 (Conad ~56, Eurospin ~36, Coop ~28, Dok ~17, MD ~14…). Esselunga e
+ * Bennet erano qui e lì non ci sono: restano marche da seguire, non porte.
  */
-export const INSEGNE: readonly string[] = ["esselunga", "conad", "coop", "carrefour", "lidl", "eurospin", "penny", "bennet"];
+export const INSEGNE: readonly string[] = [
+  "conad", "eurospin", "coop", "dok", "md", "despar", "acquaesapone", "carrefour", "crai", "lidl", "todis", "penny", "tigota",
+];
+
+/**
+ * Tutti i negozi del registro, anche fuori provincia o fuori dalla spesa: un
+ * concorso "solo da Esselunga" o "solo da MediaWorld" non vale in ogni
+ * supermercato del Salento, quindi non entra in 🛒 Ovunque.
+ */
+const ALTRI_NEGOZI: readonly string[] = [
+  "esselunga", "bennet", "eni", "payback", "burgerking", "mediaworld", "unieuro", "decathlon", "pizzahut",
+];
 
 export function isInsegna(value: string): boolean {
   return INSEGNE.includes(value);
 }
 
+/** true per ogni negozio del registro: un'insegna di Lecce o un altro negozio. */
+export function isNegozio(value: string): boolean {
+  return INSEGNE.includes(value) || ALTRI_NEGOZI.includes(value);
+}
+
 /**
- * Le insegne NOMINATE nel testo, anche quando la marca del concorso è un'altra:
+ * I negozi NOMINATI nel testo, anche quando la marca del concorso è un'altra:
  * "Ferrero ti regala... da Esselunga" è di Ferrero ma vale solo da Esselunga.
  * `brandFor` restituisce una marca sola (la prima che trova), quindi qui si
  * guardano tutte.
@@ -119,7 +147,7 @@ export function insegneNominate(text: string): string[] {
   const presenti = new Set(tokens(text));
   const trovate = new Set<string>();
   for (const entry of WORD_INDEX) {
-    if (isInsegna(entry.id) && entry.tokens.every((token) => presenti.has(token))) trovate.add(entry.id);
+    if (isNegozio(entry.id) && entry.tokens.every((token) => presenti.has(token))) trovate.add(entry.id);
   }
   return [...trovate];
 }

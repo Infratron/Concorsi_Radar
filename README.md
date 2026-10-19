@@ -536,7 +536,7 @@ sezione):
 
 ⬅️ Indietro, senza storia, torna alla porta della sezione e non al menù
 (`PARENT_SECTION` in [src/telegram/screens.ts](src/telegram/screens.ts)). I
-comandi scritti restano tutti, più `/giro`, `/negozi` e `/scontrini`.
+comandi scritti restano tutti, più `/giro`, `/negozi`, `/volantini` e `/scontrini`.
 
 La testata dice due cose diverse: quanti concorsi, coupon e news ci sono in
 archivio, e **quando ha raccolto il bot** (`🔄 Ultima raccolta: 17/10 07:40`).
@@ -546,7 +546,8 @@ all'una e venticinque" quando il radar aveva raccolto mezz'ora prima.
 | Sezione | Cosa mostra |
 |---|---|
 | 🎯 Il giro di oggi | i concorsi che **si giocano ogni giorno**, con ✅ Giocato che riparte a mezzanotte, la serie di giorni di fila e un promemoria al mattino, spento di default (qui sotto) |
-| 🛒 Vado a fare la spesa | scegli il supermercato: le iniziative di quell'insegna, più quello che vale in ogni supermercato (qui sotto) |
+| 🛒 Vado a fare la spesa | le insegne della provincia di Lecce: il volantino, le iniziative di quell'insegna, quello che vale in ogni supermercato e le accoppiate per marca (qui sotto) |
+| 📰 Volantini | in 🛒: il volantino ufficiale di ogni insegna, con le date quando la catena le scrive (qui sotto) |
 | 🧾 Scontrini | in ⭐ Le mie cose: i concorsi per cui hai mandato la foto dello scontrino, che resta legata al concorso (qui sotto) |
 | 🆕 Nuovi | quello che è arrivato **dall'ultimo controllo** (il numero è sulla voce del menù) |
 | 📋 Oggi / 📅 7 giorni | l'archivio recente, ordinato per punteggio. **Oggi è il giorno di calendario**: alle 01:00 contiene quello che è arrivato da mezzanotte, non la giornata di ieri (che resta in 📅 7 giorni) |
@@ -770,9 +771,15 @@ ma non le stelle: è una routine da fare tutta, non una classifica da tagliare.
 
 ### 🛒 Vado a fare la spesa: cosa conviene comprare lì
 
-Si sceglie il supermercato — Esselunga, Conad, Coop, Carrefour, Lidl, Eurospin,
-Penny, Bennet (`INSEGNE` in [src/config/brands.ts](src/config/brands.ts)) — e la
-schermata ha due viste:
+Il bot è per la **provincia di Lecce**, e le insegne sono quelle che lì hanno
+negozi, nell'ordine dei punti vendita contati su OpenStreetMap il 19/10/2026 (474
+in tutto): Conad (~56), Eurospin (~36), Coop (~28), Dok (~17), MD (~14), Despar,
+Acqua & Sapone, Carrefour, Crai, Lidl, Todis, Penny, Tigotà (`INSEGNE` in
+[src/config/brands.ts](src/config/brands.ts)). Esselunga e Bennet, che lì non ci
+sono, restano marche da seguire ma non sono porte; un concorso "solo da
+Esselunga" (o da MediaWorld, o con PAYBACK) non vale "in ogni supermercato"
+(`isNegozio`). Si sceglie il supermercato, e la schermata ha il volantino in cima
+e tre viste:
 
 - **🏪 Solo qui**: le iniziative di quell'insegna, cioè la sua marca oppure il
   testo che la nomina. "Kinder ti premia, nei punti vendita Conad" è di Ferrero
@@ -781,6 +788,9 @@ schermata ha due viste:
   prodotto che non nominano nessuna insegna — "compra Nutella e vinci" vale in
   qualunque supermercato. Chi nomina un'altra insegna resta fuori, e un concorso
   gratuito non è una cosa da mettere nel carrello.
+- **🤝 Accoppiate**: la stessa marca con un'offerta (rimborso, cashback, buono) e
+  un concorso con acquisto — si compra una volta, e lo stesso scontrino può
+  valere due volte (qui sotto).
 
 Le insegne si riconoscono come **parole intere** (`insegneNominate`): "una
 cooperativa" non è Coop. La schermata dice anche il limite: un bando che limita
@@ -788,6 +798,61 @@ i punti vendita solo nel PDF non si vede dal testo, quindi prima di comprare
 conviene controllare il regolamento. La logica è pura e sta in
 [src/negozi.ts](src/negozi.ts); i filtri della chat valgono, tranne "solo senza
 acquisto" e le stelle, che svuoterebbero per costruzione una lista della spesa.
+
+### 📰 Volantini: il link giusto, senza leggere i prezzi
+
+**📰 Tutti i volantini** (in 🛒 Vado a fare la spesa, o `/volantini`) ha un
+bottone per insegna che apre il volantino **ufficiale** sul sito della catena, con
+le date di validità quando la pagina le scrive; lo stesso bottone sta in cima alla
+schermata di ogni insegna. La raccolta su GitHub rilegge le pagine **ogni dodici
+ore** (`refreshFlyers` in [src/volantini.ts](src/volantini.ts), chiamata da
+`scripts/ingest.ts`): una decina di richieste due volte al giorno, robots.txt
+rispettato, nessun job in più. 🆕 segna un volantino cambiato da meno di tre
+giorni — non la prima lettura, che non è una novità.
+
+Misurato il 19/10/2026 sulle 13 pagine: tutte rispondono, e le date si leggono per
+6 — Eurospin, Lidl, MD, Coop, Acqua & Sapone, Despar quando le scrive. Le altre
+hanno il link e basta ("le date sono sul sito"); Conad, Crai e Carrefour hanno un
+volantino per negozio, e il link porta alla ricerca del negozio. Tre cose che la
+schermata dice invece di nascondere:
+
+- **I prezzi e i 2x1 non si leggono.** Tutte le catene di Lecce pubblicano il
+  volantino come immagini o dentro un'app JavaScript: senza un modello che legge
+  le immagini il testo non c'è, e il progetto è a costo zero. Il bot porta al
+  volantino giusto; le offerte si sfogliano lì.
+- **Una data superata non vuol dire "scaduto".** La pagina MD, il 19/10, diceva
+  ancora "dal 6 al 18 ottobre": il nuovo volantino arriva dopo, nel browser.
+  La chat scrive "la pagina riporta ancora quello…, aprila per vedere se c'è già
+  il nuovo".
+- **Fra più volantini nella pagina vince quello in corso.** La pagina Lidl ne
+  porta due (il mensile `dall1-10-al-31-10` e il settimanale `dal-15-10-al-21-10`)
+  in un ordine che cambia: prendere il primo dava ogni volta un volantino diverso.
+  Vince quello valido oggi, e a parità il più corto.
+
+Solo pagine pubbliche. Eurospin ha anche i volantini dei singoli negozi di Lecce,
+ma in un JSON che robots.txt lascia passare solo per lettera: si usa il
+volantino nazionale. Gli aggregatori di volantini (DoveConviene, PromoQui) restano
+fuori: le loro condizioni vietano la raccolta automatica.
+
+### 🤝 Accoppiate: stessa marca, stessa spesa
+
+Nella schermata di ogni insegna, **🤝 Accoppiate** mette insieme le marche che
+hanno un'offerta e un concorso con acquisto: "Cashback **Dash** e Fairy" più
+"Concorso **Dash**: vinci un anno di bucato". La marca è quella del registro
+quando c'è, altrimenti una parola del titolo con l'iniziale maiuscola presente in
+tutti e due (`accoppiate` in [src/negozi.ts](src/negozi.ts)): il registro da solo
+non basta, perché le marche dei cashback (Dash, Dixan, Calgon…) non ci sono.
+
+Misurato il 19/10/2026 sull'archivio vero: con la sola marca del registro usciva
+**un'accoppiata** (di Esselunga, che a Lecce non c'è); con le parole del titolo
+**sette, tutte vere** — Crema Novi, Dash, Gillette, Dixan, Scottex, Scottonelle,
+Sole Calgon. Le parole da promozione ("Cashback", "Rimborso"…), i nomi dei negozi
+e le parole presenti in più di quattro titoli non contano; due parole che portano
+gli stessi item sono un nome solo ("Crema Novi").
+
+La schermata dice il limite che conta: **la cumulabilità la decide il bando**, e
+molti cashback escludono altre promozioni. Il bot propone; prima di contarci si
+leggono i due regolamenti.
 
 ### 🧾 Scontrini: la foto resta col concorso, la chat resta pulita
 
@@ -2171,7 +2236,7 @@ npm run checklist                                      # le quattro caselle di c
 npm run checklist -- --fonte <id>                      # ...e per una fonte sola, tipi compresi
 npm run tags                                           # tag di contenuto mancanti (elenco)
 npm run tags -- --apply                                # e li aggiunge (solo aggiunta)
-npm test                                               # 764 test
+npm test                                               # 778 test
 npm run typecheck
 ```
 
@@ -2355,7 +2420,8 @@ src/
   index.ts                 entry point: webhook, /setup, /health, /bench, scheduled()
   schedule.ts              cron → digest oppure avvisi e pulizia, finestra digest
   giro.ts                  🎯 il giro di oggi: query, ordine, serie di giorni
-  negozi.ts                🛒 la spesa: solo da un'insegna, oppure ovunque
+  negozi.ts                🛒 la spesa: solo da un'insegna, ovunque, accoppiate per marca
+  volantini.ts             📰 i volantini delle insegne di Lecce: pagine, date, rilettura
   telegram/screens.ts      intenti e schermate del bot (funzioni pure)
   pipeline.ts              scelta delle fonti, deduplica, arricchimento, punteggio
   dedupe.ts                preparazione item e decisione di duplicato
@@ -2387,7 +2453,7 @@ scripts/
   dry-run.ts               prova generale senza inviare nulla
   bench-cpu.ts             stessa misura su Node, con le fonti vere
   seed-sources.ts          genera l'SQL di sincronizzazione delle fonti
-test/                      34 file, 764 test (vitest, nessuna rete tranne i finti); sqlite.ts è il D1 su SQLite condiviso
+test/                      35 file, 778 test (vitest, nessuna rete tranne i finti); sqlite.ts è il D1 su SQLite condiviso
 ```
 
 Il tratto che tiene insieme tutto: **una sola copia dell'SQL**. `src/db/d1.ts`

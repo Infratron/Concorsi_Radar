@@ -2,6 +2,7 @@ import { chatAccess } from "../src/config/env.ts";
 import { SOURCES, USER_AGENT } from "../src/config/sources.ts";
 import { createD1HttpStore } from "../src/db/d1-http.ts";
 import { runIngest, type IngestSummary } from "../src/pipeline.ts";
+import { refreshFlyers } from "../src/volantini.ts";
 import { TelegramClient } from "../src/telegram/api.ts";
 import { isExternalTrigger } from "../src/schedule.ts";
 import { d1OptionsForLocalRun } from "./wrangler-auth.ts";
@@ -152,6 +153,15 @@ async function main(): Promise<void> {
     },
   );
   const avvisi = await alertDeadSources(summary);
+  // 📰 I volantini delle insegne di Lecce: una pagina per catena, al massimo ogni
+  // dodici ore. Un guasto qui non deve far fallire la raccolta dei concorsi.
+  const volantini = await refreshFlyers({ store, fetcher: (input, init) => fetch(input, init), userAgent: USER_AGENT }, now)
+    .catch((error: unknown) => ({ checked: 0, changed: 0, failed: [`errore: ${error instanceof Error ? error.message : String(error)}`] }));
+  if (volantini.checked > 0) {
+    summary.notes.push(
+      `volantini: ${volantini.checked} letti, ${volantini.changed} cambiati${volantini.failed.length > 0 ? `, non letti: ${volantini.failed.join(", ")}` : ""}`,
+    );
+  }
 
   const manuale = eventName === "workflow_dispatch";
   const precedenti = runs.filter((run) => isExternalTrigger(run.trigger)).length;

@@ -4337,7 +4337,10 @@ describe("🛒 vado a fare la spesa", () => {
     const store = createMemoryStore();
     await store.upsertPrefs(prefs());
     await seed(store, [
-      { title: "Concorso Esselunga: vinci la spesa", brand: "esselunga", requiresPurchase: true, score: 80 },
+      { title: "Concorso Eurospin: vinci la spesa", brand: "eurospin", requiresPurchase: true, score: 80 },
+      // Esselunga non c'è in provincia di Lecce: non è una porta, e il suo
+      // concorso non vale "in ogni supermercato".
+      { title: "Concorso Esselunga: vinci la spesa", brand: "esselunga", requiresPurchase: true, score: 85 },
       { title: "Compra Nutella e vinci", brand: "ferrero", requiresPurchase: true, score: 70 },
       { title: "Kinder ti premia", summary: "Solo nei punti vendita Conad", brand: "ferrero", requiresPurchase: true, score: 75 },
       { title: "Buono sconto Barilla", kind: "coupon", brand: "barilla", score: 10 },
@@ -4351,15 +4354,17 @@ describe("🛒 vado a fare la spesa", () => {
     const { tg, calls } = makeTg();
     await handleUpdate(command(1, "/negozi"), deps(store, tg));
     const insegne = bottoniUltima(calls);
-    expect(insegne.find((b) => b.callback_data === "s:negozio:esselunga")?.text).toBe("Esselunga (1)");
+    expect(insegne.find((b) => b.callback_data === "s:negozio:eurospin")?.text).toBe("Eurospin (1)");
+    expect(insegne.some((b) => b.callback_data === "s:negozio:esselunga")).toBe(false);
+    expect(insegne.find((b) => b.callback_data === "s:negozio:md")?.text).toBe("MD (0)");
     // Kinder nomina Conad: vale lì, anche se la marca è Ferrero.
     expect(insegne.find((b) => b.callback_data === "s:negozio:conad")?.text).toBe("Conad (1)");
     expect(insegne.find((b) => b.callback_data === "s:negozio:lidl")?.text).toBe("Lidl (0)");
     expect(insegne.find((b) => b.callback_data === "s:negozio:ovunque")?.text).toBe("🛒 In ogni supermercato (2)");
 
-    await handleUpdate(tap(2, "s:negozio:esselunga", 100), deps(store, tg));
+    await handleUpdate(tap(2, "s:negozio:eurospin", 100), deps(store, tg));
     const qui = bottoniUltima(calls).filter((b) => b.callback_data?.startsWith("open:")).map((b) => b.text).join("\n");
-    expect(qui).toContain("Concorso Esselunga");
+    expect(qui).toContain("Concorso Eurospin");
     expect(qui).not.toContain("Nutella");
     expect(bottoniUltima(calls).some((b) => b.callback_data === "s:negozio:ovunque")).toBe(true);
 
@@ -4371,9 +4376,10 @@ describe("🛒 vado a fare la spesa", () => {
     // non è una cosa da mettere nel carrello.
     expect(ovunque).not.toContain("Kinder");
     expect(ovunque).not.toContain("gratuito");
+    expect(ovunque).not.toContain("Esselunga");
     // Indietro torna all'insegna di prima.
     await handleUpdate(tap(4, "back", 100), deps(store, tg));
-    expect((await store.getUiState(CHAT))?.section).toBe("negozio:esselunga");
+    expect((await store.getUiState(CHAT))?.section).toBe("negozio:eurospin");
   });
 
   it("un'insegna inventata non apre niente", () => {
@@ -4495,5 +4501,72 @@ describe("🧾 scontrini", () => {
     await handleUpdate(documento(4, "application/zip"), deps(store, tg));
     expect(testoUltima(calls)).toContain("mandami una foto o un PDF");
     expect(await store.listReceipts(CHAT, id)).toHaveLength(1);
+  });
+});
+
+describe("📰 volantini e 🤝 accoppiate in chat", () => {
+  async function conVolantini(): Promise<MemoryStore> {
+    const store = createMemoryStore();
+    await store.upsertPrefs(prefs());
+    const volantino = (chain: string, url: string, validFrom: string | null, validTo: string | null, changedAt = "2026-11-01T00:00:00.000Z") =>
+      store.saveFlyer({ chain, url, validFrom, validTo, coverUrl: null, checkedAt: "2026-11-20T06:00:00.000Z", changedAt, status: 200 });
+    await volantino("eurospin", "https://www.eurospin.com/it-it/volantino-store-eurospin/?url=x", "2026-11-19", "2026-11-29", "2026-11-19T06:00:00.000Z");
+    await volantino("md", "https://www.mdspa.it/volantino/", "2026-11-06", "2026-11-18");
+    await volantino("conad", "https://www.conad.it/ricerca-negozi", null, null);
+    await seed(store, [
+      { title: "Cashback Dash e Fairy: richiedi 5 Euro di rimborso", kind: "coupon", brand: null, score: 10 },
+      { title: "Concorso Dash: vinci 1 anno di bucato", brand: null, requiresPurchase: true, score: 60 },
+    ]);
+    return store;
+  }
+
+  it("📰 Volantini elenca un link per insegna, con le date e il segno di quelli nuovi", async () => {
+    const store = await conVolantini();
+    const { tg, calls } = makeTg();
+    await handleUpdate(command(1, "/volantini"), deps(store, tg));
+    expect(testoUltima(calls)).toContain("provincia di Lecce");
+    const link = bottoniUltima(calls).filter((b) => b.url);
+    // Nell'ordine dei negozi in provincia: Conad, Eurospin, … MD.
+    expect(link.map((b) => b.text)).toEqual(["📰 Conad", "📰 Eurospin · dal 19/11 al 29/11 🆕", "📰 MD"]);
+    expect(link[1]?.url).toBe("https://www.eurospin.com/it-it/volantino-store-eurospin/?url=x");
+  });
+
+  it("l'insegna mostra il suo volantino in cima, e dice la verità sulle date", async () => {
+    const store = await conVolantini();
+    const { tg, calls } = makeTg();
+    await handleUpdate(command(1, "/negozi"), deps(store, tg));
+    expect(bottoniUltima(calls).some((b) => b.callback_data === "s:volantini")).toBe(true);
+    expect(bottoniUltima(calls).find((b) => b.callback_data === "s:negozio:eurospin")?.text).toBe("Eurospin (0) 🆕");
+
+    await handleUpdate(tap(2, "s:negozio:eurospin", 100), deps(store, tg));
+    expect(testoUltima(calls)).toContain("📰 <b>Volantino in corso</b> · dal 19/11 al 29/11");
+    expect(bottoniUltima(calls)[0]).toMatchObject({ text: "📰 Sfoglia il volantino Eurospin · dal 19/11 al 29/11 🆕" });
+
+    // MD: la pagina dice ancora le date vecchie. Non "scaduto": aprila.
+    await handleUpdate(tap(3, "s:negozio:md", 100), deps(store, tg));
+    expect(testoUltima(calls)).toContain("la pagina riporta ancora quello dal 06/11 al 18/11");
+    // Conad: il volantino si sceglie per negozio, sul sito.
+    await handleUpdate(tap(4, "s:negozio:conad", 100), deps(store, tg));
+    expect(testoUltima(calls)).toContain("cambia da negozio a negozio");
+  });
+
+  it("🤝 Accoppiate mette insieme il cashback e il concorso della stessa marca", async () => {
+    const store = await conVolantini();
+    const { tg, calls } = makeTg();
+    await handleUpdate(command(1, "/negozi"), deps(store, tg));
+    await handleUpdate(tap(2, "s:negozio:eurospin", 100), deps(store, tg));
+    expect(bottoniUltima(calls).find((b) => b.callback_data === "s:negozio:eurospin:coppie")?.text).toBe("🤝 Accoppiate (1)");
+
+    await handleUpdate(tap(3, "s:negozio:eurospin:coppie", 100), deps(store, tg));
+    expect(testoUltima(calls)).toContain("🤝 <b>Accoppiate da Eurospin</b> · 1");
+    expect(testoUltima(calls)).toContain("controlla prima di contarci");
+    const voci = bottoniUltima(calls).map((b) => b.text);
+    expect(voci[0]).toBe("🤝 Dash · 1 offerta + 1 concorso");
+    expect(voci.slice(1, 3).join("\n")).toContain("Cashback Dash");
+    expect(voci.slice(1, 3).join("\n")).toContain("Concorso Dash");
+    // Indietro torna all'insegna.
+    await handleUpdate(tap(4, "back", 100), deps(store, tg));
+    expect((await store.getUiState(CHAT))?.section).toBe("negozio:eurospin");
+    expect(parseCallback("s:negozio:inventata:coppie")).toEqual({ kind: "none" });
   });
 });

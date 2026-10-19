@@ -17,7 +17,7 @@ import {
 import { INSEGNE, brandChoices, brandLabel, isBrandId } from "../config/brands.ts";
 import { DAILY_PLAY_TAG } from "../enrich/rules.ts";
 import { giroItems, giroOrder, isGiroHour, streakFrom, streakWindowStart } from "../giro.ts";
-import { contaPerInsegna, ovunque, soloQui } from "../negozi.ts";
+import { accoppiate, contaPerInsegna, ovunque, soloQui } from "../negozi.ts";
 import { diagnosiFonti, riepilogoDiagnosi } from "../sources-health.ts";
 import { rescoreRow } from "../enrich/score.ts";
 import { mergedBrands, mergedWeights } from "../pipeline.ts";
@@ -29,7 +29,7 @@ import { regolamentoUrl } from "./digest.ts";
 import { localDateString, sourceLabel, startOfLocalDay } from "./format.ts";
 import { parseEuroInput, rankByConvenience, refundAmountFor } from "../refunds.ts";
 import { leadHours, summarizeLead } from "../enrich/lead.ts";
-import { BRANDS_PAGE_SIZE, PAGE_SIZE, SHARE_BASE_DEFAULT } from "./keyboard.ts";
+import { ACCOPPIATE_PAGE_SIZE, BRANDS_PAGE_SIZE, PAGE_SIZE, SHARE_BASE_DEFAULT } from "./keyboard.ts";
 import { SCORE_MAX, SCORE_MIN, hourLabel, parseQuietRange, toggleDigestHour } from "./prefs-config.ts";
 import {
   applyIntent,
@@ -187,6 +187,9 @@ function intentForCommand(command: string, args: string): Intent | null {
       return { kind: "section", section: "negozi" };
     case "/scontrini":
       return { kind: "section", section: "scontrini" };
+    case "/volantini":
+    case "/volantino":
+      return { kind: "section", section: "volantini" };
     case "/nuovi":
       return { kind: "section", section: "nuovi" };
     case "/oggi":
@@ -712,6 +715,15 @@ async function loadScreenData(
   const perLaSpesa = sezioneNegozi ? await negozioCandidates(deps, filters, now) : [];
   const negozi = sezioneNegozi ? contaPerInsegna(perLaSpesa, INSEGNE) : {};
   const tuttoOvunque = sezioneNegozi ? ovunque(perLaSpesa) : [];
+  // 📰 I volantini: nella loro sezione, nella scelta del negozio e in ogni insegna.
+  const flyers = sezioneNegozi || state.section === "volantini" ? await store.listFlyers() : [];
+  // 🤝 Le accoppiate di un'insegna: quello che si compra lì, cioè le sue
+  // iniziative più quelle che valgono ovunque.
+  const insegnaAperta = state.section.startsWith("negozio:") ? state.section.slice("negozio:".length).replace(/:coppie$/, "") : null;
+  const tutteLeCoppie =
+    insegnaAperta === null
+      ? []
+      : accoppiate(insegnaAperta === "ovunque" ? tuttoOvunque : [...soloQui(perLaSpesa, insegnaAperta), ...tuttoOvunque]);
   // Gli elenchi dello storico si leggono solo quando servono: nel menù di tutti i
   // giorni sarebbero due query in più per niente.
   // 📊 I tuoi numeri conta le stesse decisioni dello storico, quindi le legge
@@ -847,7 +859,7 @@ async function loadScreenData(
     items = elenco.slice(pagina * PAGE_SIZE, pagina * PAGE_SIZE + PAGE_SIZE);
   };
   if (state.openItemId === null && state.section === "giro") ritaglia(giroOrder(giro, giocati));
-  if (state.openItemId === null && state.section.startsWith("negozio:")) {
+  if (state.openItemId === null && state.section.startsWith("negozio:") && !state.section.endsWith(":coppie")) {
     const insegna = state.section.slice("negozio:".length);
     ritaglia(insegna === "ovunque" ? tuttoOvunque : soloQui(perLaSpesa, insegna));
   }
@@ -928,9 +940,12 @@ async function loadScreenData(
   // fosse quello degli elenchi (6), due log farebbero UNA pagina e la freccia
   // «Più vecchio» riporterebbe alla stessa raccolta.
   const unoAllaVolta = state.section === "log" || state.section === "aiuto" || state.section.startsWith("scontrini:");
-  const passo = unoAllaVolta ? 1 : state.section === "preferiti" ? BRANDS_PAGE_SIZE : PAGE_SIZE;
+  const coppie = state.section.endsWith(":coppie");
+  const passo = unoAllaVolta ? 1 : state.section === "preferiti" ? BRANDS_PAGE_SIZE : coppie ? ACCOPPIATE_PAGE_SIZE : PAGE_SIZE;
   const totalePagine =
-    state.section.startsWith("scontrini:")
+    coppie
+      ? tutteLeCoppie.length
+      : state.section.startsWith("scontrini:")
       ? receipts.length
       : state.section === "filtri-fonti"
       ? tutteLeFonti.length
@@ -991,6 +1006,9 @@ async function loadScreenData(
     streak,
     negozi,
     negoziOvunque: tuttoOvunque.length,
+    flyers,
+    accoppiate: tutteLeCoppie.slice(page * ACCOPPIATE_PAGE_SIZE, page * ACCOPPIATE_PAGE_SIZE + ACCOPPIATE_PAGE_SIZE),
+    accoppiateTotal: tutteLeCoppie.length,
     receipts,
     dailyOpen,
     avviso: null,
