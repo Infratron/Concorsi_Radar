@@ -151,8 +151,11 @@ export const SOURCES: SourceConfig[] = [
   // News dà sulle ricerche di concorsi e cashback (era fra le prime). Misurata con
   // i parser veri: la sezione concorsi porta 12 concorsi attivi e TUTTI nuovi per
   // l'archivio (Milka Monopoly, Kinder, Rovagnati, NaturelleWIN…); robots.txt
-  // lascia passare. La conferma dal runner GitHub arriva col primo giro: le
-  // testate sorelle (OmaggioMania, scontOmaggio) lì rispondono 202 a vuoto.
+  // lascia passare.
+  // SPENTA lo stesso giorno, dopo il primo giro in produzione (10:15 UTC): dal
+  // runner GitHub risponde HTTP 403, a questo feed come a quello della spesa,
+  // mentre dal PC risponde 200. È la stessa protezione dagli IP da datacenter di
+  // Premi e Concorsi e Soldissimi: in produzione non porterebbe un item.
   {
     id: "lapaginadeglisconti",
     name: "La Pagina degli Sconti · concorsi",
@@ -161,7 +164,7 @@ export const SOURCES: SourceConfig[] = [
     category: "online",
     tags: ["aggregatore"],
     cadenceMin: 60,
-    enabled: true,
+    enabled: false,
     maxItems: 20,
   },
   {
@@ -364,6 +367,7 @@ export const SOURCES: SourceConfig[] = [
   // La sezione "spesa" della stessa testata: Spendi & Riprendi, buoni sconto e
   // premi certi delle insegne. Misurata il 19/10/2026: 5 offerte nuove su 12 (le
   // altre 7 sono oltre i 60 giorni dei coupon, e il cancello le tiene fuori).
+  // SPENTA con la sorella: 403 dal runner GitHub al primo giro.
   {
     id: "lapaginadeglisconti-spesa",
     name: "La Pagina degli Sconti · spesa e buoni",
@@ -372,7 +376,7 @@ export const SOURCES: SourceConfig[] = [
     category: "coupon",
     tags: ["coupon"],
     cadenceMin: 60,
-    enabled: true,
+    enabled: false,
     maxItems: 20,
   },
 

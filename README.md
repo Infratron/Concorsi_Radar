@@ -1778,7 +1778,9 @@ testate che Google News restituisce sulle ricerche di concorsi, cashback e premi
 certi, e misurata con i parser veri contro l'archivio: la sezione concorsi porta
 12 concorsi attivi e tutti nuovi, la sezione spesa 5 offerte nuove (Spendi &
 Riprendi, buoni delle insegne). Due fonti, `lapaginadeglisconti` (concorsi) e
-`lapaginadeglisconti-spesa` (coupon). Nella stessa misura sono state **scartate**
+`lapaginadeglisconti-spesa` (coupon) — **spente dopo il primo giro in
+produzione**: dal runner GitHub rispondono HTTP 403, come le testate qui sotto.
+La misura dal PC non basta a decidere una fonte: decide il runner. Nella stessa misura sono state **scartate**
 le testate che pubblicano bandi di lavoro (Ti Consiglio, Concorsando, Non Solo
 Concorsi: "concorso" lì vuol dire assunzione) e le notizie di settore; e restano
 spente OmaggioMania, scontOmaggio, Premi e Concorsi e Soldissimi, che dal PC
