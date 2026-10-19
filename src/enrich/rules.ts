@@ -93,6 +93,20 @@ function nearbyYear(text: string, from: number): number | undefined {
   return found ? Number(found[1]) : undefined;
 }
 
+/**
+ * true se la data è un INIZIO: "dal 2 febbraio", "a partire dal 1° ottobre",
+ * "partito il 16 luglio". Un inizio non è mai una scadenza, e trattarlo come tale
+ * era il bug più costoso delle scadenze: "Iscriviti gratis dal 2 febbraio" (già
+ * passato) veniva portato all'anno dopo e il concorso risultava aperto fino al
+ * 2 febbraio 2027, mentre chiudeva il 29 novembre 2026 (misurato il 19/10/2026).
+ * In un intervallo "dal X al Y" la seconda data non è preceduta da "dal", quindi
+ * resta la scadenza.
+ */
+function isStartDate(text: string, index: number): boolean {
+  const prima = text.slice(Math.max(0, index - 24), index);
+  return /(?:\bdal|\bdall['’]|\bdalle|a partire dal|inizi[ao] il|inizier[àa] il|parte il|partit[oa] il|aperto dal|attivo dal)\s*$/.test(prima);
+}
+
 function hasDeadlineKeyword(text: string, index: number): boolean {
   const window = text.slice(Math.max(0, index - 48), index);
   return DEADLINE_KEYWORDS.some((keyword) => window.includes(keyword));
@@ -112,7 +126,9 @@ function deadlineFrom(haystack: NormalizedText, now: Date): string | null {
   while ((match = numeric.exec(text)) !== null) {
     const year = match[3] !== undefined ? Number(match[3]) : undefined;
     const date = resolveYear(year, Number(match[2]), Number(match[1]), now);
-    if (date) candidates.push({ date, index: match.index, keyworded: hasDeadlineKeyword(text, match.index) });
+    if (date && !isStartDate(text, match.index)) {
+      candidates.push({ date, index: match.index, keyworded: hasDeadlineKeyword(text, match.index) });
+    }
   }
 
   const textual = /(\d{1,2})\s+(?:di\s+)?([a-z]+)\s*(\d{4})?/g;
@@ -124,7 +140,9 @@ function deadlineFrom(haystack: NormalizedText, now: Date): string | null {
     // corrente e l'intervallo tornava a essere "aperto".
     const year = match[3] !== undefined ? Number(match[3]) : nearbyYear(text, match.index + match[0].length);
     const date = resolveYear(year, month, Number(match[1]), now);
-    if (date) candidates.push({ date, index: match.index, keyworded: hasDeadlineKeyword(text, match.index) });
+    if (date && !isStartDate(text, match.index)) {
+      candidates.push({ date, index: match.index, keyworded: hasDeadlineKeyword(text, match.index) });
+    }
   }
 
   const usable = candidates.filter((candidate) => {
@@ -148,7 +166,7 @@ function deadlineFrom(haystack: NormalizedText, now: Date): string | null {
  * concorso appena uscito. Caso reale: le pagine AIA "Dal … Al …" finite in 📰
  * News con la data di chiusura già passata (17/10/2026).
  */
-const DATE_RANGE = /\bdal\s+(\d{1,2})\s+(?:di\s+)?([a-z]+)\s*(\d{4})?\s*(?:al|fino al|fino a)\s+(\d{1,2})\s+(?:di\s+)?([a-z]+)\s*(\d{4})?/i;
+const DATE_RANGE = /\bdal\s+(\d{1,2})(?:°|º)?\s+(?:di\s+)?([a-z]+)\s*(\d{4})?\s*(?:al|fino al|fino a)\s+(\d{1,2})(?:°|º)?\s+(?:di\s+)?([a-z]+)\s*(\d{4})?/i;
 
 export function endOfDateRange(text: string): string | null {
   // `MONTHS` è in minuscolo: la corrispondenza va cercata sul testo normalizzato,
@@ -160,6 +178,73 @@ export function endOfDateRange(text: string): string | null {
   const year = Number(match[6] ?? match[3]);
   if (!Number.isInteger(year) || year < 2000) return null;
   return isoDate(year, month, Number(match[4]));
+}
+
+/**
+ * La scadenza letta dal testo della PAGINA del concorso, quando il riassunto del
+ * feed non la dice (misurato il 19/10/2026: 128 concorsi attivi su 184 senza
+ * scadenza, e nella pagina c'era per 104).
+ *
+ * Una pagina non è un riassunto: ha i menù, la barra laterale con gli altri
+ * concorsi, la data dell'estrazione e quella per usare il premio. Per questo
+ * valgono solo tre formule, in quest'ordine, misurate sulle pagine vere:
+ *  1. "Scadenza : 28/03/2027" — la riga che Scontrino Felice mette in fondo;
+ *  2. il primo intervallo "dal 1° ottobre al 20 novembre 2026";
+ *  3. "fino al 30 novembre".
+ * NON vale "entro il": nelle pagine è quasi sempre l'estrazione ("estrazione
+ * entro il 27 novembre") o la fruizione del premio, e scambiarla per la fine
+ * del concorso era l'errore più frequente della prima misura.
+ *
+ * Una data passata conta solo dalla riga "Scadenza :" esplicita: dice che il
+ * concorso è CHIUSO (Bennet Guzzini, chiuso il 7/10 e in archivio fino al
+ * 2027), mentre un intervallo passato può essere quello di un'altra edizione.
+ */
+export function deadlineFromPageText(text: string, now: Date): { deadline: string; explicit: boolean } | null {
+  const lower = text.toLowerCase();
+  const oggi = now.toISOString().slice(0, 10);
+  const futura = (date: string | null): date is string =>
+    date !== null && date >= oggi && daysBetween(now, date) <= MAX_FUTURE_DAYS;
+  const numerica = (valore: string | undefined): string | null => {
+    if (!valore) return null;
+    const [g, m, a] = valore.split(/[\/.-]/).map(Number);
+    return isoDate(a < 100 ? 2000 + a : a, m, g);
+  };
+  const DATA = "(\\d{1,2}[\\/.-]\\d{1,2}[\\/.-]\\d{2,4})";
+
+  // La riga dichiarata dal sito: "Scadenza : 28/03/2027". Per le raccolte punti
+  // c'è anche "Termine richiesta premi : …", che viene dopo ed è la data che serve
+  // a chi ha i bollini in mano: la raccolta chiude, il premio si chiede ancora.
+  const scadenza = numerica(new RegExp(`\\bscadenza\\s*:\\s*${DATA}`).exec(lower)?.[1]);
+  if (scadenza !== null) {
+    const richiesta = numerica(new RegExp(`\\btermine richiesta premi\\s*:\\s*${DATA}`).exec(lower)?.[1]);
+    return { deadline: richiesta !== null && richiesta > scadenza ? richiesta : scadenza, explicit: true };
+  }
+
+  for (const intervallo of lower.matchAll(new RegExp(DATE_RANGE.source, "gi"))) {
+    const data = endOfDateRange(intervallo[0]);
+    if (futura(data)) return { deadline: data, explicit: false };
+  }
+
+  for (const fino of lower.matchAll(/\b(?:valid[oa] )?fino al\s+(\d{1,2}(?:°|º)?\s+[a-z]+(?:\s+\d{4})?|\d{1,2}[\/.-]\d{1,2}(?:[\/.-]\d{2,4})?)/g)) {
+    const data = deadlineFrom(normalizeForExtraction(`fino al ${fino[1].replace(/[°º]/g, "")}`), now);
+    if (futura(data)) return { deadline: data, explicit: false };
+  }
+  return null;
+}
+
+/**
+ * Quale scadenza tenere fra quella che l'item ha e quella letta dalla pagina. La
+ * riga "Scadenza :" del sito vince sempre — è la data dichiarata, e corregge le
+ * date d'inizio scambiate per scadenze —, il resto della pagina riempie solo un
+ * vuoto. Una scadenza non si cancella mai.
+ */
+export function mergePageDeadline(
+  attuale: string | null,
+  pagina: { deadline: string; explicit: boolean } | null,
+): string | null {
+  if (pagina === null) return attuale;
+  if (pagina.explicit) return pagina.deadline;
+  return attuale ?? pagina.deadline;
 }
 
 /** Valore stimato del premio, 0..1, da importi in euro e parole chiave. */

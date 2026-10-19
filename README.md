@@ -1692,6 +1692,50 @@ prima vinceva quella che capitava per prima. In ogni altro caso il nome in
 archivio non si tocca: meglio un nome imperfetto che uno sostituito con uno
 peggiore.
 
+## 6-bis. Scadenze: dal riassunto, e dalla pagina quando il riassunto tace
+
+Misurato il 19/10/2026 sull'archivio vero: **128 concorsi attivi su 184 (70%)
+non avevano una scadenza**. Senza, un concorso non entra in ⏳ Scadenze, non
+riceve i promemoria della watchlist e si ordina male. Il motivo era doppio.
+
+**1. Il riassunto del feed non la dice.** È di due righe; la data sta nella
+pagina del concorso, che la raccolta **legge già** per il regolamento. Ora da
+quella stessa lettura prende anche la scadenza (`contestPageFacts` in
+[src/enrich/regulation.ts](src/enrich/regulation.ts), `deadlineFromPageText` in
+[src/enrich/rules.ts](src/enrich/rules.ts)): zero richieste in più. Una pagina
+non è un riassunto — ha i menù, la barra laterale con gli altri concorsi, la data
+dell'estrazione — quindi si legge solo **dal titolo (`<h1>`) in giù** e valgono
+solo tre formule, misurate sulle pagine vere:
+
+- la riga dichiarata dal sito, `Scadenza : 28/03/2027` (con `Termine richiesta
+  premi`, quando c'è e viene dopo: per una raccolta punti è la data che serve a
+  chi ha i bollini in mano);
+- il primo intervallo `dal 1° ottobre al 20 novembre 2026`;
+- `fino al 30 novembre`.
+
+**Non vale "entro il"**: nelle pagine è quasi sempre l'estrazione ("estrazione
+finale entro il 27 novembre") o l'uso del premio, ed era l'errore più frequente
+della prima misura. La riga `Scadenza :` corregge anche una scadenza già in
+archivio; gli intervalli e il "fino al" riempiono solo un vuoto; una scadenza non
+si cancella mai (`mergePageDeadline`).
+
+**2. Una data d'inizio veniva presa per una scadenza.** "Iscriviti gratis dal 2
+febbraio", già passato, veniva portato all'anno dopo: Granterre risultava aperto
+fino al 2 febbraio 2027 e chiudeva il 29 novembre 2026; Bennet Guzzini, chiuso il
+7 ottobre, risultava aperto fino al luglio 2027. Ora una data preceduta da "dal",
+"a partire dal", "partito il" non è mai una scadenza (`isStartDate`); in un
+intervallo la seconda data resta la fine.
+
+Le due cose valgono per i concorsi nuovi alla raccolta, e l'archivio si è
+riallineato con `npm run rules -- --apply`, che adesso rilegge bando **e**
+scadenza dalla stessa pagina:
+
+| | Prima | Dopo |
+|---|---|---|
+| Concorsi attivi senza scadenza | 128 su 184 | **25** |
+| Concorsi attivi senza regolamento | 81 | **44** |
+| Scadenze corrette dalla riga "Scadenza :" | — | 8 (sei raccolte punti già chiuse risultavano aperte fino al 2027) |
+
 ## 7. Punteggio e antispam
 
 Punteggio 0-100 (`src/enrich/score.ts`), pesi trasparenti: valore del premio
@@ -1728,6 +1772,17 @@ DimmiCosaCerchi, Vincimi, più sei query Google News, alcune sitemap — e, dall
 stesso giorno, **sei feed di coupon e rimborsi** (la ricognizione e i motivi
 delle esclusioni stanno qui sotto). L'elenco completo con stato di verifica è in
 [src/config/sources.ts](src/config/sources.ts).
+
+**Fonte nuova del 19/10/2026: La Pagina degli Sconti.** Trovata contando le
+testate che Google News restituisce sulle ricerche di concorsi, cashback e premi
+certi, e misurata con i parser veri contro l'archivio: la sezione concorsi porta
+12 concorsi attivi e tutti nuovi, la sezione spesa 5 offerte nuove (Spendi &
+Riprendi, buoni delle insegne). Due fonti, `lapaginadeglisconti` (concorsi) e
+`lapaginadeglisconti-spesa` (coupon). Nella stessa misura sono state **scartate**
+le testate che pubblicano bandi di lavoro (Ti Consiglio, Concorsando, Non Solo
+Concorsi: "concorso" lì vuol dire assunzione) e le notizie di settore; e restano
+spente OmaggioMania, scontOmaggio, Premi e Concorsi e Soldissimi, che dal PC
+porterebbero item nuovi ma dal runner GitHub rispondono 403 o 202 a vuoto.
 
 **Ricambio del 17/10/2026.** In produzione cinque fonti non portavano più un
 item: `soldissimi` (otto giri di 403 di fila), `premieconcorsi` e la sua sitemap
@@ -2236,7 +2291,7 @@ npm run checklist                                      # le quattro caselle di c
 npm run checklist -- --fonte <id>                      # ...e per una fonte sola, tipi compresi
 npm run tags                                           # tag di contenuto mancanti (elenco)
 npm run tags -- --apply                                # e li aggiunge (solo aggiunta)
-npm test                                               # 778 test
+npm test                                               # 783 test
 npm run typecheck
 ```
 
@@ -2453,7 +2508,7 @@ scripts/
   dry-run.ts               prova generale senza inviare nulla
   bench-cpu.ts             stessa misura su Node, con le fonti vere
   seed-sources.ts          genera l'SQL di sincronizzazione delle fonti
-test/                      35 file, 778 test (vitest, nessuna rete tranne i finti); sqlite.ts è il D1 su SQLite condiviso
+test/                      35 file, 783 test (vitest, nessuna rete tranne i finti); sqlite.ts è il D1 su SQLite condiviso
 ```
 
 Il tratto che tiene insieme tutto: **una sola copia dell'SQL**. `src/db/d1.ts`

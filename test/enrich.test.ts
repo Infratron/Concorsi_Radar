@@ -9,6 +9,8 @@ import {
   extractTags,
   enrichWithRules,
   looksLikeNewsContest,
+  deadlineFromPageText,
+  mergePageDeadline,
 } from "../src/enrich/rules.ts";
 import { SCORE_WEIGHTS, applyBrandBonus, applyWeights, baseScore, explainScore, rescoreRow, scoreItem } from "../src/enrich/score.ts";
 import { MAX_NEURONS_PER_DAY, enrichWithAi, mergeInsight, needsAi } from "../src/enrich/ai.ts";
@@ -576,5 +578,37 @@ describe("arricchimento AI (con tetto e senza eccezioni)", () => {
     expect(merged.prize).toBe("buono spesa");
     expect(merged.tags).toEqual(["gratis", "giftcard"]);
     expect(merged.aiUsed).toBe(true);
+  });
+});
+
+describe("scadenze · inizi e pagine", () => {
+  const OGGI = new Date("2026-10-19T09:00:00.000Z");
+
+  it("una data d'inizio non è una scadenza, nemmeno spostata all'anno dopo", () => {
+    // Granterre: "dal 2 febbraio" (già passato) diventava il 2 febbraio 2027.
+    expect(extractDeadline("Iscriviti gratis dal 2 febbraio e vinci gift card", OGGI)).toBeNull();
+    expect(extractDeadline("Concorso a partire dal 01/09 per tutti", OGGI)).toBeNull();
+    // In un intervallo la fine resta la scadenza.
+    expect(extractDeadline("Partecipa dal 1 ottobre al 30 novembre 2026", OGGI)).toBe("2026-11-30");
+    expect(extractDeadline("Scade il 15 dicembre", OGGI)).toBe("2026-12-15");
+  });
+
+  it("dalla pagina valgono la riga Scadenza, gli intervalli e il fino al; l'estrazione no", () => {
+    expect(deadlineFromPageText("Regolamento – Data Inizio : 01/09/2026 – Scadenza : 28/03/2027 – Agenzia", OGGI)).toEqual({ deadline: "2027-03-28", explicit: true });
+    // Raccolta punti: la data per chiedere il premio viene dopo, ed è quella che serve.
+    expect(deadlineFromPageText("Scadenza : 7/10/2026 – Termine richiesta premi : 21/10/2026", OGGI)).toEqual({ deadline: "2026-10-21", explicit: true });
+    expect(deadlineFromPageText("Il concorso è attivo dal 1° ottobre al 20 novembre 2026.", OGGI)).toEqual({ deadline: "2026-11-20", explicit: false });
+    expect(deadlineFromPageText("valido dal 2 febbraio 2026 fino al 29 novembre 2026", OGGI)).toEqual({ deadline: "2026-11-29", explicit: false });
+    expect(deadlineFromPageText("Estrazione finale entro il 27 novembre 2026.", OGGI)).toBeNull();
+    // Un intervallo passato non chiude niente: può essere un'altra edizione.
+    expect(deadlineFromPageText("Edizione 2025: dal 1 marzo al 30 aprile 2025.", OGGI)).toBeNull();
+  });
+
+  it("la riga Scadenza corregge, il resto della pagina riempie solo un vuoto", () => {
+    expect(mergePageDeadline("2027-02-02", { deadline: "2026-11-29", explicit: true })).toBe("2026-11-29");
+    expect(mergePageDeadline("2026-11-18", { deadline: "2026-11-26", explicit: false })).toBe("2026-11-18");
+    expect(mergePageDeadline(null, { deadline: "2026-11-26", explicit: false })).toBe("2026-11-26");
+    // Una scadenza non si cancella mai.
+    expect(mergePageDeadline("2026-11-18", null)).toBe("2026-11-18");
   });
 });

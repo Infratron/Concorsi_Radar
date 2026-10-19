@@ -48,6 +48,8 @@ export const CHANNEL_BY_SOURCE: Record<string, SourceChannel> = {
   vincimi: "aggregatore",
   omaggiomania: "aggregatore",
   "your-contest": "aggregatore",
+  "lapaginadeglisconti": "aggregatore",
+  "lapaginadeglisconti-spesa": "aggregatore",
   "scontomaggio-concorsi": "aggregatore",
   // Le fonti di coupon sono aggregatori come gli altri (raccontano le promozioni
   // delle insegne), anche se quasi non producono viste: le viste si registrano

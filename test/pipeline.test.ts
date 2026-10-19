@@ -1151,7 +1151,32 @@ describe("pipeline · regolamento sulla pagina del concorso", () => {
     // La nota del giro dice quante pagine sono state lette per cercare un bando:
     // è il numero con cui ci si accorge che il tetto per giro è basso, o che le
     // pagine hanno smesso di rispondere.
-    expect(summary.notes.some((nota) => /^regolamenti: 1 trovati su 1 pagine/.test(nota))).toBe(true);
+    expect(summary.notes.some((nota) => /^pagine dei concorsi: 1 lette, 1 regolamenti/.test(nota))).toBe(true);
+  });
+
+  it("la scadenza che il riassunto non dice si legge dalla pagina, dal titolo in giù", async () => {
+    const store = createMemoryStore();
+    store.seedSources([source("fonte-a", "Aggregatore A", "https://a.example/feed")]);
+    await store.upsertPrefs(prefs(200));
+    const { fetcher } = contaFetcher({
+      "https://a.example/feed": rssFeed([
+        { title: "Concorso Mars: vinci Disneyland", link: "https://a.example/mars", description: "Scopri come partecipare." },
+        // Il riassunto ha solo l'INIZIO: prima diventava una scadenza dell'anno dopo.
+        { title: "Concorso Granterre: vinci gift card", link: "https://a.example/granterre", description: "Iscriviti gratis dal 2 febbraio e vinci." },
+      ]),
+      // Prima del titolo c'è la barra degli "in evidenza", con le date di altri
+      // concorsi; l'estrazione "entro il" non è la fine della partecipazione.
+      "https://a.example/mars": `<html><body><div>Volantino MD dal 20 ottobre al 1 novembre 2026</div>
+        <h1>Concorso Mars</h1><p>Il concorso è attivo dal 1° ottobre al 20 novembre 2026.
+        Estrazione finale entro il 27 novembre 2026.</p></body></html>`,
+      "https://a.example/granterre": `<html><body><h1>Granterre</h1><p>Regolamento – Scadenza : 29/11/2026</p></body></html>`,
+    });
+
+    await runIngest({ store, ai: null, fetcher }, NOW, UNA_FONTE_DEL_TEST);
+
+    const items = await store.queryItems({ limit: 5 });
+    expect(items.find((item) => item.title.includes("Mars"))?.deadline).toBe("2026-11-20");
+    expect(items.find((item) => item.title.includes("Granterre"))?.deadline).toBe("2026-11-29");
   });
 
   it("se il bando è già nel riassunto non apre la pagina", async () => {
@@ -1163,7 +1188,8 @@ describe("pipeline · regolamento sulla pagina del concorso", () => {
         {
           title: "Concorso Barilla: vinci una Fiat Panda",
           link: "https://a.example/barilla",
-          description: "Concorso gratuito. Regolamento su https://a.example/bando-barilla.pdf .",
+          // Bando E scadenza nel riassunto: la pagina non aggiungerebbe niente.
+          description: "Concorso gratuito. Scade il 25 ottobre 2026. Regolamento su https://a.example/bando-barilla.pdf .",
         },
       ]),
     });
@@ -1173,7 +1199,7 @@ describe("pipeline · regolamento sulla pagina del concorso", () => {
     const item = (await store.queryItems({ limit: 5 }))[0];
     expect(item?.rulesUrl).toBe("https://a.example/bando-barilla.pdf");
     expect(letture).not.toContain("https://a.example/barilla");
-    expect(summary.notes.some((nota) => nota.startsWith("regolamenti:"))).toBe(false);
+    expect(summary.notes.some((nota) => nota.startsWith("pagine dei concorsi:"))).toBe(false);
   });
 
   it("un coupon non paga la ricerca del bando", async () => {

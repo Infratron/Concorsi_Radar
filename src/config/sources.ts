@@ -147,6 +147,23 @@ export const SOURCES: SourceConfig[] = [
     enabled: false,
     maxItems: 20,
   },
+  // La Pagina degli Sconti: trovata il 19/10/2026 contando le testate che Google
+  // News dà sulle ricerche di concorsi e cashback (era fra le prime). Misurata con
+  // i parser veri: la sezione concorsi porta 12 concorsi attivi e TUTTI nuovi per
+  // l'archivio (Milka Monopoly, Kinder, Rovagnati, NaturelleWIN…); robots.txt
+  // lascia passare. La conferma dal runner GitHub arriva col primo giro: le
+  // testate sorelle (OmaggioMania, scontOmaggio) lì rispondono 202 a vuoto.
+  {
+    id: "lapaginadeglisconti",
+    name: "La Pagina degli Sconti · concorsi",
+    kind: "rss",
+    url: "https://www.lapaginadeglisconti.it/category/offerte/concorsi/feed/",
+    category: "online",
+    tags: ["aggregatore"],
+    cadenceMin: 60,
+    enabled: true,
+    maxItems: 20,
+  },
   {
     id: "your-contest",
     name: "Your Contest · concorsi a premi",
@@ -342,6 +359,21 @@ export const SOURCES: SourceConfig[] = [
     cadenceMin: 45,
     enabled: true,
     maxItems: 25,
+  },
+
+  // La sezione "spesa" della stessa testata: Spendi & Riprendi, buoni sconto e
+  // premi certi delle insegne. Misurata il 19/10/2026: 5 offerte nuove su 12 (le
+  // altre 7 sono oltre i 60 giorni dei coupon, e il cancello le tiene fuori).
+  {
+    id: "lapaginadeglisconti-spesa",
+    name: "La Pagina degli Sconti · spesa e buoni",
+    kind: "rss",
+    url: "https://www.lapaginadeglisconti.it/category/offerte/spesa/feed/",
+    category: "coupon",
+    tags: ["coupon"],
+    cadenceMin: 60,
+    enabled: true,
+    maxItems: 20,
   },
 
   // ---------- sitemap: intercetta le pagine nuove prima dei feed ----------

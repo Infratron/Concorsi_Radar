@@ -2,12 +2,21 @@ import { pathToFileURL } from "node:url";
 import type { FetchLike, IngestContext, ItemRow } from "../src/types.ts";
 import type { Store } from "../src/db/store.ts";
 import { USER_AGENT } from "../src/config/sources.ts";
-import { createD1HttpStore, d1HttpOptionsFromEnv } from "../src/db/d1-http.ts";
+import { createD1HttpStore } from "../src/db/d1-http.ts";
 import { robotsAllows } from "../src/ingest/index.ts";
-import { regulationUrlFromPage, regulationUrlFromText } from "../src/enrich/regulation.ts";
+import { contestPageFacts, regulationUrlFromText } from "../src/enrich/regulation.ts";
+import { mergePageDeadline } from "../src/enrich/rules.ts";
+import { rescoreRow } from "../src/enrich/score.ts";
+import { mergedBrands, mergedWeights } from "../src/pipeline.ts";
+import { d1OptionsForLocalRun } from "./wrangler-auth.ts";
 
 /**
- * Riempie il regolamento (bando) dei concorsi già in archivio.
+ * Riempie il regolamento (bando) e la scadenza dei concorsi già in archivio.
+ *
+ * La scadenza si aggiunge dal 19/10/2026: la pagina del concorso la scrive quasi
+ * sempre (103 dei 128 concorsi attivi che non l'avevano), e la riga "Scadenza :"
+ * di Scontrino Felice corregge le date d'inizio scambiate per scadenze (Bennet
+ * Guzzini risultava aperto fino al 2027, chiudeva il 7 ottobre).
  *
  * Il bando lo cerca la raccolta, all'ingestione, sulla pagina del concorso
  * (src/enrich/regulation.ts) — ma solo per i concorsi NUOVI e al massimo per
@@ -22,8 +31,8 @@ import { regulationUrlFromPage, regulationUrlFromText } from "../src/enrich/regu
  * `regulationUrlFromPage` — così non c'è una seconda definizione di "regolamento"
  * da tenere allineata, e rispetta robots.txt come la raccolta.
  *
- * Non tocca niente altro: né punteggi né date. Non sovrascrive un bando già
- * salvato (una riga che ce l'ha non è un candidato).
+ * Non sovrascrive un bando già salvato e non cancella mai una scadenza; il
+ * punteggio si rifà solo dove la scadenza cambia (l'urgenza dipende da lei).
  *
  * Due passaggi, di proposito: prima l'elenco (prova a vuoto), poi la scrittura
  * con --apply. `--limite N` cambia quante pagine leggere al massimo (default 60).
@@ -66,10 +75,29 @@ export function textRuleFor(row: ItemRow): string | null {
 
 interface Esito {
   row: ItemRow;
-  /** URL trovato, o null se né il testo né la pagina lo nominano. */
+  /** Bando trovato (null = né il testo né la pagina lo nominano). */
   url: string | null;
+  /** La scadenza dopo la lettura: uguale a prima, aggiunta o corretta. */
+  deadline: string | null;
   /** true se la pagina è stata davvero letta (i testi si leggono gratis). */
   letto: boolean;
+}
+
+/**
+ * Cosa cambiare su una riga dopo aver letto la sua pagina. Pura, per i test: la
+ * regola della scadenza è quella della raccolta (`mergePageDeadline`), quindi la
+ * riga "Scadenza :" del sito corregge, il resto riempie un vuoto, e niente si
+ * cancella.
+ */
+export function patchFor(
+  row: ItemRow,
+  page: { rulesUrl: string | null; deadline: { deadline: string; explicit: boolean } | null },
+): { rulesUrl?: string; deadline?: string } {
+  const patch: { rulesUrl?: string; deadline?: string } = {};
+  if (row.rulesUrl === null && page.rulesUrl !== null) patch.rulesUrl = page.rulesUrl;
+  const scadenza = mergePageDeadline(row.deadline, page.deadline);
+  if (scadenza !== null && scadenza !== row.deadline) patch.deadline = scadenza;
+  return patch;
 }
 
 async function main(): Promise<void> {
@@ -78,66 +106,68 @@ async function main(): Promise<void> {
   const limite = limitIndex >= 0 ? Number.parseInt(process.argv[limitIndex + 1] ?? "", 10) : DEFAULT_PAGE_LIMIT;
   const pagine = Number.isFinite(limite) && limite > 0 ? Math.min(limite, RULES_PAGE_SIZE) : DEFAULT_PAGE_LIMIT;
 
-  const store: Store = createD1HttpStore(d1HttpOptionsFromEnv(process.env));
+  const store: Store = createD1HttpStore(await d1OptionsForLocalRun(process.env));
   const fetcher: FetchLike = (input, init) => fetch(input, init);
   const now = new Date();
   const ctx: IngestContext = { fetcher, userAgent: USER_AGENT, now };
 
-  // La query filtra in SQL (`rules_url IS NULL`), quindi la pagina letta è fatta
-  // di candidati veri: niente giri a vuoto sull'archivio già riempito.
-  const righe = await store.queryItems({
-    kinds: ["contest"],
-    withoutRules: true,
-    statuses: STATI_ATTIVI,
-    limit: RULES_PAGE_SIZE,
-    orderBy: "first_seen",
-  });
-  const candidati = candidatesForRules(righe).slice(0, pagine);
-
-  if (candidati.length === 0) {
-    console.log("Nessun concorso senza regolamento: l'archivio è a posto.");
+  // Tutti i concorsi attivi, non solo quelli senza bando: la pagina porta anche
+  // la scadenza, e la riga "Scadenza :" può correggerne una sbagliata.
+  const righe = (
+    await store.queryItems({ kinds: ["contest"], statuses: STATI_ATTIVI, limit: RULES_PAGE_SIZE, orderBy: "first_seen" })
+  ).filter((row) => STATI_ATTIVI.includes(row.status));
+  const daLeggere = righe.slice(0, pagine);
+  if (daLeggere.length === 0) {
+    console.log("Nessun concorso attivo da rileggere.");
     return;
   }
 
   const esiti: Esito[] = [];
-  for (const row of candidati) {
+  for (const row of daLeggere) {
     const dalTesto = textRuleFor(row);
-    if (dalTesto !== null) {
-      esiti.push({ row, url: dalTesto, letto: false });
-      continue;
-    }
-    const dallaPagina = await regulationUrlFromPage(row.url, {
+    const pagina = await contestPageFacts(row.url, {
       fetcher,
       userAgent: USER_AGENT,
       allows: (url) => robotsAllows(url, { store, fetcher, userAgent: USER_AGENT }, ctx, now),
       now,
     });
-    esiti.push({ row, url: dallaPagina, letto: true });
+    const patch = patchFor(row, { rulesUrl: dalTesto ?? pagina.rulesUrl, deadline: pagina.deadline });
+    esiti.push({ row, url: patch.rulesUrl ?? row.rulesUrl, deadline: patch.deadline ?? row.deadline, letto: pagina.letta });
   }
 
-  const trovati = esiti.filter((esito) => esito.url !== null);
-  console.log(`${candidati.length} concorsi senza regolamento (su ${righe.length} letti):`);
-  console.log(`  ${trovati.length} hanno un bando (${trovati.filter((e) => !e.letto).length} già nel testo, senza richieste)`);
-  for (const esito of trovati.slice(0, 20)) {
-    console.log(`  · #${esito.row.id} ${esito.url} ${esito.letto ? "" : "(dal testo)"} — ${esito.row.title}`);
-  }
-  if (trovati.length > 20) console.log(`  … e altri ${trovati.length - 20}`);
-  const mancanti = esiti.length - trovati.length;
-  if (mancanti > 0) {
-    console.log(`${mancanti} non nominano il bando da nessuna parte (nessun bottone, invece di un link inventato).`);
-  }
+  const nuoviBandi = esiti.filter((esito) => esito.row.rulesUrl === null && esito.url !== null);
+  const aggiunte = esiti.filter((esito) => esito.row.deadline === null && esito.deadline !== null);
+  const corrette = esiti.filter((esito) => esito.row.deadline !== null && esito.deadline !== esito.row.deadline);
+  console.log(`${daLeggere.length} concorsi attivi riletti (${esiti.filter((e) => e.letto).length} pagine lette):`);
+  console.log(`  ${nuoviBandi.length} regolamenti nuovi`);
+  console.log(`  ${aggiunte.length} scadenze aggiunte (prima non c'erano)`);
+  console.log(`  ${corrette.length} scadenze corrette dalla riga "Scadenza :" della pagina`);
+  for (const esito of corrette) console.log(`  · #${esito.row.id} ${esito.row.deadline} → ${esito.deadline} — ${esito.row.title}`);
+  for (const esito of aggiunte.slice(0, 15)) console.log(`  + #${esito.row.id} ${esito.deadline} — ${esito.row.title}`);
+  if (aggiunte.length > 15) console.log(`  … e altre ${aggiunte.length - 15} scadenze aggiunte`);
 
   if (!apply) {
     console.log("\nProva a vuoto: non ho cambiato niente. Rilancia con --apply per scrivere.");
     return;
   }
 
+  // Il punteggio dipende dalla scadenza (l'urgenza): si rifà con le preferenze di
+  // adesso, con la stessa funzione della raccolta.
+  const weights = await mergedWeights(store);
+  const favorites = await mergedBrands(store);
   let scritte = 0;
-  for (const esito of trovati) {
-    await store.updateItem(esito.row.id, { rulesUrl: esito.url });
+  for (const esito of esiti) {
+    const patch: { rulesUrl?: string; deadline?: string; score?: number } = {};
+    if (esito.row.rulesUrl === null && esito.url !== null) patch.rulesUrl = esito.url;
+    if (esito.deadline !== esito.row.deadline && esito.deadline !== null) {
+      patch.deadline = esito.deadline;
+      patch.score = rescoreRow({ ...esito.row, deadline: esito.deadline }, weights, favorites, now);
+    }
+    if (Object.keys(patch).length === 0) continue;
+    await store.updateItem(esito.row.id, patch);
     scritte++;
   }
-  console.log(`\nScritti ${scritte} regolamenti.`);
+  console.log(`\nAggiornati ${scritte} concorsi.`);
 }
 
 // Solo quando il file è il comando eseguito: importarlo da un test non scrive nulla.

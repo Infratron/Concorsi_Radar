@@ -11,8 +11,8 @@ import type {
 import type { Store } from "./db/store.ts";
 import { CPU_BUDGET_MS, MAX_RULES_LOOKUPS_PER_RUN, MAX_SOURCES_PER_RUN, SOURCES, USER_AGENT } from "./config/sources.ts";
 import { ingestSource, robotsAllows } from "./ingest/index.ts";
-import { regulationUrlFromPage, regulationUrlFromText } from "./enrich/regulation.ts";
-import { enrichWithRules, looksLikeNewsContest } from "./enrich/rules.ts";
+import { contestPageFacts, regulationUrlFromText } from "./enrich/regulation.ts";
+import { enrichWithRules, looksLikeNewsContest, mergePageDeadline } from "./enrich/rules.ts";
 import { COUPON_TTL_DAYS, indexPageUrls, staleReason } from "./enrich/freshness.ts";
 import { MAX_AI_CALLS_PER_RUN, enrichWithAi, mergeInsight, needsAi } from "./enrich/ai.ts";
 import { applyBrandBonus, applyWeights, baseScore } from "./enrich/score.ts";
@@ -374,19 +374,29 @@ export async function runIngest(
    * richiesta), al massimo MAX_RULES_LOOKUPS_PER_RUN pagine per giro, mai se il
    * budget di CPU è finito, e solo dove robots.txt lo permette. Chi resta fuori
    * lo prende `npm run rules -- --apply`.
+   *
+   * La stessa pagina dà anche la SCADENZA, quando il riassunto non la dice: una
+   * richiesta per due dati (vedi contestPageFacts). Misurato il 19/10/2026: 128
+   * concorsi attivi su 184 erano senza scadenza, e la pagina l'aveva per 103.
    */
   let ricercheRegolamento = 0;
   let regolamentiTrovati = 0;
+  let scadenzeTrovate = 0;
   let tempoRegolamenti = 0;
   const budgetRegolamenti = options.rulesLookupMs ?? RULES_LOOKUP_BUDGET_MS;
-  const regolamentoPer = async (raw: RawItem, prepared: PreparedItem): Promise<string | null> => {
-    if (prepared.kind !== "contest") return null;
+  const paginaPer = async (
+    raw: RawItem,
+    prepared: PreparedItem,
+    scadenza: string | null,
+  ): Promise<{ rulesUrl: string | null; deadline: { deadline: string; explicit: boolean } | null }> => {
+    if (prepared.kind !== "contest") return { rulesUrl: null, deadline: null };
 
     const dalTesto = regulationUrlFromText(raw.summary, prepared.url);
-    if (dalTesto !== null) return dalTesto;
+    // Bando e scadenza già nel testo: la pagina non aggiungerebbe niente.
+    if (dalTesto !== null && scadenza !== null) return { rulesUrl: dalTesto, deadline: null };
 
     if (ricercheRegolamento >= MAX_RULES_LOOKUPS_PER_RUN || tempoRegolamenti >= budgetRegolamenti || overBudget()) {
-      return null;
+      return { rulesUrl: dalTesto, deadline: null };
     }
     ricercheRegolamento++;
 
@@ -395,7 +405,7 @@ export async function runIngest(
     // come per ogni altro parsing di questa pipeline. La richiesta si conta
     // prima, perché il tetto per giro guarda quante pagine si sono lette.
     const scanStart = cpuStart();
-    const link = await regulationUrlFromPage(prepared.url, {
+    const fatti = await contestPageFacts(prepared.url, {
       fetcher: deps.fetcher,
       userAgent,
       allows: (url) => robotsAllows(url, { store: deps.store, fetcher: deps.fetcher, userAgent }, ctx, now),
@@ -405,8 +415,10 @@ export async function runIngest(
     // che impedisce a una pagina lenta di mangiare il giro.
     tempoRegolamenti += performance.now() - scanStart;
     cpuProxyMs += performance.now() - scanStart;
-    if (link !== null) regolamentiTrovati++;
-    return link;
+    const rulesUrl = dalTesto ?? fatti.rulesUrl;
+    if (rulesUrl !== null && dalTesto === null) regolamentiTrovati++;
+    if (fatti.deadline !== null) scadenzeTrovate++;
+    return { rulesUrl, deadline: fatti.deadline };
   };
 
   for (const source of due) {
@@ -591,17 +603,21 @@ export async function runIngest(
           if (patch) insight = mergeInsight(insight, patch);
         }
 
-        const score = applyBrandBonus(
-          applyWeights(baseScore(insight, raw, now), insight.tags, weights),
-          prepared.brand,
-          brands,
-        );
+        const punteggio = (): number =>
+          applyBrandBonus(applyWeights(baseScore(insight, raw, now), insight.tags, weights), prepared.brand, brands);
+        let score = punteggio();
         cpuProxyMs += performance.now() - enrichStart;
-        // Il regolamento si cerca dopo il punteggio e prima dell'inserimento: è
-        // l'ultimo dato che vale una richiesta, e chi non lo trova resta senza
-        // bottone (mai un link inventato).
-        const rulesUrl = await regolamentoPer(raw, prepared);
-        const inserted = await deps.store.insertItem(toNewItem(raw, prepared, insight, score, now, rulesUrl));
+        // Il regolamento e la scadenza dalla pagina si cercano dopo il punteggio e
+        // prima dell'inserimento: sono gli ultimi dati che valgono una richiesta, e
+        // chi non li trova resta com'era (mai un link o una data inventati). Se la
+        // pagina cambia la scadenza, il punteggio si rifà: l'urgenza dipende da lei.
+        const pagina = await paginaPer(raw, prepared, insight.deadline);
+        const scadenza = mergePageDeadline(insight.deadline, pagina.deadline);
+        if (scadenza !== insight.deadline) {
+          insight = { ...insight, deadline: scadenza };
+          score = punteggio();
+        }
+        const inserted = await deps.store.insertItem(toNewItem(raw, prepared, insight, score, now, pagina.rulesUrl));
         if (inserted.created) {
           itemsNew++;
           const { id, urlKey, simhash, title } = inserted.item;
@@ -629,7 +645,7 @@ export async function runIngest(
   if (ricercheRegolamento > 0) {
     // Il numero sta nella nota perché è l'unico modo per accorgersi che il tetto
     // per giro è basso (o che le pagine non rispondono più).
-    notes.push(`regolamenti: ${regolamentiTrovati} trovati su ${ricercheRegolamento} pagine lette`);
+    notes.push(`pagine dei concorsi: ${ricercheRegolamento} lette, ${regolamentiTrovati} regolamenti, ${scadenzeTrovate} scadenze`);
   }
 
   return {

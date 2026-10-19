@@ -1,5 +1,7 @@
 import { attrValue, cleanText, resolveUrl } from "../ingest/shared.ts";
 import { fetchText } from "../lib/http.ts";
+import { decodeEntities } from "../lib/text.ts";
+import { deadlineFromPageText } from "./rules.ts";
 import type { FetchLike } from "../types.ts";
 
 /**
@@ -183,8 +185,43 @@ export interface RegulationPageDeps {
  * così il modo di cercarlo è uno solo.
  */
 export async function regulationUrlFromPage(url: string, deps: RegulationPageDeps): Promise<string | null> {
+  return (await contestPageFacts(url, deps)).rulesUrl;
+}
+
+/**
+ * Il testo della pagina che parla DEL concorso: dal titolo (`<h1>`) in giù, senza
+ * menù, barre laterali e piè di pagina. Prima del titolo ci sono il menù e gli
+ * "in evidenza", ed è lì che la prima misura prendeva le date degli altri
+ * concorsi ("Anteprima nuovo volantino MD dal 20 ottobre al 1 novembre").
+ */
+export function contestPageText(html: string): string {
+  const titolo = html.search(/<h1\b/i);
+  return decodeEntities(
+    html
+      .slice(Math.max(0, titolo))
+      .replace(/<script[\s\S]*?<\/script>|<style[\s\S]*?<\/style>|<aside[\s\S]*?<\/aside>|<nav[\s\S]*?<\/nav>|<footer[\s\S]*?<\/footer>/gi, " ")
+      .replace(/<[^>]+>/g, " "),
+  )
+    .replace(/\s+/g, " ")
+    .slice(0, PAGE_TEXT_CHARS);
+}
+
+/** Quanto testo della pagina si guarda: il concorso sta nelle prime righe. */
+const PAGE_TEXT_CHARS = 8000;
+
+/**
+ * Le due cose che la pagina del concorso sa e il feed no: il bando e la
+ * scadenza. Una richiesta sola per tutte e due — la pagina si legge già per il
+ * regolamento, e leggerci anche la data non costa niente.
+ *
+ * Non solleva mai: una pagina che non risponde lascia l'item com'era.
+ */
+export async function contestPageFacts(
+  url: string,
+  deps: RegulationPageDeps,
+): Promise<{ rulesUrl: string | null; deadline: { deadline: string; explicit: boolean } | null; letta: boolean }> {
   try {
-    if (!(await deps.allows(url))) return null;
+    if (!(await deps.allows(url))) return { rulesUrl: null, deadline: null, letta: false };
     const response = await fetchText(
       url,
       { fetcher: deps.fetcher, userAgent: deps.userAgent, now: deps.now },
@@ -192,9 +229,13 @@ export async function regulationUrlFromPage(url: string, deps: RegulationPageDep
       // raccolta, e chi resta senza bando lo riprende il riempimento.
       { accept: "text/html,application/xhtml+xml,*/*;q=0.1", maxRetries: 0 },
     );
-    if (!response.ok) return null;
-    return bestRegulationLink(response.body, url);
+    if (!response.ok) return { rulesUrl: null, deadline: null, letta: false };
+    return {
+      rulesUrl: bestRegulationLink(response.body, url),
+      deadline: deadlineFromPageText(contestPageText(response.body), deps.now),
+      letta: true,
+    };
   } catch {
-    return null;
+    return { rulesUrl: null, deadline: null, letta: false };
   }
 }
